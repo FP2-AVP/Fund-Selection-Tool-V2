@@ -90,5 +90,6 @@ const CONFIG = {
      DEV MODE – ข้ามหน้า Login (true = ข้าม / false = ต้อง Login)
      ⚠️ ตั้งเป็น false ก่อน Deploy จริง
      ---------------------------------------------------------- */
-  BYPASS_LOGIN: true,
+  AUTH_MODE: 'token_popup',
+  BYPASS_LOGIN: false,
 };

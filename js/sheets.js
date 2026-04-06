@@ -9,6 +9,13 @@ const SheetsAPI = {
   tokenClient:  null,
   _userInfo:    null,
 
+  _notSignedInMessage() {
+    if (CONFIG.BYPASS_LOGIN) {
+      return 'ยังไม่ได้เข้าสู่ระบบ: ตอนนี้เปิด BYPASS_LOGIN=true อยู่ ซึ่งข้ามเฉพาะหน้า login แต่ไม่ได้สร้าง Google access token จริง ให้ตั้ง BYPASS_LOGIN=false แล้วกด Sign in ผ่านปุ่มของแอป';
+    }
+    return 'ยังไม่ได้เข้าสู่ระบบ: โปรเจ็กต์นี้ใช้ Google Identity Services แบบ popup token flow ผ่านปุ่ม Sign in ของแอป ไม่ได้อ่านสถานะจาก redirect URL ที่ส่งเอง';
+  },
+
   /* ── Token Client (lazy init) ── */
   _ensureClient() {
     if (this.tokenClient) return this.tokenClient;
