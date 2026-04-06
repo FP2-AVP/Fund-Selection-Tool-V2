@@ -730,6 +730,17 @@ const App = {
    ============================================================ */
 document.addEventListener('DOMContentLoaded', () => {
 
+  /* ── DEV BYPASS ── */
+  if (CONFIG.BYPASS_LOGIN) {
+    $('#user-name').textContent   = 'Dev Mode';
+    $('#user-email').textContent  = 'bypass login';
+    $('#user-avatar').textContent = 'D';
+    $('#login-screen').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+    App.init();
+    return;
+  }
+
   const btnSignin = $('#btn-signin');
 
   const googleSvg = `<svg width="20" height="20" viewBox="0 0 48 48">
