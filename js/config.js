@@ -47,35 +47,35 @@ const CONFIG = {
 
     'select-fund': {
       sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
-      tabName:  'Sheet1',   // ← แก้ชื่อ Tab ตามจริง
+      tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'เลือกกองทุน',
       source:   'AVP Master Fund ID',
     },
 
     'thai-annualized': {
       sheetId:  '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
-      tabName:  'Sheet1',   // ← แก้ชื่อ Tab ตามจริง
+      tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'กองทุนไทย Annualized Return',
       source:   'AVP Thai Fund for Quality',
     },
 
     'thai-calendar': {
       sheetId:  '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
-      tabName:  'Sheet2',   // ← แก้ชื่อ Tab ตามจริง
+      tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'กองทุนไทย Calendar Year',
       source:   'AVP Thai Fund for Quality',
     },
 
     'master-annualized': {
       sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
-      tabName:  'Sheet2',   // ← แก้ชื่อ Tab ตามจริง
+      tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'Master Fund Annualized Return',
       source:   'AVP Master Fund ID',
     },
 
     'master-calendar': {
       sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
-      tabName:  'Sheet3',   // ← แก้ชื่อ Tab ตามจริง
+      tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'Master Fund Calendar Year',
       source:   'AVP Master Fund ID',
     },
