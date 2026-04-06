@@ -1,0 +1,88 @@
+/* ============================================================
+   Fund Selection Tool – FP2
+   Configuration File
+   ============================================================
+   ⚠️  สิ่งที่ต้องแก้ไขก่อนใช้งาน:
+   1. ใส่ CLIENT_ID จาก Google Cloud Console (ดูวิธีใน README.md)
+   2. ตรวจสอบ / แก้ไขชื่อ Tab ของแต่ละ Google Sheet ให้ถูกต้อง
+   ============================================================ */
+
+const CONFIG = {
+
+  /* ----------------------------------------------------------
+     Google OAuth 2.0 Client ID
+     สร้างได้จาก: https://console.cloud.google.com/
+     APIs & Services → Credentials → Create Credentials → OAuth client ID
+     Application type: Web application
+     ---------------------------------------------------------- */
+  CLIENT_ID: '1024922664942-89perkdk9oknpm2vreusl8dfvfmal8tm.apps.googleusercontent.com',
+
+  /* ----------------------------------------------------------
+     OAuth Scopes
+     ---------------------------------------------------------- */
+  SCOPES: [
+    'https://www.googleapis.com/auth/spreadsheets.readonly',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+  ].join(' '),
+
+  /* ----------------------------------------------------------
+     Google Sheet IDs (ดึงมาจากไฟล์ .gsheet อัตโนมัติ)
+     ---------------------------------------------------------- */
+  SHEETS: {
+    MASTER_FUND_ID:        '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+    THAI_FUND_QUALITY:     '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
+    PERCENTRANK_FREESTYLE: '1xt5YTBJoFKYc3gsLqhoCRsbrZHI8CSq5lRzBBqJwrdE',
+    RAW_FOR_SEC:           '1qNzpxP5D9RAaxhwAVe5Wf8rBhrGNhXn7EYQgBD86cBs',
+    ISHARE_INDEX_PASSIVE:  '1WTuIL2UtRg6cacUWZo5nsbinyRWPbMuPLNXjAStliUY',
+  },
+
+  /* ----------------------------------------------------------
+     Page Configuration
+     ⚠️  tabName = ชื่อ Tab (Sheet) ใน Google Sheet
+         ตรวจสอบชื่อจาก URL ของ Google Sheet หรือแถบล่างสุด
+         เช่น  tabName: 'Annualized'  หรือ  tabName: 'Sheet1'
+     ---------------------------------------------------------- */
+  PAGES: {
+
+    'select-fund': {
+      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      tabName:  'Sheet1',   // ← แก้ชื่อ Tab ตามจริง
+      title:    'เลือกกองทุน',
+      source:   'AVP Master Fund ID',
+    },
+
+    'thai-annualized': {
+      sheetId:  '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
+      tabName:  'Sheet1',   // ← แก้ชื่อ Tab ตามจริง
+      title:    'กองทุนไทย Annualized Return',
+      source:   'AVP Thai Fund for Quality',
+    },
+
+    'thai-calendar': {
+      sheetId:  '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
+      tabName:  'Sheet2',   // ← แก้ชื่อ Tab ตามจริง
+      title:    'กองทุนไทย Calendar Year',
+      source:   'AVP Thai Fund for Quality',
+    },
+
+    'master-annualized': {
+      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      tabName:  'Sheet2',   // ← แก้ชื่อ Tab ตามจริง
+      title:    'Master Fund Annualized Return',
+      source:   'AVP Master Fund ID',
+    },
+
+    'master-calendar': {
+      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      tabName:  'Sheet3',   // ← แก้ชื่อ Tab ตามจริง
+      title:    'Master Fund Calendar Year',
+      source:   'AVP Master Fund ID',
+    },
+  },
+
+  /* ----------------------------------------------------------
+     Cache TTL (milliseconds)  default: 5 นาที
+     ---------------------------------------------------------- */
+  CACHE_TTL: 5 * 60 * 1000,
+};
