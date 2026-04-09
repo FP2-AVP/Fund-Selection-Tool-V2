@@ -92,6 +92,34 @@ python -m http.server 8080
 ### วิธีที่ 3 – Deploy บน GitHub Pages หรือ Firebase Hosting
 สำหรับการใช้งานจริงในองค์กร
 
+#### GitHub Pages
+
+โปรเจกต์นี้มี workflow สำหรับ deploy ขึ้น GitHub Pages แล้วที่
+`.github/workflows/deploy-github-pages.yml`
+
+ขั้นตอน:
+
+1. สร้าง GitHub repository แล้ว push โค้ดขึ้น branch `main`
+2. ไปที่ **Settings → Pages**
+3. ตรง **Source** ให้เลือก **GitHub Actions**
+4. push ขึ้น `main` อีกครั้ง หรือกดรัน workflow `Deploy static site to GitHub Pages`
+5. เว็บจะได้ URL ประมาณ `https://<github-username>.github.io/<repo-name>/`
+
+> สำคัญ: ต้องเพิ่ม origin `https://<github-username>.github.io` ใน Google Cloud Console ที่
+> **APIs & Services → Credentials → OAuth 2.0 Client ID → Authorized JavaScript origins**
+> มิฉะนั้น Google Sign-in จะใช้งานไม่ได้บน GitHub Pages
+
+### โหมดแหล่งข้อมูล
+
+ตั้งค่าได้ในไฟล์ `js/config.override.js`
+
+- `google_first` — อ่านจาก Google Sheets ก่อน และ fallback เป็น JSON ถ้าอ่านไม่สำเร็จ
+- `google_only` — อ่านจาก Google Sheets เท่านั้น
+- `local_first` — อ่าน JSON ก่อน และ fallback เป็น Google Sheets
+- `local_only` — อ่านจาก JSON เท่านั้น
+
+ตอนนี้ค่า default ของโปรเจกต์ถูกตั้งเป็น `google_first`
+
 ---
 
 ## Google Sheets ที่ใช้ในระบบ
