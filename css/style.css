@@ -1697,6 +1697,11 @@ input[type="checkbox"] {
   line-height: 1;
   white-space: nowrap;
 }
+.badge-data-origin {
+  background: #edf3ff;
+  color: #24406f;
+  border: 1px solid #cfdbf2;
+}
 .badge-success { background: var(--success-bg);    color: var(--success); }
 .badge-warning { background: var(--gold-light);    color: #a57010; }
 .badge-danger  { background: var(--danger-bg);     color: var(--danger); }
