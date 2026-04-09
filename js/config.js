@@ -15,7 +15,7 @@ const CONFIG = {
      APIs & Services → Credentials → Create Credentials → OAuth client ID
      Application type: Web application
      ---------------------------------------------------------- */
-  CLIENT_ID: '1024922664942-89perkdk9oknpm2vreusl8dfvfmal8tm.apps.googleusercontent.com',
+  CLIENT_ID: '1024922664942-958fev7r5815ucu2u4rkqpahagj6ish9.apps.googleusercontent.com',
 
   /* ----------------------------------------------------------
      OAuth Scopes
