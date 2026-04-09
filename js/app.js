@@ -51,6 +51,7 @@ const State = {
   selectedFunds: {},         // fundCode -> metadata for cross-page filtering
   highlights:   {},           // fundCode → colorIndex (0-4), persists across pages
   _cache:       {},
+  _pageDataSource: {},
   _compareRows: null,
 };
 
@@ -265,10 +266,12 @@ function pageToolActions(pageKey, sourceLabel = '', extraActions = '') {
     'master-placeholder-4',
   ]);
   if (!exportable.has(pageKey)) return '';
+  const sourceBadge = getPageDataSourceBadge(pageKey);
   return `
     <div class="page-tools">
       <div class="page-tools-meta">
         ${sourceLabel ? `<span class="badge badge-source">แหล่งข้อมูลจาก: ${esc(sourceLabel)}</span>` : ''}
+        ${sourceBadge ? `<span class="badge badge-data-origin">${esc(sourceBadge)}</span>` : ''}
         ${extraActions}
       </div>
       <div class="page-tools-actions">
@@ -277,6 +280,10 @@ function pageToolActions(pageKey, sourceLabel = '', extraActions = '') {
         </button>
       </div>
     </div>`;
+}
+
+function getPageDataSourceBadge(pageKey) {
+  return State._pageDataSource?.[pageKey] || '';
 }
 
 async function elementToImageBlob(el) {
@@ -644,27 +651,39 @@ async function fetchPageData(pageKey) {
   const mode = CONFIG.DATA_SOURCE || 'google_first';
 
   if (mode === 'local_only') {
-    return fetchLocalRows(cfg.localFile);
+    const rows = await fetchLocalRows(cfg.localFile);
+    State._pageDataSource[pageKey] = 'Source: Local JSON';
+    return rows;
   }
 
   if (mode === 'local_first') {
     try {
-      return await fetchLocalRows(cfg.localFile);
+      const rows = await fetchLocalRows(cfg.localFile);
+      State._pageDataSource[pageKey] = 'Source: Local JSON';
+      return rows;
     } catch (err) {
-      return await SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName);
+      const rows = await SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName);
+      State._pageDataSource[pageKey] = 'Source: Google Sheets fallback';
+      return rows;
     }
   }
 
   if (mode === 'google_first') {
     try {
-      return await SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName);
+      const rows = await SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName);
+      State._pageDataSource[pageKey] = 'Source: Google Sheets';
+      return rows;
     } catch (err) {
       if (!cfg.localFile) throw err;
-      return await fetchLocalRows(cfg.localFile);
+      const rows = await fetchLocalRows(cfg.localFile);
+      State._pageDataSource[pageKey] = 'Source: Local JSON fallback';
+      return rows;
     }
   }
 
-  return SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName);
+  const rows = await SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName);
+  State._pageDataSource[pageKey] = 'Source: Google Sheets';
+  return rows;
 }
 
 /* ============================================================
@@ -683,6 +702,7 @@ async function fetchCached(pageKey) {
 
 function clearCache() {
   State._cache = {};
+  State._pageDataSource = {};
 }
 
 const PERCENTILE_HEAT_RANGES = [
@@ -2437,6 +2457,7 @@ const Pages = {
                 </span>` : ''}
               <span class="row-count-badge">${totalData.toLocaleString()} รายการ</span>
               <span class="badge badge-primary">${esc(cfg.source)}</span>
+              ${getPageDataSourceBadge(pageKey) ? `<span class="badge badge-data-origin">${esc(getPageDataSourceBadge(pageKey))}</span>` : ''}
             </div>
           </div>
           <div id="tbl-area">${buildTable(pageSlice, {
@@ -2618,6 +2639,7 @@ const Pages = {
             <span class="row-count-badge">${total.toLocaleString()} รายการ</span>
             <span class="row-count-badge is-info">เลือกแล้ว ${State.selectedKeys.size.toLocaleString()} กองทุน</span>
             <span class="badge badge-primary">${esc(cfg.source)}</span>
+            ${getPageDataSourceBadge('select-fund') ? `<span class="badge badge-data-origin">${esc(getPageDataSourceBadge('select-fund'))}</span>` : ''}
             ${Object.keys(State.highlights).length > 0
               ? `<span class="badge badge-accent">ตั้งค่าสีไว้ ${Object.keys(State.highlights).length} กองทุน</span>`
               : ''}
