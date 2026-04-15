@@ -1,0 +1,24 @@
+/* ── Other Factors page: scatter 60:40 layout ── */
+.of-scatter-section {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 0 !important;
+  border-bottom: 2px solid #e2e8f0 !important;
+}
+.of-scatter-left {
+  flex: 3 !important;
+  min-width: 0 !important;
+  padding: 12px !important;
+}
+.of-scatter-right {
+  flex: 2 !important;
+  min-width: 260px !important;
+  overflow-y: auto !important;
+  max-height: 510px !important;
+  border-left: 1px solid #e2e8f0 !important;
+  width: auto !important;
+}
+@media (max-width: 900px) {
+  .of-scatter-section { flex-direction: column !important; }
+  .of-scatter-right { flex: none !important; width: 100% !important; max-height: 240px !important; border-left: none !important; border-top: 1px solid #e2e8f0 !important; }
+}
