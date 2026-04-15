@@ -1,7 +1,25 @@
 # Fund Selection Tool For FP2
 
-ระบบเลือกกองทุนสำหรับ Financial Planner รุ่นที่ 2
+ระบบเลือกและวิเคราะห์กองทุนสำหรับ Financial Planner รุ่นที่ 2  
 เชื่อมต่อกับ Google Sheets ขององค์กรผ่าน **Google OAuth 2.0**
+
+---
+
+## เมนูทั้งหมด
+
+| เมนู | หน้า | แหล่งข้อมูล |
+|------|------|------------|
+| คู่มือการใช้งาน | คู่มือ README | — |
+| แดชบอร์ด | ภาพรวมสถิติ | ทุก Sheet |
+| เลือกกองทุน | คัดเลือก + Highlight | Percentrank Freestyle |
+| กองทุนไทย Annualized Return | ผลตอบแทนทุก Period | AVP Thai Fund for Quality |
+| กองทุนไทย Calendar Year | ผลตอบแทนรายปี | AVP Thai Fund for Quality |
+| Master Fund Annualized Return | Master Fund ทุก Period | AVP Master Fund ID |
+| Master Fund Calendar Year | Master Fund รายปี | AVP Master Fund ID |
+| ค่าธรรมเนียม | TER เทียบ Master vs กองไทย | Raw For Sec + AVP Master Fund ID |
+| ปัจจัยประกอบอื่นๆ | Scatter + ตาราง Sharpe/Sortino/IR/Treynor/Max DD | AVP Master Fund ID |
+| Top 10 Holding | การถือครองสูงสุด 10 อันดับ | AVP Master Fund ID |
+| Avenger Studio | Presentation Designer | — |
 
 ---
 
@@ -9,25 +27,28 @@
 
 ```
 Fund List Tool Project V2/
-├── index.html          ← หน้าหลัก (entry point)
+├── index.html              ← หน้าหลัก (entry point)
 ├── css/
-│   └── style.css       ← stylesheet ทั้งหมด
+│   ├── style.css           ← stylesheet หลัก
+│   └── other-factors.css   ← override สัดส่วนหน้า ปัจจัยประกอบอื่นๆ
 ├── js/
-│   ├── config.js       ← ⚠️ ตั้งค่า CLIENT_ID และชื่อ Tab ที่นี่
-│   ├── sheets.js       ← Google Sheets API handler
-│   └── app.js          ← main application logic
+│   ├── config.js           ← ⚠️ ตั้งค่า CLIENT_ID และ Sheet IDs ที่นี่
+│   ├── config.override.js  ← override แหล่งข้อมูลและ paths ของ JSON
+│   ├── sheets.js           ← Google Sheets API handler
+│   ├── app.js              ← main application logic (ทุกหน้า)
+│   └── avenger-studio.js   ← Presentation Designer
 ├── fonts/
 │   ├── THSarabunNew.woff
 │   ├── THSarabunNew-Bold.woff
 │   ├── THSarabunNew-Italic.woff
 │   └── THSarabunNew-BoldItalic.woff
 ├── Data/
-│   ├── AVP Master Fund ID.gsheet
-│   ├── AVP Thai Fund for Quality.gsheet
-│   ├── Percentrank Freestyle.gsheet
-│   ├── Raw For Sec.gsheet
-│   └── iShare Index Passive Return.gsheet
-└── README.md           ← ไฟล์นี้
+│   ├── AVP Master Fund ID - 2026-Q1.json      ← ข้อมูล Master Fund
+│   ├── AVP Thai Fund for Quality - 2026-Q1.json ← ข้อมูลกองทุนไทย
+│   ├── Percentrank Freestyle - 2026-Q1.json   ← ข้อมูลเลือกกองทุน
+│   ├── Raw For Sec - 2026-Q1.json             ← ข้อมูลค่าธรรมเนียม
+│   └── iShare Index Passive Return - 2026-Q1.json
+└── README.md
 ```
 
 ---
@@ -41,141 +62,133 @@ Fund List Tool Project V2/
 3. ไปที่ **APIs & Services → Library** → ค้นหา `Google Sheets API` → Enable
 4. ไปที่ **APIs & Services → Credentials → + CREATE CREDENTIALS → OAuth client ID**
 5. เลือก Application type: **Web application**
-6. ตั้งชื่อ เช่น `Fund Selection Tool`
-7. เพิ่ม **Authorized JavaScript origins**:
-   - ระหว่าง Development: `http://localhost` หรือ `http://127.0.0.1`
-   - Production: `https://yourdomain.com`
-8. กด **Create** → Copy **Client ID** ที่ได้
+6. เพิ่ม **Authorized JavaScript origins**:
+   - Development: `http://localhost:8080`
+   - Production: `https://<github-username>.github.io`
+7. กด **Create** → Copy **Client ID**
 
-> หมายเหตุ: ต้องตั้งค่า OAuth Consent Screen ก่อน หากยังไม่เคยทำ
-> ไปที่ **OAuth consent screen** → เลือก Internal (สำหรับ Google Workspace) → กรอกข้อมูลให้ครบ
-
-### ขั้นตอนที่ 2 – ใส่ Client ID ในไฟล์ config.js
-
-เปิดไฟล์ `js/config.js` แล้วแก้ไขบรรทัดนี้:
+### ขั้นตอนที่ 2 – ตั้งค่าใน config.js
 
 ```javascript
 CLIENT_ID: 'YOUR_CLIENT_ID.apps.googleusercontent.com',
-// เปลี่ยนเป็น Client ID จริง เช่น:
-CLIENT_ID: '123456789-abcdefg.apps.googleusercontent.com',
 ```
 
-### ขั้นตอนที่ 3 – ตรวจสอบชื่อ Tab ของ Google Sheets
+### ขั้นตอนที่ 3 – อัปเดต Quarter ใหม่
 
-เปิดแต่ละ Google Sheet แล้วดูชื่อ Tab ที่แถบล่างสุด
-จากนั้นแก้ไขในไฟล์ `js/config.js` ส่วน `PAGES`:
+เปิด `js/config.override.js` แก้ path ของไฟล์ JSON:
 
 ```javascript
-'thai-annualized': {
-  tabName: 'Sheet1',   // ← เปลี่ยนเป็นชื่อ Tab จริง เช่น 'Annualized'
-},
+THAI:   'Data/AVP Thai Fund for Quality - 2026-Q2.json',
+MASTER: 'Data/AVP Master Fund ID - 2026-Q2.json',
 ```
 
 ---
 
 ## วิธีเปิดใช้งาน
 
-> **⚠️ ไม่สามารถเปิดโดยตรงจาก File Explorer ได้** (เนื่องจาก Google OAuth ต้องใช้ HTTP/HTTPS)
+> **⚠️ ต้องเปิดผ่าน HTTP Server เท่านั้น** (Google OAuth ไม่ทำงานบน `file://`)
 
-### วิธีที่ 1 – ใช้ VS Code Live Server (แนะนำสำหรับพัฒนา)
-1. ติดตั้ง Extension "Live Server" ใน VS Code
-2. คลิกขวาที่ `index.html` → **Open with Live Server**
-3. เพิ่ม `http://127.0.0.1:5500` ใน Authorized JavaScript origins
+### Mac
 
-### วิธีที่ 2 – Python Simple Server
 ```bash
 cd "Fund List Tool Project V2"
-python -m http.server 8080
+python3 -m http.server 8080
 ```
 แล้วเปิด `http://localhost:8080`
 
-### วิธีที่ 3 – Deploy บน GitHub Pages หรือ Firebase Hosting
-สำหรับการใช้งานจริงในองค์กร
+### Windows
 
-#### GitHub Pages
+ดับเบิลคลิก `start-server.bat`
 
-โปรเจกต์นี้มี workflow สำหรับ deploy ขึ้น GitHub Pages แล้วที่
-`.github/workflows/deploy-github-pages.yml`
+### GitHub Pages
 
-ขั้นตอน:
-
-1. สร้าง GitHub repository แล้ว push โค้ดขึ้น branch `main`
-2. ไปที่ **Settings → Pages**
-3. ตรง **Source** ให้เลือก **GitHub Actions**
-4. push ขึ้น `main` อีกครั้ง หรือกดรัน workflow `Deploy static site to GitHub Pages`
-5. เว็บจะได้ URL ประมาณ `https://<github-username>.github.io/<repo-name>/`
-
-> สำคัญ: ต้องเพิ่ม origin `https://<github-username>.github.io` ใน Google Cloud Console ที่
-> **APIs & Services → Credentials → OAuth 2.0 Client ID → Authorized JavaScript origins**
-> มิฉะนั้น Google Sign-in จะใช้งานไม่ได้บน GitHub Pages
-
-### โหมดแหล่งข้อมูล
-
-ตั้งค่าได้ในไฟล์ `js/config.override.js`
-
-- `google_first` — อ่านจาก Google Sheets ก่อน และ fallback เป็น JSON ถ้าอ่านไม่สำเร็จ
-- `google_only` — อ่านจาก Google Sheets เท่านั้น
-- `local_first` — อ่าน JSON ก่อน และ fallback เป็น Google Sheets
-- `local_only` — อ่านจาก JSON เท่านั้น
-
-ตอนนี้ค่า default ของโปรเจกต์ถูกตั้งเป็น `google_first`
+push ขึ้น `main` → workflow `Deploy static site to GitHub Pages` จะรันอัตโนมัติ
 
 ---
 
 ## Google Sheets ที่ใช้ในระบบ
 
-| ชื่อไฟล์ | Sheet ID | ใช้ใน |
-|---------|----------|-------|
-| AVP Master Fund ID | `1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA` | เลือกกองทุน, Master Fund Annualized/Calendar |
-| AVP Thai Fund for Quality | `1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE` | กองทุนไทย Annualized/Calendar |
-| Percentrank Freestyle | `1xt5YTBJoFKYc3gsLqhoCRsbrZHI8CSq5lRzBBqJwrdE` | (พร้อมขยายในอนาคต) |
-| Raw For Sec | `1qNzpxP5D9RAaxhwAVe5Wf8rBhrGNhXn7EYQgBD86cBs` | (พร้อมขยายในอนาคต) |
-| iShare Index Passive Return | `1WTuIL2UtRg6cacUWZo5nsbinyRWPbMuPLNXjAStliUY` | (พร้อมขยายในอนาคต) |
+| Sheet | Sheet ID | ใช้ใน |
+|-------|----------|-------|
+| AVP Master Fund ID | `10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig` | Master Fund Annualized/Calendar, ค่าธรรมเนียม, ปัจจัยประกอบอื่นๆ, Top 10 Holding |
+| AVP Thai Fund for Quality | `1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM` | กองทุนไทย Annualized/Calendar |
+| Percentrank Freestyle | `1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4` | เลือกกองทุน |
+| Raw For Sec | `16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w` | ค่าธรรมเนียม |
+
+### โหมดแหล่งข้อมูล (`config.override.js`)
+
+| โหมด | พฤติกรรม |
+|------|---------|
+| `google_first` | อ่าน Google Sheets ก่อน → fallback เป็น JSON (default) |
+| `local_first` | อ่าน JSON ก่อน → fallback เป็น Google Sheets |
+| `local_only` | อ่าน JSON เท่านั้น (เหมาะสำหรับ offline) |
+| `google_only` | อ่าน Google Sheets เท่านั้น |
 
 ---
 
-## ฟีเจอร์หลัก
+## ฟีเจอร์หน้า ปัจจัยประกอบอื่นๆ
 
 | ฟีเจอร์ | รายละเอียด |
 |--------|-----------|
-| 🔒 Google OAuth 2.0 | เข้าถึงได้เฉพาะบัญชีที่มีสิทธิ์ใน Sheets ขององค์กร |
-| 📊 แดชบอร์ด | สรุปจำนวนข้อมูลจากทุก Sheet + Quick Links |
-| ☑ เลือกกองทุน | Checkbox selection + Search/Filter |
-| ⚖ เปรียบเทียบกองทุน | เลือกหลายรายการแล้วเปรียบเทียบแบบ side-by-side |
-| 🔍 ค้นหา/กรอง | Real-time search ทุกคอลัมน์ |
-| ↕ Sort ตาราง | คลิกหัวตารางเพื่อเรียงลำดับ |
-| ⬇ Export Excel | ดาวน์โหลด .xlsx ได้ทุกหน้า |
-| ⚡ Cache | แคชข้อมูล 5 นาที เพื่อลด API calls |
+| Scatter Chart | เลือก Metric แกน X / Y ได้อิสระจาก 12 ตัวชี้วัด |
+| Toggle Annualized/Calendar | สลับระหว่าง YTD/1Y/3Y/5Y/10Y กับ ปี 2016–2025 |
+| ตาราง Side Panel | แสดงค่า X, Y ของทุกกองที่ plot บนกราฟ |
+| Checkbox | เลือก/ซ่อนกองทุนบนกราฟแบบ real-time |
+| State Persist | จำ Period / Axis / Checkbox ไว้เมื่อเปลี่ยนเมนูแล้วกลับมา |
+| ตัวชี้วัด | Return, Sharpe Ratio (3 แบบ), Information Ratio (2 แบบ), Sortino Ratio (3 แบบ), Treynor Ratio (2 แบบ), Max Drawdown |
+
+> หมายเหตุ: Calendar mode ไม่มีข้อมูล Sharpe Ratio รายปี ระบบจะซ่อนให้อัตโนมัติ
+
+---
+
+## Presentation Table Presets
+
+กำหนดใน `PRESENTATION_TABLE_PRESETS` ใน `js/app.js`
+
+| Preset | หน้า | rowsPerSlide |
+|--------|------|-------------|
+| `thaiAnnualizedV2` | กองทุนไทย Annualized Return | 30 |
+| `thaiCalendar` | กองทุนไทย Calendar Year | 30 |
+| `masterAnnualizedV2` | Master Fund Annualized Return | 30 |
+| `masterCalendar` | Master Fund Calendar Year | 30 |
+| `masterFees2` | ค่าธรรมเนียม | 30 |
+| `default` | fallback | 30 |
+
+---
+
+## วิธีเพิ่ม Quarter ใหม่
+
+ระบบตรวจ Tab จาก Google Sheet อัตโนมัติหลัง Login
+
+1. เพิ่ม Tab ใหม่ใน Google Sheet (รูปแบบ `YYYY-Q1` ถึง `YYYY-Q4`)
+2. วางไฟล์ JSON ใหม่ใน `Data/`
+3. แก้ 2 บรรทัดใน `js/config.override.js`
+4. Refresh — Quarter ใหม่ปรากฏใน Sidebar ทันที
 
 ---
 
 ## การแก้ไขปัญหาที่พบบ่อย
 
-### "CLIENT_ID ยังไม่ได้ตั้งค่า"
-→ เปิด `js/config.js` แล้วใส่ Client ID จริง
-
-### "Token expired / Session หมดอายุ"
-→ กดปุ่ม **เข้าสู่ระบบ** อีกครั้ง (Token มีอายุ 1 ชั่วโมง)
-
-### "ไม่มีสิทธิ์เข้าถึง Sheet (403)"
-→ ตรวจสอบว่าบัญชี Google ที่ใช้ Sign-in มีสิทธิ์อ่าน Google Sheet นั้น
-
-### "ไม่พบ Sheet หรือ Tab (404)"
-→ ตรวจสอบ Sheet ID และชื่อ Tab ใน `js/config.js`
-
-### ข้อมูลไม่อัพเดต
-→ กดปุ่ม **↻ รีเฟรช** เพื่อล้างแคชและดึงข้อมูลใหม่
+| ปัญหา | วิธีแก้ |
+|-------|--------|
+| "CLIENT_ID ยังไม่ได้ตั้งค่า" | เปิด `js/config.js` ใส่ Client ID จริง |
+| "Token expired" | กดปุ่ม **เข้าสู่ระบบ** อีกครั้ง |
+| "ไม่มีสิทธิ์ (403)" | ตรวจสอบว่าบัญชีมีสิทธิ์อ่าน Google Sheet |
+| ข้อมูลไม่อัพเดต | กดปุ่ม **↻ รีเฟรช** เพื่อล้าง cache |
+| Quarter Selector ไม่แสดง Tab | ชื่อ Tab ต้องเป็น `YYYY-Q1` เท่านั้น |
+| หน้า ปัจจัยประกอบอื่นๆ ไม่มีข้อมูล | ต้องเลือกกองทุนจากเมนู "เลือกกองทุน" ก่อน และกองต้องผูก Master Fund ID ไว้ |
 
 ---
 
 ## เทคโนโลยีที่ใช้
 
 - **HTML5 / CSS3 / Vanilla JavaScript** — ไม่มี Framework
-- **Google Identity Services** (GIS) — OAuth 2.0 Token-based auth
-- **Google Sheets API v4** — ดึงข้อมูลผ่าน REST API
-- **SheetJS (xlsx.js)** — Export ไฟล์ Excel
+- **Google Identity Services** (GIS) — OAuth 2.0
+- **Google Sheets API v4** — REST API
+- **SheetJS (xlsx.js)** — Export Excel
+- **Fabric.js + jsPDF** — Presentation / PDF rendering
 - **THSarabunNew** — ฟอนต์ภาษาไทย
 
 ---
 
-*Fund Selection Tool For FP2 · Avenger Planner · v1.0*
+*Fund Selection Tool For FP2 · Avenger Planner · v2.1 · อัปเดต เมษายน 2569*

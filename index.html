@@ -62,7 +62,28 @@
         </div>
       </div>
 
+      <!-- QUARTER SELECTOR -->
+      <div class="quarter-selector" id="quarter-selector">
+        <div class="quarter-label">ข้อมูล Quarter</div>
+        <div class="quarter-control">
+          <select id="quarter-select" class="quarter-select" disabled>
+            <option value="">กำลังตรวจสอบ...</option>
+          </select>
+          <span class="quarter-status" id="quarter-status"></span>
+        </div>
+      </div>
+
       <nav class="nav" id="nav">
+
+        <div class="nav-section">
+          <div class="nav-label">ช่วยเหลือ</div>
+          <a class="nav-item" data-page="guide" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+            </span>
+            คู่มือการใช้งาน
+          </a>
+        </div>
         <div class="nav-section">
           <div class="nav-label">ภาพรวม</div>
           <a class="nav-item active" data-page="dashboard" href="#">
@@ -70,6 +91,12 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
             </span>
             แดชบอร์ด
+          </a>
+          <a class="nav-item" data-page="notes" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            </span>
+            บันทึกข้อมูล
           </a>
         </div>
 
@@ -85,7 +112,7 @@
             <span class="nav-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h16"/><circle cx="17" cy="12" r="3"/></svg>
             </span>
-            กองทุนไทย Annualized Return V2
+            กองทุนไทย Annualized Return
           </a>
           <a class="nav-item" data-page="thai-calendar" href="#">
             <span class="nav-icon">
@@ -97,7 +124,7 @@
             <span class="nav-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M5 7h14"/><path d="M5 12h14"/><path d="M5 17h14"/></svg>
             </span>
-            Master Fund Annualized Return V2
+            Master Fund Annualized Return
           </a>
           <a class="nav-item" data-page="master-calendar" href="#">
             <span class="nav-icon">
@@ -105,49 +132,50 @@
             </span>
             Master Fund Calendar Year
           </a>
-          <a class="nav-item" data-page="master-placeholder-2" href="#">
-            <span class="nav-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
-            </span>
-            Top 10 Holding
-          </a>
-          <a class="nav-item" data-page="master-placeholder-3" href="#">
-            <span class="nav-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
-            </span>
-            Cost Efficiency Master Fund 5Y
-          </a>
           <a class="nav-item" data-page="master-placeholder-4" href="#">
             <span class="nav-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
             </span>
-            ค่าธรรมเนียม 2
+            ค่าธรรมเนียม
           </a>
           <a class="nav-item" data-page="master-placeholder-5" href="#">
             <span class="nav-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
             </span>
-            Master Fund Menu 05
+            ปัจจัยประกอบอื่นๆ
+          </a>
+          <a class="nav-item" data-page="master-placeholder-9" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
+            </span>
+            ปัจจัยประกอบอื่นๆ 2
+          </a>
+          <a class="nav-item" data-page="master-placeholder-10" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
+            </span>
+            ปัจจัยประกอบอื่นๆ 3
+          </a>
+          <a class="nav-item" data-page="master-placeholder-11" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>
+            </span>
+            ปัจจัยประกอบอื่นๆ 4
+          </a>
+          <a class="nav-item" data-page="master-placeholder-8" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16"/><path d="M9 4v16"/></svg>
+            </span>
+            Top 10 Holding
           </a>
           <a class="nav-item" data-page="master-placeholder-6" href="#">
             <span class="nav-icon">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
             </span>
-            Master Fund Menu 06
+            Income Fund
           </a>
         </div>
-
-        <div class="nav-section">
-          <div class="nav-label">ช่วยเหลือ</div>
-          <a class="nav-item" data-page="guide" href="#">
-            <span class="nav-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-            </span>
-            คู่มือการใช้งาน
-          </a>
-        </div>
-
-        <div class="nav-section">
+<div class="nav-section">
           <div class="nav-label">เครื่องมือ</div>
           <a class="nav-item" data-page="avenger-studio" href="#">
             <span class="nav-icon">
@@ -215,10 +243,12 @@
   <!-- TOAST NOTIFICATION -->
   <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
 
-  <script src="js/config.js"></script>
-  <script src="js/config.override.js"></script>
-  <script src="js/sheets.js"></script>
-  <script src="js/avenger-studio.js"></script>
-  <script src="js/app.js"></script>
+  <!-- Marked.js – Markdown renderer for Guide page -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js" defer></script>
+  <script src="js/config.js?v=20260413c"></script>
+  <script src="js/config.override.js?v=20260413c"></script>
+  <script src="js/sheets.js?v=20260413c"></script>
+  <script src="js/avenger-studio.js?v=20260413c"></script>
+  <script src="js/app.js?v=20260414i"></script>
 </body>
 </html>
