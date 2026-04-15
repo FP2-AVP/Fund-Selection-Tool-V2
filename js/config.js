@@ -30,11 +30,11 @@ const CONFIG = {
      Google Sheet IDs (ดึงมาจากไฟล์ .gsheet อัตโนมัติ)
      ---------------------------------------------------------- */
   SHEETS: {
-    MASTER_FUND_ID:        '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
-    THAI_FUND_QUALITY:     '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
-    PERCENTRANK_FREESTYLE: '1xt5YTBJoFKYc3gsLqhoCRsbrZHI8CSq5lRzBBqJwrdE',
-    RAW_FOR_SEC:           '1qNzpxP5D9RAaxhwAVe5Wf8rBhrGNhXn7EYQgBD86cBs',
-    ISHARE_INDEX_PASSIVE:  '1WTuIL2UtRg6cacUWZo5nsbinyRWPbMuPLNXjAStliUY',
+    MASTER_FUND_ID:        '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
+    THAI_FUND_QUALITY:     '1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM',
+    PERCENTRANK_FREESTYLE: '1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4',
+    RAW_FOR_SEC:           '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
+    ISHARE_INDEX_PASSIVE:  '1miHQVkwEq7k4S0upoYsRg8Z0KsbZirbwtn7BKCk_Edw',
   },
 
   /* ----------------------------------------------------------
@@ -46,80 +46,92 @@ const CONFIG = {
   PAGES: {
 
     'select-fund': {
-      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      sheetId:  '1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'เลือกกองทุน',
-      source:   'AVP Master Fund ID',
+      source:   'Percentrank Freestyle',
     },
 
     'thai-annualized': {
-      sheetId:  '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
+      sheetId:  '1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'กองทุนไทย Annualized Return',
       source:   'AVP Thai Fund for Quality',
     },
 
     'thai-annualized-v2': {
-      sheetId:  '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
+      sheetId:  '1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
-      title:    'กองทุนไทย Annualized Return V2',
+      title:    'กองทุนไทย Annualized Return',
       source:   'AVP Thai Fund for Quality',
     },
 
     'thai-calendar': {
-      sheetId:  '1UhD2XgEmRUZXasGTxH-E0TMl5dyuu2sRxXRVGzXTCzE',
+      sheetId:  '1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'กองทุนไทย Calendar Year',
       source:   'AVP Thai Fund for Quality',
     },
 
     'master-annualized': {
-      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      sheetId:  '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'Master Fund Annualized Return',
       source:   'AVP Master Fund ID',
     },
 
     'master-annualized-v2': {
-      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      sheetId:  '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
-      title:    'Master Fund Annualized Return V2',
+      title:    'Master Fund Annualized Return',
       source:   'AVP Master Fund ID',
     },
 
     'master-calendar': {
-      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      sheetId:  '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'Master Fund Calendar Year',
       source:   'AVP Master Fund ID',
     },
 
     'master-placeholder-1': {
-      sheetId:  '1qNzpxP5D9RAaxhwAVe5Wf8rBhrGNhXn7EYQgBD86cBs',
+      sheetId:  '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
       tabName:  '2026-Q1',
       title:    'ค่าธรรมเนียม',
       source:   'Raw For Sec + AVP Master Fund ID',
     },
 
     'master-placeholder-2': {
-      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      sheetId:  '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
       tabName:  '2026-Q1',
       title:    'Top 10 Holding',
       source:   'AVP Master Fund ID',
     },
 
     'master-placeholder-3': {
-      sheetId:  '1EYrIfINFg-WePEPr88PuDgsEW2OAZxkWtiq1Bml_1RA',
+      sheetId:  '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
       tabName:  '2026-Q1',
       title:    'Cost Efficiency Master Fund 5Y',
       source:   'AVP Master Fund ID',
     },
 
     'master-placeholder-4': {
-      sheetId:  '1qNzpxP5D9RAaxhwAVe5Wf8rBhrGNhXn7EYQgBD86cBs',
+      sheetId:  '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
       tabName:  '2026-Q1',
       title:    'ค่าธรรมเนียม V2',
       source:   'Raw For Sec + AVP Master Fund ID',
+    },
+
+    'master-placeholder-7': {
+      sheetId:  '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
+      tabName:  '2026-Q1',
+      title:    'Top 10 Holding V2',
+      source:   'AVP Master Fund ID',
+    },
+
+    'master-placeholder-8': {
+      title:  'Top 10 Holding',
+      source: 'Multi-Fund Compare API',
     },
   },
 

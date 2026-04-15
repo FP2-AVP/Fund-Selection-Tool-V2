@@ -60,4 +60,7 @@ if (typeof CONFIG !== 'undefined') {
   if (CONFIG.PAGES?.['master-placeholder-4']) {
     CONFIG.PAGES['master-placeholder-4'].localFile = FILE.RAW_SEC;
   }
+  if (CONFIG.PAGES?.['master-placeholder-7']) {
+    CONFIG.PAGES['master-placeholder-7'].localFile = FILE.MASTER;
+  }
 }
