@@ -31,6 +31,90 @@ ENDPOINTS = {
     "dividend_history": "/v2/fund/daily-info/dividend-history",
 }
 
+PROFILE_COLUMNS = [
+    "unique_id",
+    "comp_name_th",
+    "comp_name_en",
+    "proj_id",
+    "regis_id",
+    "proj_name_th",
+    "proj_name_en",
+    "proj_abbr_name",
+    "fund_status",
+    "fund_status_label",
+    "init_date",
+    "regis_date",
+    "cancel_date",
+    "invest_country_flag",
+    "invest_country_flag_label",
+    "proj_retail_type",
+    "proj_retail_type_label",
+    "proj_term_flag",
+    "proj_term_flag_label",
+    "proj_term_year",
+    "proj_term_month",
+    "proj_term_day",
+    "policy_desc",
+    "investment_policy_desc",
+    "management_style",
+    "management_style_label",
+    "feederfund_master_fund",
+    "feederfund_country",
+    "exchange_rate_protection_policy",
+    "fund_class_name",
+    "fund_class_detail",
+    "fund_class_description",
+    "fund_class_tax_incentive_type",
+    "fund_class_isin_code",
+    "last_upd_date",
+]
+
+FUND_STATUS_LABELS = {
+    "Registered": "จดทะเบียน",
+    "IPO": "เสนอขายหน่วยลงทุนครั้งแรก",
+    "Expired": "หมดเวลาเสนอขาย",
+    "Canceled": "เลิกโครงการ",
+    "Liquidated": "จดทะเบียนเลิก",
+}
+
+INVEST_COUNTRY_FLAG_LABELS = {
+    "1": "เน้นลงทุนต่างประเทศ",
+    "2": "ลงทุนในต่างประเทศบางส่วน",
+    "3": "ไม่มีความเสี่ยงต่างประเทศ",
+    "4": "มีความเสี่ยงทั้งในและต่างประเทศ",
+}
+
+PROJ_RETAIL_TYPE_LABELS = {
+    "A": "กองทุนรวมที่เสนอขายเฉพาะผู้ลงทุนที่มิใช่รายย่อย",
+    "B": "กองทุนรวมที่เสนอขายเฉพาะผู้มีเงินลงทุนสูง",
+    "F": "กองทุนรวมเสริมสภาพคล่องเพื่อลดความเสี่ยงของการระดมทุนในตลาดตราสารหนี้ภาคเอกชน",
+    "G": "กองทุนรวมพิเศษเพื่อตอบสนองนโยบายภาครัฐ",
+    "H": "กองทุนรวมที่เสนอขายผู้ลงทุนที่มิใช่รายย่อยและผู้มีเงินลงทุนสูง",
+    "N": "กองทุนเพื่อผู้ลงทุนสถาบัน",
+    "R": "กองทุนเพื่อผู้ลงทุนทั่วไป",
+    "V": "กองทุนรวมเพื่อผู้ลงทุนที่เป็นกองทุนสำรองเลี้ยงชีพ",
+    "X": "กองทุนรวมที่เสนอขายผู้ลงทุนสถาบันและผู้ลงทุนรายใหญ่พิเศษ",
+}
+
+PROJ_TERM_FLAG_LABELS = {
+    "Y": "กำหนดอายุโครงการ",
+    "N": "ไม่กำหนดอายุโครงการ",
+}
+
+MANAGEMENT_STYLE_LABELS = {
+    "AM": "active management",
+    "AN": "กองทุนไทยตามกองทุนหลัก และกองทุนหลัก active management",
+    "PM": "passive management / index tracking",
+    "PN": "กองทุนไทยตามกองทุนหลัก และกองทุนหลัก passive management",
+    "IM": "inverse management",
+    "IN": "กองทุนไทยตามกองทุนหลัก และกองทุนหลัก inverse management",
+    "LM": "leveraged management",
+    "LN": "กองทุนไทยตามกองทุนหลัก และกองทุนหลัก leveraged management",
+    "BH": "buy-and-hold",
+    "SM": "index tracking และบางโอกาสอาจสร้างผลตอบแทนสูงกว่าดัชนี",
+    "OT": "อื่น ๆ",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch SEC fund data and export CSV files.")
@@ -177,9 +261,24 @@ def collect_headers(rows: list[dict[str, Any]]) -> list[str]:
     return headers
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+def ordered_headers(rows: list[dict[str, Any]], preferred: list[str] | None = None) -> list[str]:
+    discovered = collect_headers(rows)
+    if not preferred:
+        return discovered
+
+    preferred_set = set(preferred)
+    return [header for header in preferred if header in discovered or header in preferred_set] + [
+        header for header in discovered if header not in preferred_set
+    ]
+
+
+def write_csv(
+    path: Path,
+    rows: list[dict[str, Any]],
+    preferred_headers: list[str] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    headers = collect_headers(rows)
+    headers = ordered_headers(rows, preferred_headers)
     if not headers:
         headers = ["message"]
         rows = [{"message": "No rows returned"}]
@@ -191,6 +290,39 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
             writer.writerow({key: flatten_value(row.get(key, "")) for key in headers})
 
     print(f"Wrote {path}: {len(rows)} rows")
+
+
+def label_from_map(value: Any, labels: dict[str, str]) -> str:
+    text = str(value or "").strip()
+    return labels.get(text, "")
+
+
+def enrich_profile_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    enriched["fund_status_label"] = label_from_map(row.get("fund_status"), FUND_STATUS_LABELS)
+    enriched["invest_country_flag_label"] = label_from_map(
+        row.get("invest_country_flag"),
+        INVEST_COUNTRY_FLAG_LABELS,
+    )
+    enriched["proj_retail_type_label"] = label_from_map(
+        row.get("proj_retail_type"),
+        PROJ_RETAIL_TYPE_LABELS,
+    )
+    enriched["proj_term_flag_label"] = label_from_map(
+        row.get("proj_term_flag"),
+        PROJ_TERM_FLAG_LABELS,
+    )
+    enriched["management_style_label"] = label_from_map(
+        row.get("management_style"),
+        MANAGEMENT_STYLE_LABELS,
+    )
+    return enriched
+
+
+def transform_dataset_rows(dataset: str, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str] | None]:
+    if dataset == "profiles":
+        return [enrich_profile_row(row) for row in rows], PROFILE_COLUMNS
+    return rows, None
 
 
 def selected_datasets(raw: str) -> list[str]:
@@ -232,7 +364,8 @@ def main() -> int:
             query_params=params,
             max_pages=args.max_pages,
         )
-        write_csv(output_dir / f"{dataset}.csv", rows)
+        rows, preferred_headers = transform_dataset_rows(dataset, rows)
+        write_csv(output_dir / f"{dataset}.csv", rows, preferred_headers=preferred_headers)
 
     return 0
 
