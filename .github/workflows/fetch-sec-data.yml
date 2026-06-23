@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       proj_id:
-        description: "SEC project id for fund-specific endpoints"
-        required: true
-        default: "M0000_2552"
+        description: "Optional SEC project id. Leave blank to fetch all available funds."
+        required: false
+        default: ""
       fund_class_name:
         description: "Optional fund_class_name filter"
         required: false
@@ -51,6 +51,14 @@ on:
         description: "flat or latest-snapshot"
         required: true
         default: "latest-snapshot"
+      output_group:
+        description: "Optional output group folder, such as master, daily, or weekly"
+        required: false
+        default: ""
+      write_curated:
+        description: "Write combined curated CSV files"
+        required: true
+        default: "true"
 
 jobs:
   fetch-sec-data:
@@ -89,7 +97,9 @@ jobs:
             --end-nav-date "${{ inputs.end_nav_date }}" \
             --datasets "${{ inputs.datasets }}" \
             --max-pages "${{ inputs.max_pages }}" \
-            --output-layout "${{ inputs.output_layout }}"
+            --output-layout "${{ inputs.output_layout }}" \
+            --output-group "${{ inputs.output_group }}" \
+            --write-curated "${{ inputs.write_curated }}"
 
       - name: Upload CSV artifact
         uses: actions/upload-artifact@v4
