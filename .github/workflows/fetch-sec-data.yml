@@ -1,0 +1,64 @@
+name: Fetch SEC Data to CSV
+
+on:
+  workflow_dispatch:
+    inputs:
+      proj_id:
+        description: "SEC project id for fund-specific endpoints"
+        required: true
+        default: "M0000_2552"
+      start_nav_date:
+        description: "NAV start date, YYYY-MM-DD"
+        required: true
+        default: "2023-10-01"
+      end_nav_date:
+        description: "NAV end date, YYYY-MM-DD"
+        required: true
+        default: "2023-10-31"
+      datasets:
+        description: "Comma-separated datasets or all"
+        required: true
+        default: "all"
+      max_pages:
+        description: "Maximum pages per endpoint for test run. Use 0 for no limit."
+        required: true
+        default: "3"
+
+jobs:
+  fetch-sec-data:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements-sec.txt
+
+      - name: Fetch SEC API data
+        env:
+          SEC_API_KEY: ${{ secrets.SEC_API_KEY }}
+        run: |
+          python scripts/fetch_sec_data.py \
+            --output-dir sec_output \
+            --proj-id "${{ inputs.proj_id }}" \
+            --start-nav-date "${{ inputs.start_nav_date }}" \
+            --end-nav-date "${{ inputs.end_nav_date }}" \
+            --datasets "${{ inputs.datasets }}" \
+            --max-pages "${{ inputs.max_pages }}"
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sec-csv-output
+          path: sec_output/*.csv
+          if-no-files-found: error
