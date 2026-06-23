@@ -7,6 +7,30 @@ on:
         description: "SEC project id for fund-specific endpoints"
         required: true
         default: "M0000_2552"
+      fund_class_name:
+        description: "Optional fund_class_name filter"
+        required: false
+        default: ""
+      latest:
+        description: "Use latest factsheet data for supported endpoints"
+        required: true
+        default: "true"
+      start_date:
+        description: "Factsheet start_date if latest=false, YYYY-MM-DD"
+        required: false
+        default: ""
+      end_date:
+        description: "Factsheet end_date if latest=false, YYYY-MM-DD"
+        required: false
+        default: ""
+      start_period:
+        description: "Outstanding data start period, YYYYMM"
+        required: false
+        default: ""
+      end_period:
+        description: "Outstanding data end period, YYYYMM"
+        required: false
+        default: ""
       start_nav_date:
         description: "NAV start date, YYYY-MM-DD"
         required: true
@@ -23,6 +47,10 @@ on:
         description: "Maximum pages per endpoint for test run. Use 0 for no limit."
         required: true
         default: "3"
+      output_layout:
+        description: "flat or latest-snapshot"
+        required: true
+        default: "latest-snapshot"
 
 jobs:
   fetch-sec-data:
@@ -51,14 +79,21 @@ jobs:
           python scripts/fetch_sec_data.py \
             --output-dir sec_output \
             --proj-id "${{ inputs.proj_id }}" \
+            --fund-class-name "${{ inputs.fund_class_name }}" \
+            --latest "${{ inputs.latest }}" \
+            --start-date "${{ inputs.start_date }}" \
+            --end-date "${{ inputs.end_date }}" \
+            --start-period "${{ inputs.start_period }}" \
+            --end-period "${{ inputs.end_period }}" \
             --start-nav-date "${{ inputs.start_nav_date }}" \
             --end-nav-date "${{ inputs.end_nav_date }}" \
             --datasets "${{ inputs.datasets }}" \
-            --max-pages "${{ inputs.max_pages }}"
+            --max-pages "${{ inputs.max_pages }}" \
+            --output-layout "${{ inputs.output_layout }}"
 
       - name: Upload CSV artifact
         uses: actions/upload-artifact@v4
         with:
           name: sec-csv-output
-          path: sec_output/*.csv
+          path: sec_output/**/*.csv
           if-no-files-found: error
