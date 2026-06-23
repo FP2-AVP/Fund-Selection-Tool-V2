@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Fetch SEC fund API samples and export CSV files.
+"""Fetch SEC fund API datasets and export CSV files.
 
 This script is designed for GitHub Actions first-pass testing. It reads the
-SEC API key from SEC_API_KEY, fetches a few useful endpoints, and writes one
-CSV file per dataset into an output directory.
+SEC API key from SEC_API_KEY, fetches SEC fund endpoints, and writes one CSV
+file per dataset into an output directory.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import csv
 import json
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -25,10 +26,49 @@ BASE_URL = "https://api.sec.or.th"
 ENDPOINTS = {
     "amcs": "/v2/fund/general-info/amcs",
     "profiles": "/v2/fund/general-info/profiles",
+    "specifications": "/v2/fund/general-info/specifications",
+    "mutual_fund_fees": "/v2/fund/general-info/mutual-fund-fees",
+    "involve_parties": "/v2/fund/general-info/involve-parties",
     "factsheet_urls": "/v2/fund/factsheet/urls",
+    "ipos": "/v2/fund/factsheet/ipos",
+    "benchmarks": "/v2/fund/factsheet/benchmarks",
+    "subscription_redemption_minimums": "/v2/fund/factsheet/subscription-redemption-minimums",
+    "subscription_redemption_periods": "/v2/fund/factsheet/subscription-redemption-periods",
+    "risk_spectrum": "/v2/fund/factsheet/risk-spectrum",
+    "statistics": "/v2/fund/factsheet/statistics",
+    "dividend_policy": "/v2/fund/factsheet/dividend-policy",
+    "fees": "/v2/fund/factsheet/fees",
+    "performance": "/v2/fund/factsheet/performance",
+    "asset_allocation": "/v2/fund/factsheet/asset-allocation",
     "top5_holdings": "/v2/fund/factsheet/top5-holdings",
+    "outstanding_portfolio": "/v2/fund/outstanding/portfolio",
+    "portfolio_asset_type": "/v2/fund/outstanding/portfolio-asset-type",
     "nav_daily": "/v2/fund/daily-info/nav",
     "dividend_history": "/v2/fund/daily-info/dividend-history",
+}
+
+DATASET_FILES = {
+    "amcs": "01_amcs.csv",
+    "profiles": "02_profiles.csv",
+    "specifications": "03_specifications.csv",
+    "mutual_fund_fees": "04_mutual_fund_fees.csv",
+    "involve_parties": "05_involve_parties.csv",
+    "factsheet_urls": "06_factsheet_urls.csv",
+    "ipos": "07_ipos.csv",
+    "benchmarks": "08_benchmarks.csv",
+    "subscription_redemption_minimums": "09_subscription_redemption_minimums.csv",
+    "subscription_redemption_periods": "10_subscription_redemption_periods.csv",
+    "risk_spectrum": "11_risk_spectrum.csv",
+    "statistics": "12_statistics.csv",
+    "dividend_policy": "13_dividend_policy.csv",
+    "fees": "14_fees.csv",
+    "performance": "15_performance.csv",
+    "asset_allocation": "16_asset_allocation.csv",
+    "top5_holdings": "17_top5_holdings.csv",
+    "outstanding_portfolio": "18_outstanding_portfolio.csv",
+    "portfolio_asset_type": "19_portfolio_asset_type.csv",
+    "nav_daily": "20_nav_daily.csv",
+    "dividend_history": "21_dividend_history.csv",
 }
 
 PROFILE_COLUMNS = [
@@ -115,14 +155,284 @@ MANAGEMENT_STYLE_LABELS = {
     "OT": "อื่น ๆ",
 }
 
+SPECIFICATION_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "spec_code",
+    "spec_desc",
+    "last_upd_date",
+]
+
+MUTUAL_FUND_FEE_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "fee_type_desc",
+    "rate",
+    "rate_unit",
+    "fee_other_desc",
+    "last_upd_date",
+]
+
+INVOLVE_PARTY_COLUMNS = [
+    "proj_id",
+    "entity_type",
+    "entity_type_label",
+    "entity_name_th",
+    "entity_name_en",
+    "address",
+    "last_upd_date",
+]
+
+ENTITY_TYPE_LABELS = {
+    "A": "ผู้สอบบัญชี",
+    "U": "ผู้จัดจำหน่าย",
+    "S": "ผู้สนับสนุนการขายและรับซื้อคืน",
+    "R": "นายทะเบียนหน่วยลงทุน",
+    "V": "ผู้ดูแลผลประโยชน์",
+    "M": "ที่ปรึกษาการลงทุน",
+    "O": "ผู้รับมอบหมายงานด้านการจัดการลงทุน",
+    "P": "ผู้ลงทุนรายใหญ่",
+    "K": "ผู้ดูแลสภาพคล่อง",
+    "N": "ที่ปรึกษาทางการเงิน",
+    "F": "ผู้จัดการกองทุน",
+}
+
+FACTSHEET_URL_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "prospectus_type",
+    "prospectus_type_label",
+    "amc_url_factsheet",
+    "pdf_factsheet",
+    "as_of_date",
+    "last_upd_date",
+]
+
+FACTSHEET_IPO_COLUMNS = [
+    "proj_id",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "first_sell_start_date",
+    "first_sell_end_date",
+    "last_upd_date",
+]
+
+BENCHMARK_COLUMNS = [
+    "proj_id",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "group_seq",
+    "benchmark",
+    "remark",
+    "last_upd_date",
+]
+
+SUBSCRIPTION_REDEMPTION_MINIMUM_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "minimum_sub_ipo",
+    "minimum_sub_ipo_cur",
+    "minimum_sub",
+    "minimum_sub_cur",
+    "minimum_sub_unit",
+    "minimum_redempt",
+    "minimum_redempt_cur",
+    "minimum_redempt_unit",
+    "lowbal_val",
+    "lowbal_val_cur",
+    "lowbal_unit",
+    "last_upd_date",
+]
+
+SUBSCRIPTION_REDEMPTION_PERIOD_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "type",
+    "period",
+    "redemp_period_oth",
+    "settlement_period",
+    "last_upd_date",
+]
+
+RISK_SPECTRUM_COLUMNS = [
+    "proj_id",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "risk_spectrum",
+    "risk_spectrum_desc",
+    "last_upd_date",
+]
+
+STATISTICS_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "portfolio_turnover_ratio",
+    "recovering_period",
+    "portfolio_duration_period",
+    "maximum_drawdown",
+    "sharpe_ratio",
+    "beta",
+    "alpha",
+    "fx_hedging",
+    "tracking_error",
+    "yield_to_maturity",
+    "last_upd_date",
+]
+
+DIVIDEND_POLICY_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "dividend_policy",
+    "last_upd_date",
+]
+
+FACTSHEET_FEE_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "fee_type_desc",
+    "rate",
+    "actual_value",
+    "fee_other_desc",
+    "last_upd_date",
+]
+
+PERFORMANCE_COLUMNS = [
+    "proj_id",
+    "fund_class_name",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "performance_type_desc",
+    "reference_period",
+    "performance_value",
+    "last_upd_date",
+]
+
+ASSET_ALLOCATION_COLUMNS = [
+    "proj_id",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "asset_seq",
+    "asset_name",
+    "asset_ratio",
+    "last_upd_date",
+]
+
+TOP5_HOLDING_COLUMNS = [
+    "proj_id",
+    "start_date",
+    "end_date",
+    "prospectus_type",
+    "prospectus_type_label",
+    "asset_seq",
+    "asset_name",
+    "asset_ratio",
+    "last_upd_date",
+]
+
+OUTSTANDING_PORTFOLIO_COLUMNS = [
+    "proj_id",
+    "period",
+    "as_of_date",
+    "assetliab_code",
+    "assetliab_desc",
+    "issue_code",
+    "isin_code",
+    "issuer",
+    "market_value",
+    "percent_nav",
+    "last_upd_date",
+]
+
+PORTFOLIO_ASSET_TYPE_COLUMNS = [
+    "proj_id",
+    "period",
+    "assetliab_code",
+    "assetliab_desc",
+    "market_value",
+    "percent_nav",
+]
+
+NAV_DAILY_COLUMNS = [
+    "proj_id",
+    "nav_date",
+    "fund_class_name",
+    "net_asset",
+    "last_val",
+    "unique_id",
+    "sell_price",
+    "buy_price",
+    "sell_swap_price",
+    "buy_swap_price",
+    "last_upd_date",
+]
+
+DIVIDEND_HISTORY_COLUMNS = [
+    "unique_id",
+    "proj_id",
+    "class_abbr_name",
+    "book_close_date",
+    "dividend_date",
+    "dividend_value",
+    "last_upd_date",
+]
+
+PROSPECTUS_TYPE_LABELS = {
+    "IPO": "ส่งเมื่อยื่นขอจัดตั้งกองทุน",
+    "Monthly": "ส่งรายเดือน",
+    "SignificantFactsheet": "ส่งเมื่อมีการเปลี่ยนแปลงข้อมูลอย่างมีนัยสำคัญ",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch SEC fund data and export CSV files.")
     parser.add_argument("--output-dir", default="sec_output", help="Directory for CSV output.")
     parser.add_argument("--proj-id", default="M0000_2552", help="Project ID for fund-specific endpoints.")
+    parser.add_argument("--fund-class-name", default="", help="Optional SEC fund_class_name filter.")
+    parser.add_argument("--start-date", default="", help="Factsheet start_date filter, YYYY-MM-DD.")
+    parser.add_argument("--end-date", default="", help="Factsheet end_date filter, YYYY-MM-DD.")
+    parser.add_argument("--latest", default="true", help="Use latest factsheet data for supported endpoints.")
+    parser.add_argument("--start-period", default="", help="Outstanding data start period, YYYYMM.")
+    parser.add_argument("--end-period", default="", help="Outstanding data end period, YYYYMM.")
     parser.add_argument("--start-nav-date", default="2023-10-01", help="NAV start date, YYYY-MM-DD.")
     parser.add_argument("--end-nav-date", default="2023-10-31", help="NAV end date, YYYY-MM-DD.")
     parser.add_argument("--page-size", type=int, default=100, help="API page_size value.")
+    parser.add_argument(
+        "--output-layout",
+        choices=["flat", "latest-snapshot"],
+        default="flat",
+        help="Use flat files or write latest/ and snapshots/YYYY-MM-DD/ copies.",
+    )
+    parser.add_argument("--snapshot-date", default="", help="Snapshot folder date, YYYY-MM-DD.")
     parser.add_argument(
         "--max-pages",
         type=int,
@@ -131,7 +441,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--datasets",
-        default="amcs,profiles,factsheet_urls,top5_holdings,nav_daily,dividend_history",
+        default="all",
         help="Comma-separated dataset keys or all.",
     )
     return parser.parse_args()
@@ -319,9 +629,62 @@ def enrich_profile_row(row: dict[str, Any]) -> dict[str, Any]:
     return enriched
 
 
+def enrich_involve_party_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    enriched["entity_type_label"] = label_from_map(row.get("entity_type"), ENTITY_TYPE_LABELS)
+    return enriched
+
+
+def enrich_prospectus_type_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    enriched["prospectus_type_label"] = label_from_map(
+        row.get("prospectus_type"),
+        PROSPECTUS_TYPE_LABELS,
+    )
+    return enriched
+
+
 def transform_dataset_rows(dataset: str, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str] | None]:
     if dataset == "profiles":
         return [enrich_profile_row(row) for row in rows], PROFILE_COLUMNS
+    if dataset == "specifications":
+        return rows, SPECIFICATION_COLUMNS
+    if dataset == "mutual_fund_fees":
+        return rows, MUTUAL_FUND_FEE_COLUMNS
+    if dataset == "involve_parties":
+        return [enrich_involve_party_row(row) for row in rows], INVOLVE_PARTY_COLUMNS
+    if dataset == "factsheet_urls":
+        return [enrich_prospectus_type_row(row) for row in rows], FACTSHEET_URL_COLUMNS
+    if dataset == "ipos":
+        return [enrich_prospectus_type_row(row) for row in rows], FACTSHEET_IPO_COLUMNS
+    if dataset == "benchmarks":
+        return [enrich_prospectus_type_row(row) for row in rows], BENCHMARK_COLUMNS
+    if dataset == "subscription_redemption_minimums":
+        return [enrich_prospectus_type_row(row) for row in rows], SUBSCRIPTION_REDEMPTION_MINIMUM_COLUMNS
+    if dataset == "subscription_redemption_periods":
+        return [enrich_prospectus_type_row(row) for row in rows], SUBSCRIPTION_REDEMPTION_PERIOD_COLUMNS
+    if dataset == "risk_spectrum":
+        return [enrich_prospectus_type_row(row) for row in rows], RISK_SPECTRUM_COLUMNS
+    if dataset == "statistics":
+        return [enrich_prospectus_type_row(row) for row in rows], STATISTICS_COLUMNS
+    if dataset == "dividend_policy":
+        return [enrich_prospectus_type_row(row) for row in rows], DIVIDEND_POLICY_COLUMNS
+    if dataset == "fees":
+        return [enrich_prospectus_type_row(row) for row in rows], FACTSHEET_FEE_COLUMNS
+    if dataset == "performance":
+        return [enrich_prospectus_type_row(row) for row in rows], PERFORMANCE_COLUMNS
+    if dataset == "asset_allocation":
+        return [enrich_prospectus_type_row(row) for row in rows], ASSET_ALLOCATION_COLUMNS
+    if dataset == "top5_holdings":
+        return [enrich_prospectus_type_row(row) for row in rows], TOP5_HOLDING_COLUMNS
+    if dataset == "outstanding_portfolio":
+        return rows, OUTSTANDING_PORTFOLIO_COLUMNS
+    if dataset == "portfolio_asset_type":
+        return rows, PORTFOLIO_ASSET_TYPE_COLUMNS
+    if dataset == "nav_daily":
+        return rows, NAV_DAILY_COLUMNS
+    if dataset == "dividend_history":
+        return rows, DIVIDEND_HISTORY_COLUMNS
     return rows, None
 
 
@@ -335,11 +698,69 @@ def selected_datasets(raw: str) -> list[str]:
     return keys
 
 
+def add_if_present(params: dict[str, Any], key: str, value: Any) -> None:
+    if value is None:
+        return
+    text = str(value).strip()
+    if text:
+        params[key] = text
+
+
+def factsheet_params(args: argparse.Namespace, include_fund_class: bool = True) -> dict[str, Any]:
+    params: dict[str, Any] = {"proj_id": args.proj_id, "page_size": args.page_size}
+    if include_fund_class:
+        add_if_present(params, "fund_class_name", getattr(args, "fund_class_name", ""))
+
+    latest = str(args.latest).strip().lower()
+    if latest in {"1", "true", "yes", "y"}:
+        params["latest"] = "true"
+    else:
+        add_if_present(params, "start_date", args.start_date)
+        add_if_present(params, "end_date", args.end_date)
+    return params
+
+
+def project_params(args: argparse.Namespace, include_fund_class: bool = False) -> dict[str, Any]:
+    params: dict[str, Any] = {"proj_id": args.proj_id, "page_size": args.page_size}
+    if include_fund_class:
+        add_if_present(params, "fund_class_name", getattr(args, "fund_class_name", ""))
+    return params
+
+
 def dataset_params(dataset: str, args: argparse.Namespace) -> dict[str, Any]:
     if dataset == "profiles":
         return {"page_size": args.page_size}
-    if dataset in {"factsheet_urls", "top5_holdings", "dividend_history"}:
-        return {"proj_id": args.proj_id, "page_size": args.page_size}
+    if dataset == "mutual_fund_fees":
+        return project_params(args, include_fund_class=True)
+    if dataset == "factsheet_urls":
+        return project_params(args, include_fund_class=True)
+    if dataset in {"involve_parties", "dividend_history"}:
+        return project_params(args)
+    if dataset in {
+        "ipos",
+        "benchmarks",
+        "subscription_redemption_minimums",
+        "subscription_redemption_periods",
+        "risk_spectrum",
+        "statistics",
+        "dividend_policy",
+        "fees",
+        "performance",
+        "top5_holdings",
+    }:
+        return factsheet_params(args)
+    if dataset == "asset_allocation":
+        return factsheet_params(args, include_fund_class=False)
+    if dataset == "outstanding_portfolio":
+        params = {"proj_id": args.proj_id, "page_size": args.page_size}
+        add_if_present(params, "start_period", args.start_period)
+        add_if_present(params, "end_period", args.end_period)
+        return params
+    if dataset == "portfolio_asset_type":
+        params = {"proj_id": args.proj_id, "page_size": args.page_size}
+        add_if_present(params, "start_period", args.start_period)
+        add_if_present(params, "end_period", args.end_period)
+        return params
     if dataset == "nav_daily":
         return {
             "proj_id": args.proj_id,
@@ -348,6 +769,17 @@ def dataset_params(dataset: str, args: argparse.Namespace) -> dict[str, Any]:
             "page_size": args.page_size,
         }
     return {"page_size": args.page_size}
+
+
+def output_paths(output_dir: Path, file_name: str, args: argparse.Namespace) -> list[Path]:
+    if args.output_layout == "flat":
+        return [output_dir / file_name]
+
+    snapshot_date = args.snapshot_date.strip() or date.today().isoformat()
+    return [
+        output_dir / "latest" / file_name,
+        output_dir / "snapshots" / snapshot_date / file_name,
+    ]
 
 
 def main() -> int:
@@ -365,7 +797,9 @@ def main() -> int:
             max_pages=args.max_pages,
         )
         rows, preferred_headers = transform_dataset_rows(dataset, rows)
-        write_csv(output_dir / f"{dataset}.csv", rows, preferred_headers=preferred_headers)
+        file_name = DATASET_FILES.get(dataset, f"{dataset}.csv")
+        for path in output_paths(output_dir, file_name, args):
+            write_csv(path, rows, preferred_headers=preferred_headers)
 
     return 0
 
