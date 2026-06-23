@@ -416,7 +416,7 @@ PROSPECTUS_TYPE_LABELS = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch SEC fund data and export CSV files.")
     parser.add_argument("--output-dir", default="sec_output", help="Directory for CSV output.")
-    parser.add_argument("--proj-id", default="M0000_2552", help="Project ID for fund-specific endpoints.")
+    parser.add_argument("--proj-id", default="", help="Optional project ID for fund-specific endpoints.")
     parser.add_argument("--fund-class-name", default="", help="Optional SEC fund_class_name filter.")
     parser.add_argument("--start-date", default="", help="Factsheet start_date filter, YYYY-MM-DD.")
     parser.add_argument("--end-date", default="", help="Factsheet end_date filter, YYYY-MM-DD.")
@@ -434,6 +434,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--snapshot-date", default="", help="Snapshot folder date, YYYY-MM-DD.")
     parser.add_argument(
+        "--output-group",
+        default="",
+        help="Optional output group folder, such as master, daily, or weekly.",
+    )
+    parser.add_argument(
         "--max-pages",
         type=int,
         default=3,
@@ -443,6 +448,12 @@ def parse_args() -> argparse.Namespace:
         "--datasets",
         default="all",
         help="Comma-separated dataset keys or all.",
+    )
+    parser.add_argument(
+        "--write-curated",
+        choices=["true", "false"],
+        default="true",
+        help="Write combined curated CSV files when possible.",
     )
     return parser.parse_args()
 
@@ -707,7 +718,8 @@ def add_if_present(params: dict[str, Any], key: str, value: Any) -> None:
 
 
 def factsheet_params(args: argparse.Namespace, include_fund_class: bool = True) -> dict[str, Any]:
-    params: dict[str, Any] = {"proj_id": args.proj_id, "page_size": args.page_size}
+    params: dict[str, Any] = {"page_size": args.page_size}
+    add_if_present(params, "proj_id", args.proj_id)
     if include_fund_class:
         add_if_present(params, "fund_class_name", getattr(args, "fund_class_name", ""))
 
@@ -721,7 +733,8 @@ def factsheet_params(args: argparse.Namespace, include_fund_class: bool = True) 
 
 
 def project_params(args: argparse.Namespace, include_fund_class: bool = False) -> dict[str, Any]:
-    params: dict[str, Any] = {"proj_id": args.proj_id, "page_size": args.page_size}
+    params: dict[str, Any] = {"page_size": args.page_size}
+    add_if_present(params, "proj_id", args.proj_id)
     if include_fund_class:
         add_if_present(params, "fund_class_name", getattr(args, "fund_class_name", ""))
     return params
@@ -752,40 +765,211 @@ def dataset_params(dataset: str, args: argparse.Namespace) -> dict[str, Any]:
     if dataset == "asset_allocation":
         return factsheet_params(args, include_fund_class=False)
     if dataset == "outstanding_portfolio":
-        params = {"proj_id": args.proj_id, "page_size": args.page_size}
+        params = {"page_size": args.page_size}
+        add_if_present(params, "proj_id", args.proj_id)
         add_if_present(params, "start_period", args.start_period)
         add_if_present(params, "end_period", args.end_period)
         return params
     if dataset == "portfolio_asset_type":
-        params = {"proj_id": args.proj_id, "page_size": args.page_size}
+        params = {"page_size": args.page_size}
+        add_if_present(params, "proj_id", args.proj_id)
         add_if_present(params, "start_period", args.start_period)
         add_if_present(params, "end_period", args.end_period)
         return params
     if dataset == "nav_daily":
-        return {
-            "proj_id": args.proj_id,
+        params = {
             "start_nav_date": args.start_nav_date,
             "end_nav_date": args.end_nav_date,
             "page_size": args.page_size,
         }
+        add_if_present(params, "proj_id", args.proj_id)
+        add_if_present(params, "fund_class_name", args.fund_class_name)
+        return params
     return {"page_size": args.page_size}
 
 
+def output_base(output_dir: Path, args: argparse.Namespace) -> Path:
+    group = args.output_group.strip()
+    return output_dir / group if group else output_dir
+
+
 def output_paths(output_dir: Path, file_name: str, args: argparse.Namespace) -> list[Path]:
+    base_dir = output_base(output_dir, args)
     if args.output_layout == "flat":
-        return [output_dir / file_name]
+        return [base_dir / file_name]
 
     snapshot_date = args.snapshot_date.strip() or date.today().isoformat()
+    group = args.output_group.strip()
+    if group:
+        return [
+            output_dir / "latest" / group / file_name,
+            output_dir / "snapshots" / group / snapshot_date / file_name,
+        ]
     return [
         output_dir / "latest" / file_name,
         output_dir / "snapshots" / snapshot_date / file_name,
     ]
 
 
+def curated_paths(output_dir: Path, file_name: str, args: argparse.Namespace) -> list[Path]:
+    base_dir = output_base(output_dir, args)
+    if args.output_layout == "flat":
+        return [base_dir / "curated" / file_name]
+
+    snapshot_date = args.snapshot_date.strip() or date.today().isoformat()
+    group = args.output_group.strip()
+    if group:
+        return [
+            output_dir / "latest" / group / "curated" / file_name,
+            output_dir / "snapshots" / group / snapshot_date / "curated" / file_name,
+        ]
+    return [
+        output_dir / "latest" / "curated" / file_name,
+        output_dir / "snapshots" / snapshot_date / "curated" / file_name,
+    ]
+
+
+def row_key(row: dict[str, Any], include_fund_class: bool = True) -> tuple[str, str]:
+    proj_id = str(row.get("proj_id") or "").strip()
+    fund_class = str(row.get("fund_class_name") or "").strip() if include_fund_class else ""
+    return proj_id, fund_class
+
+
+def row_date_score(row: dict[str, Any]) -> str:
+    return str(
+        row.get("last_upd_date")
+        or row.get("as_of_date")
+        or row.get("start_date")
+        or row.get("nav_date")
+        or ""
+    )
+
+
+def latest_lookup(
+    rows: list[dict[str, Any]],
+    include_fund_class: bool = True,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = row_key(row, include_fund_class=include_fund_class)
+        if not key[0]:
+            continue
+        current = lookup.get(key)
+        if current is None or row_date_score(row) >= row_date_score(current):
+            lookup[key] = row
+    return lookup
+
+
+def add_prefixed_fields(
+    target: dict[str, Any],
+    source: dict[str, Any] | None,
+    prefix: str,
+    skip: set[str] | None = None,
+) -> None:
+    if not source:
+        return
+    skip = skip or set()
+    for key, value in source.items():
+        if key in skip:
+            continue
+        target[f"{prefix}{key}"] = value
+
+
+def build_fund_core(rows_by_dataset: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    profiles = rows_by_dataset.get("profiles", [])
+    urls_by_class = latest_lookup(rows_by_dataset.get("factsheet_urls", []))
+    risk_by_fund = latest_lookup(rows_by_dataset.get("risk_spectrum", []), include_fund_class=False)
+    stats_by_class = latest_lookup(rows_by_dataset.get("statistics", []))
+    dividend_by_class = latest_lookup(rows_by_dataset.get("dividend_policy", []))
+
+    rows: list[dict[str, Any]] = []
+    for profile in profiles:
+        row = dict(profile)
+        class_key = row_key(profile)
+        fund_key = row_key(profile, include_fund_class=False)
+        skip = {"proj_id", "fund_class_name"}
+        add_prefixed_fields(row, urls_by_class.get(class_key), "factsheet_", skip=skip)
+        add_prefixed_fields(row, risk_by_fund.get(fund_key), "risk_", skip={"proj_id"})
+        add_prefixed_fields(row, stats_by_class.get(class_key), "stats_", skip=skip)
+        add_prefixed_fields(row, dividend_by_class.get(class_key), "dividend_policy_", skip=skip)
+        rows.append(row)
+    return rows
+
+
+def with_source(rows: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    return [{"source_dataset": source, **row} for row in rows]
+
+
+def build_curated_outputs(
+    rows_by_dataset: dict[str, list[dict[str, Any]]],
+) -> dict[str, tuple[list[dict[str, Any]], list[str] | None]]:
+    manifest = []
+    for dataset, file_name in DATASET_FILES.items():
+        manifest.append(
+            {
+                "dataset": dataset,
+                "raw_file": file_name,
+                "row_count": len(rows_by_dataset.get(dataset, [])),
+            }
+        )
+
+    fund_fees = (
+        with_source(rows_by_dataset.get("mutual_fund_fees", []), "mutual_fund_fees")
+        + with_source(rows_by_dataset.get("fees", []), "fees")
+    )
+    trading_terms = (
+        with_source(
+            rows_by_dataset.get("subscription_redemption_minimums", []),
+            "subscription_redemption_minimums",
+        )
+        + with_source(
+            rows_by_dataset.get("subscription_redemption_periods", []),
+            "subscription_redemption_periods",
+        )
+    )
+    holdings = (
+        with_source(rows_by_dataset.get("asset_allocation", []), "asset_allocation")
+        + with_source(rows_by_dataset.get("top5_holdings", []), "top5_holdings")
+        + with_source(rows_by_dataset.get("outstanding_portfolio", []), "outstanding_portfolio")
+        + with_source(rows_by_dataset.get("portfolio_asset_type", []), "portfolio_asset_type")
+    )
+
+    return {
+        "00_sec_export_manifest.csv": (manifest, ["dataset", "raw_file", "row_count"]),
+        "01_fund_core.csv": (build_fund_core(rows_by_dataset), None),
+        "02_fund_fees.csv": (fund_fees, None),
+        "03_fund_trading_terms.csv": (trading_terms, None),
+        "04_fund_performance.csv": (rows_by_dataset.get("performance", []), PERFORMANCE_COLUMNS),
+        "05_fund_holdings.csv": (holdings, None),
+        "06_fund_nav_daily.csv": (rows_by_dataset.get("nav_daily", []), NAV_DAILY_COLUMNS),
+        "07_fund_dividend_history_raw.csv": (
+            rows_by_dataset.get("dividend_history", []),
+            DIVIDEND_HISTORY_COLUMNS,
+        ),
+    }
+
+
+def should_write_curated(args: argparse.Namespace) -> bool:
+    return str(args.write_curated).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def write_curated_outputs(
+    output_dir: Path,
+    rows_by_dataset: dict[str, list[dict[str, Any]]],
+    args: argparse.Namespace,
+) -> None:
+    for file_name, (rows, headers) in build_curated_outputs(rows_by_dataset).items():
+        if file_name != "00_sec_export_manifest.csv" and not rows:
+            continue
+        for path in curated_paths(output_dir, file_name, args):
+            write_csv(path, rows, preferred_headers=headers)
+
+
 def main() -> int:
     args = parse_args()
     api_key = get_api_key()
     output_dir = Path(args.output_dir)
+    rows_by_dataset: dict[str, list[dict[str, Any]]] = {}
 
     for dataset in selected_datasets(args.datasets):
         endpoint = ENDPOINTS[dataset]
@@ -797,9 +981,13 @@ def main() -> int:
             max_pages=args.max_pages,
         )
         rows, preferred_headers = transform_dataset_rows(dataset, rows)
+        rows_by_dataset[dataset] = rows
         file_name = DATASET_FILES.get(dataset, f"{dataset}.csv")
         for path in output_paths(output_dir, file_name, args):
             write_csv(path, rows, preferred_headers=preferred_headers)
+
+    if should_write_curated(args):
+        write_curated_outputs(output_dir, rows_by_dataset, args)
 
     return 0
 
