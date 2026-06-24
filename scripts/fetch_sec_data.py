@@ -47,6 +47,27 @@ ENDPOINTS = {
     "dividend_history": "/v2/fund/daily-info/dividend-history",
 }
 
+PROJECT_ID_DATASETS = {
+    "mutual_fund_fees",
+    "involve_parties",
+    "factsheet_urls",
+    "ipos",
+    "benchmarks",
+    "subscription_redemption_minimums",
+    "subscription_redemption_periods",
+    "risk_spectrum",
+    "statistics",
+    "dividend_policy",
+    "fees",
+    "performance",
+    "asset_allocation",
+    "top5_holdings",
+    "outstanding_portfolio",
+    "portfolio_asset_type",
+    "nav_daily",
+    "dividend_history",
+}
+
 DATASET_FILES = {
     "amcs": "01_amcs.csv",
     "profiles": "02_profiles.csv",
@@ -417,6 +438,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch SEC fund data and export CSV files.")
     parser.add_argument("--output-dir", default="sec_output", help="Directory for CSV output.")
     parser.add_argument("--proj-id", default="", help="Optional project ID for fund-specific endpoints.")
+    parser.add_argument("--fund-status", default="Registered", help="Optional fund_status filter for profiles.")
+    parser.add_argument(
+        "--registered-only",
+        choices=["true", "false"],
+        default="false",
+        help="Fetch profiles first and use only registered proj_id values for project-scoped datasets.",
+    )
+    parser.add_argument(
+        "--registered-max-funds",
+        type=int,
+        default=0,
+        help="Limit registered proj_id values for testing. Use 0 for no limit.",
+    )
     parser.add_argument("--fund-class-name", default="", help="Optional SEC fund_class_name filter.")
     parser.add_argument("--start-date", default="", help="Factsheet start_date filter, YYYY-MM-DD.")
     parser.add_argument("--end-date", default="", help="Factsheet end_date filter, YYYY-MM-DD.")
@@ -454,6 +488,12 @@ def parse_args() -> argparse.Namespace:
         choices=["true", "false"],
         default="true",
         help="Write combined curated CSV files when possible.",
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        choices=["true", "false"],
+        default="true",
+        help="Continue to the next dataset when an SEC endpoint returns an error.",
     )
     return parser.parse_args()
 
@@ -561,6 +601,14 @@ def fetch_sec_all_pages(
             break
 
     return rows
+
+
+def should_continue_on_error(args: argparse.Namespace) -> bool:
+    return str(args.continue_on_error).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def should_use_registered_only(args: argparse.Namespace) -> bool:
+    return str(args.registered_only).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def flatten_value(value: Any) -> Any:
@@ -742,7 +790,9 @@ def project_params(args: argparse.Namespace, include_fund_class: bool = False) -
 
 def dataset_params(dataset: str, args: argparse.Namespace) -> dict[str, Any]:
     if dataset == "profiles":
-        return {"page_size": args.page_size}
+        params = {"page_size": args.page_size}
+        add_if_present(params, "fund_status", args.fund_status)
+        return params
     if dataset == "mutual_fund_fees":
         return project_params(args, include_fund_class=True)
     if dataset == "factsheet_urls":
@@ -786,6 +836,78 @@ def dataset_params(dataset: str, args: argparse.Namespace) -> dict[str, Any]:
         add_if_present(params, "fund_class_name", args.fund_class_name)
         return params
     return {"page_size": args.page_size}
+
+
+def fetch_registered_profiles(
+    api_key: str,
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
+    params = {"page_size": args.page_size}
+    add_if_present(params, "fund_status", args.fund_status)
+    rows = fetch_sec_all_pages(
+        ENDPOINTS["profiles"],
+        api_key,
+        query_params=params,
+        max_pages=args.max_pages,
+    )
+    rows, _ = transform_dataset_rows("profiles", rows)
+    return rows
+
+
+def registered_proj_ids(profile_rows: list[dict[str, Any]], limit: int = 0) -> list[str]:
+    proj_ids: list[str] = []
+    seen: set[str] = set()
+    for row in profile_rows:
+        proj_id = str(row.get("proj_id") or "").strip()
+        if not proj_id or proj_id in seen:
+            continue
+        seen.add(proj_id)
+        proj_ids.append(proj_id)
+        if limit and len(proj_ids) >= limit:
+            break
+    return proj_ids
+
+
+def registered_proj_id_rows(proj_ids: list[str]) -> list[dict[str, str]]:
+    return [{"proj_id": proj_id} for proj_id in proj_ids]
+
+
+def fetch_dataset_for_registered_proj_ids(
+    dataset: str,
+    endpoint: str,
+    proj_ids: list[str],
+    api_key: str,
+    args: argparse.Namespace,
+    errors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    total = len(proj_ids)
+    for index, proj_id in enumerate(proj_ids, start=1):
+        params = dataset_params(dataset, args)
+        params["proj_id"] = proj_id
+        try:
+            project_rows = fetch_sec_all_pages(
+                endpoint,
+                api_key,
+                query_params=params,
+                max_pages=args.max_pages,
+            )
+            rows.extend(project_rows)
+            print(f"Fetched {dataset} for registered proj_id {index}/{total}: {proj_id}")
+        except Exception as exc:
+            errors.append(
+                {
+                    "dataset": dataset,
+                    "endpoint": endpoint,
+                    "proj_id": proj_id,
+                    "params": json.dumps(params, ensure_ascii=False, separators=(",", ":")),
+                    "error": str(exc),
+                }
+            )
+            print(f"ERROR fetching {dataset} for proj_id={proj_id}: {exc}", file=sys.stderr)
+            if not should_continue_on_error(args):
+                raise
+    return rows
 
 
 def output_base(output_dir: Path, args: argparse.Namespace) -> Path:
@@ -949,6 +1071,10 @@ def build_curated_outputs(
     }
 
 
+def error_log_paths(output_dir: Path, args: argparse.Namespace) -> list[Path]:
+    return output_paths(output_dir, "sec_fetch_errors.csv", args)
+
+
 def should_write_curated(args: argparse.Namespace) -> bool:
     return str(args.write_curated).strip().lower() in {"1", "true", "yes", "y"}
 
@@ -970,21 +1096,85 @@ def main() -> int:
     api_key = get_api_key()
     output_dir = Path(args.output_dir)
     rows_by_dataset: dict[str, list[dict[str, Any]]] = {}
+    errors: list[dict[str, Any]] = []
+    datasets = selected_datasets(args.datasets)
+    registered_profile_rows: list[dict[str, Any]] = []
+    registered_ids: list[str] = []
 
-    for dataset in selected_datasets(args.datasets):
+    if should_use_registered_only(args) and not args.proj_id.strip():
+        needs_registered_ids = any(dataset in PROJECT_ID_DATASETS for dataset in datasets)
+        if needs_registered_ids or "profiles" in datasets:
+            registered_profile_rows = fetch_registered_profiles(api_key, args)
+            registered_ids = registered_proj_ids(
+                registered_profile_rows,
+                limit=args.registered_max_funds,
+            )
+            print(f"Registered profiles: {len(registered_profile_rows)} rows")
+            print(f"Registered proj_id values: {len(registered_ids)}")
+            for path in output_paths(output_dir, "00_registered_proj_ids.csv", args):
+                write_csv(
+                    path,
+                    registered_proj_id_rows(registered_ids),
+                    preferred_headers=["proj_id"],
+                )
+
+    for dataset in datasets:
         endpoint = ENDPOINTS[dataset]
-        params = dataset_params(dataset, args)
-        rows = fetch_sec_all_pages(
-            endpoint,
-            api_key,
-            query_params=params,
-            max_pages=args.max_pages,
-        )
-        rows, preferred_headers = transform_dataset_rows(dataset, rows)
+        preferred_headers: list[str] | None = None
+        if dataset == "profiles" and registered_profile_rows:
+            rows = registered_profile_rows
+            preferred_headers = PROFILE_COLUMNS
+        elif (
+            should_use_registered_only(args)
+            and not args.proj_id.strip()
+            and dataset in PROJECT_ID_DATASETS
+        ):
+            rows = fetch_dataset_for_registered_proj_ids(
+                dataset,
+                endpoint,
+                registered_ids,
+                api_key,
+                args,
+                errors,
+            )
+            rows, preferred_headers = transform_dataset_rows(dataset, rows)
+        else:
+            params = dataset_params(dataset, args)
+            try:
+                rows = fetch_sec_all_pages(
+                    endpoint,
+                    api_key,
+                    query_params=params,
+                    max_pages=args.max_pages,
+                )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "dataset": dataset,
+                        "endpoint": endpoint,
+                        "proj_id": "",
+                        "params": json.dumps(params, ensure_ascii=False, separators=(",", ":")),
+                        "error": str(exc),
+                    }
+                )
+                print(f"ERROR fetching {dataset}: {exc}", file=sys.stderr)
+                if should_continue_on_error(args):
+                    rows = []
+                else:
+                    raise
+            rows, preferred_headers = transform_dataset_rows(dataset, rows)
         rows_by_dataset[dataset] = rows
         file_name = DATASET_FILES.get(dataset, f"{dataset}.csv")
         for path in output_paths(output_dir, file_name, args):
             write_csv(path, rows, preferred_headers=preferred_headers)
+
+    if errors:
+        for path in error_log_paths(output_dir, args):
+            write_csv(
+                path,
+                errors,
+                preferred_headers=["dataset", "endpoint", "proj_id", "params", "error"],
+            )
 
     if should_write_curated(args):
         write_curated_outputs(output_dir, rows_by_dataset, args)
