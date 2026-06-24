@@ -7,6 +7,55 @@ on:
         description: "Optional SEC project id. Leave blank to fetch all available funds."
         required: false
         default: ""
+      fund_status:
+        description: "Optional fund_status filter for profiles"
+        required: false
+        default: "Registered"
+      registered_only:
+        description: "Use Registered profiles as proj_id list for selected project-scoped dataset"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      registered_max_funds:
+        description: "Limit registered funds for testing. Use 0 for no limit."
+        required: true
+        default: "0"
+      dataset_choice:
+        description: "Choose one dataset/preset to fetch"
+        required: true
+        default: "02_profiles"
+        type: choice
+        options:
+          - "master_core"
+          - "all_master"
+          - "01_amcs"
+          - "02_profiles"
+          - "03_specifications"
+          - "04_mutual_fund_fees"
+          - "05_involve_parties"
+          - "06_factsheet_urls"
+          - "07_ipos"
+          - "08_benchmarks"
+          - "09_subscription_redemption_minimums"
+          - "10_subscription_redemption_periods"
+          - "11_risk_spectrum"
+          - "12_statistics"
+          - "13_dividend_policy"
+          - "14_fees"
+          - "15_performance"
+          - "16_asset_allocation"
+          - "17_top5_holdings"
+          - "18_outstanding_portfolio"
+          - "19_portfolio_asset_type"
+          - "20_nav_daily"
+          - "21_dividend_history"
+      custom_datasets:
+        description: "Optional comma-separated datasets. If set, overrides dataset_choice."
+        required: false
+        default: ""
       fund_class_name:
         description: "Optional fund_class_name filter"
         required: false
@@ -35,6 +84,10 @@ on:
         description: "Maximum pages per endpoint. Use 0 for no limit."
         required: true
         default: "0"
+      continue_on_error:
+        description: "Continue when an endpoint returns an error"
+        required: true
+        default: "true"
   schedule:
     - cron: "30 22 1 * *"
 
@@ -62,6 +115,11 @@ jobs:
         env:
           SEC_API_KEY: ${{ secrets.SEC_API_KEY }}
           INPUT_PROJ_ID: ${{ github.event.inputs.proj_id || '' }}
+          INPUT_FUND_STATUS: ${{ github.event.inputs.fund_status || 'Registered' }}
+          INPUT_REGISTERED_ONLY: ${{ github.event.inputs.registered_only || 'true' }}
+          INPUT_REGISTERED_MAX_FUNDS: ${{ github.event.inputs.registered_max_funds || '0' }}
+          INPUT_DATASET_CHOICE: ${{ github.event.inputs.dataset_choice || 'master_core' }}
+          INPUT_CUSTOM_DATASETS: ${{ github.event.inputs.custom_datasets || '' }}
           INPUT_FUND_CLASS_NAME: ${{ github.event.inputs.fund_class_name || '' }}
           INPUT_LATEST: ${{ github.event.inputs.latest || 'true' }}
           INPUT_START_DATE: ${{ github.event.inputs.start_date || '' }}
@@ -69,21 +127,62 @@ jobs:
           INPUT_START_PERIOD: ${{ github.event.inputs.start_period || '' }}
           INPUT_END_PERIOD: ${{ github.event.inputs.end_period || '' }}
           INPUT_MAX_PAGES: ${{ github.event.inputs.max_pages || '0' }}
+          INPUT_CONTINUE_ON_ERROR: ${{ github.event.inputs.continue_on_error || 'true' }}
         run: |
+          DATASETS="$INPUT_CUSTOM_DATASETS"
+          if [ -z "$DATASETS" ]; then
+            case "$INPUT_DATASET_CHOICE" in
+              master_core)
+                DATASETS="amcs,profiles,factsheet_urls,risk_spectrum,statistics,dividend_policy"
+                ;;
+              all_master)
+                DATASETS="amcs,profiles,specifications,mutual_fund_fees,involve_parties,factsheet_urls,ipos,benchmarks,subscription_redemption_minimums,subscription_redemption_periods,risk_spectrum,statistics,dividend_policy,fees,performance,asset_allocation,top5_holdings,outstanding_portfolio,portfolio_asset_type"
+                ;;
+              01_amcs) DATASETS="amcs" ;;
+              02_profiles) DATASETS="profiles" ;;
+              03_specifications) DATASETS="specifications" ;;
+              04_mutual_fund_fees) DATASETS="mutual_fund_fees" ;;
+              05_involve_parties) DATASETS="involve_parties" ;;
+              06_factsheet_urls) DATASETS="factsheet_urls" ;;
+              07_ipos) DATASETS="ipos" ;;
+              08_benchmarks) DATASETS="benchmarks" ;;
+              09_subscription_redemption_minimums) DATASETS="subscription_redemption_minimums" ;;
+              10_subscription_redemption_periods) DATASETS="subscription_redemption_periods" ;;
+              11_risk_spectrum) DATASETS="risk_spectrum" ;;
+              12_statistics) DATASETS="statistics" ;;
+              13_dividend_policy) DATASETS="dividend_policy" ;;
+              14_fees) DATASETS="fees" ;;
+              15_performance) DATASETS="performance" ;;
+              16_asset_allocation) DATASETS="asset_allocation" ;;
+              17_top5_holdings) DATASETS="top5_holdings" ;;
+              18_outstanding_portfolio) DATASETS="outstanding_portfolio" ;;
+              19_portfolio_asset_type) DATASETS="portfolio_asset_type" ;;
+              20_nav_daily) DATASETS="nav_daily" ;;
+              21_dividend_history) DATASETS="dividend_history" ;;
+              *) DATASETS="profiles" ;;
+            esac
+          fi
+
+          echo "Selected datasets: $DATASETS"
+
           python scripts/fetch_sec_data.py \
             --output-dir sec_output \
             --output-layout latest-snapshot \
             --output-group master \
             --proj-id "$INPUT_PROJ_ID" \
+            --fund-status "$INPUT_FUND_STATUS" \
+            --registered-only "$INPUT_REGISTERED_ONLY" \
+            --registered-max-funds "$INPUT_REGISTERED_MAX_FUNDS" \
             --fund-class-name "$INPUT_FUND_CLASS_NAME" \
             --latest "$INPUT_LATEST" \
             --start-date "$INPUT_START_DATE" \
             --end-date "$INPUT_END_DATE" \
             --start-period "$INPUT_START_PERIOD" \
             --end-period "$INPUT_END_PERIOD" \
-            --datasets "amcs,profiles,specifications,mutual_fund_fees,involve_parties,factsheet_urls,ipos,benchmarks,subscription_redemption_minimums,subscription_redemption_periods,risk_spectrum,statistics,dividend_policy,fees,performance,asset_allocation,top5_holdings,outstanding_portfolio,portfolio_asset_type" \
+            --datasets "$DATASETS" \
             --max-pages "$INPUT_MAX_PAGES" \
-            --write-curated true
+            --write-curated true \
+            --continue-on-error "$INPUT_CONTINUE_ON_ERROR"
 
       - name: Upload CSV artifact
         uses: actions/upload-artifact@v4
