@@ -1,0 +1,127 @@
+name: SEC Master View to Google Sheet
+
+on:
+  workflow_dispatch:
+    inputs:
+      tab_name:
+        description: "Target Google Sheet tab name"
+        required: true
+        default: "master_view"
+      dataset_preset:
+        description: "Preset endpoints to summarize into master_view"
+        required: true
+        default: "master_core"
+        type: choice
+        options:
+          - "master_core"
+          - "all_master"
+          - "daily"
+          - "weekly"
+      custom_datasets:
+        description: "Optional comma-separated dataset keys. If set, overrides preset."
+        required: false
+        default: ""
+      proj_id:
+        description: "Optional single SEC project id for testing"
+        required: false
+        default: ""
+      fund_status:
+        description: "Profiles fund_status filter"
+        required: true
+        default: "Registered"
+      registered_max_funds:
+        description: "Limit registered funds for testing. Use 0 for no limit."
+        required: true
+        default: "50"
+      fund_class_name:
+        description: "Optional fund_class_name filter"
+        required: false
+        default: ""
+      latest:
+        description: "Use latest factsheet data for supported endpoints"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      start_date:
+        description: "Factsheet start_date if latest=false, YYYY-MM-DD"
+        required: false
+        default: ""
+      end_date:
+        description: "Factsheet end_date if latest=false, YYYY-MM-DD"
+        required: false
+        default: ""
+      start_period:
+        description: "Outstanding data start period, YYYYMM"
+        required: false
+        default: ""
+      end_period:
+        description: "Outstanding data end period, YYYYMM"
+        required: false
+        default: ""
+      start_nav_date:
+        description: "NAV start date for daily preset, YYYY-MM-DD"
+        required: false
+        default: ""
+      end_nav_date:
+        description: "NAV end date for daily preset, YYYY-MM-DD"
+        required: false
+        default: ""
+      max_pages:
+        description: "Maximum pages per endpoint. Use 0 for no limit."
+        required: true
+        default: "1"
+      continue_on_error:
+        description: "Continue when endpoint returns an error"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  sec-master-view-to-google-sheet:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements-sec.txt
+
+      - name: Build SEC master view and write Google Sheet
+        env:
+          SEC_API_KEY: ${{ secrets.SEC_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SEC_MASTER_VIEW_SPREADSHEET_ID: ${{ secrets.SEC_MASTER_VIEW_SPREADSHEET_ID }}
+        run: |
+          python scripts/sec_master_view_to_sheet.py \
+            --tab-name "${{ inputs.tab_name }}" \
+            --dataset-preset "${{ inputs.dataset_preset }}" \
+            --datasets "${{ inputs.custom_datasets }}" \
+            --proj-id "${{ inputs.proj_id }}" \
+            --fund-status "${{ inputs.fund_status }}" \
+            --registered-max-funds "${{ inputs.registered_max_funds }}" \
+            --fund-class-name "${{ inputs.fund_class_name }}" \
+            --latest "${{ inputs.latest }}" \
+            --start-date "${{ inputs.start_date }}" \
+            --end-date "${{ inputs.end_date }}" \
+            --start-period "${{ inputs.start_period }}" \
+            --end-period "${{ inputs.end_period }}" \
+            --start-nav-date "${{ inputs.start_nav_date }}" \
+            --end-nav-date "${{ inputs.end_nav_date }}" \
+            --max-pages "${{ inputs.max_pages }}" \
+            --continue-on-error "${{ inputs.continue_on_error }}"
