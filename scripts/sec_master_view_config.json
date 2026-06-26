@@ -1,0 +1,51 @@
+{
+  "sheet": {
+    "default_tab_name": "master_view"
+  },
+  "presets": {
+    "master_core": [
+      "profiles",
+      "factsheet_urls",
+      "benchmarks",
+      "risk_spectrum",
+      "statistics",
+      "dividend_policy"
+    ],
+    "all_master": [
+      "amcs",
+      "profiles",
+      "specifications",
+      "mutual_fund_fees",
+      "involve_parties",
+      "factsheet_urls",
+      "ipos",
+      "benchmarks",
+      "subscription_redemption_minimums",
+      "subscription_redemption_periods",
+      "risk_spectrum",
+      "statistics",
+      "dividend_policy",
+      "fees",
+      "performance",
+      "asset_allocation",
+      "top5_holdings",
+      "outstanding_portfolio",
+      "portfolio_asset_type"
+    ],
+    "daily": [
+      "profiles",
+      "nav_daily"
+    ],
+    "weekly": [
+      "profiles",
+      "dividend_history"
+    ]
+  },
+  "base_columns": [
+    "proj_id",
+    "fund_class_name",
+    "fund_name",
+    "status",
+    "last_upd_date"
+  ]
+}
