@@ -21,8 +21,20 @@ on:
         description: "Optional comma-separated dataset keys. If set, overrides preset."
         required: false
         default: ""
+      output_mode:
+        description: "Write summarized master_view or raw endpoint tabs"
+        required: true
+        default: "raw_tabs"
+        type: choice
+        options:
+          - "raw_tabs"
+          - "master_view"
       proj_id:
         description: "Optional single SEC project id for testing"
+        required: false
+        default: ""
+      proj_ids:
+        description: "Optional multiple SEC project ids separated by comma, space, or newline"
         required: false
         default: ""
       fund_status:
@@ -108,20 +120,49 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SEC_MASTER_VIEW_SPREADSHEET_ID: ${{ secrets.SEC_MASTER_VIEW_SPREADSHEET_ID }}
         run: |
-          python scripts/sec_master_view_to_sheet.py \
-            --tab-name "${{ inputs.tab_name }}" \
-            --dataset-preset "${{ inputs.dataset_preset }}" \
-            --datasets "${{ inputs.custom_datasets }}" \
-            --proj-id "${{ inputs.proj_id }}" \
-            --fund-status "${{ inputs.fund_status }}" \
-            --registered-max-funds "${{ inputs.registered_max_funds }}" \
-            --fund-class-name "${{ inputs.fund_class_name }}" \
-            --latest "${{ inputs.latest }}" \
-            --start-date "${{ inputs.start_date }}" \
-            --end-date "${{ inputs.end_date }}" \
-            --start-period "${{ inputs.start_period }}" \
-            --end-period "${{ inputs.end_period }}" \
-            --start-nav-date "${{ inputs.start_nav_date }}" \
-            --end-nav-date "${{ inputs.end_nav_date }}" \
-            --max-pages "${{ inputs.max_pages }}" \
-            --continue-on-error "${{ inputs.continue_on_error }}"
+          if [ "${{ inputs.output_mode }}" = "raw_tabs" ]; then
+            DATASETS="${{ inputs.custom_datasets }}"
+            if [ -z "$DATASETS" ]; then
+              case "${{ inputs.dataset_preset }}" in
+                all_master) DATASETS="amcs,profiles,specifications,mutual_fund_fees,involve_parties,factsheet_urls,ipos,benchmarks,subscription_redemption_minimums,subscription_redemption_periods,risk_spectrum,statistics,dividend_policy,fees,performance,asset_allocation,top5_holdings,outstanding_portfolio,portfolio_asset_type" ;;
+                daily) DATASETS="profiles,nav_daily" ;;
+                weekly) DATASETS="profiles,dividend_history" ;;
+                *) DATASETS="profiles,factsheet_urls,benchmarks,risk_spectrum,statistics,dividend_policy" ;;
+              esac
+            fi
+            python scripts/sec_raw_tabs_to_sheet.py \
+              --datasets "$DATASETS" \
+              --proj-id "${{ inputs.proj_id }}" \
+              --proj-ids "${{ inputs.proj_ids }}" \
+              --fund-status "${{ inputs.fund_status }}" \
+              --registered-max-funds "${{ inputs.registered_max_funds }}" \
+              --fund-class-name "${{ inputs.fund_class_name }}" \
+              --latest "${{ inputs.latest }}" \
+              --start-date "${{ inputs.start_date }}" \
+              --end-date "${{ inputs.end_date }}" \
+              --start-period "${{ inputs.start_period }}" \
+              --end-period "${{ inputs.end_period }}" \
+              --start-nav-date "${{ inputs.start_nav_date }}" \
+              --end-nav-date "${{ inputs.end_nav_date }}" \
+              --max-pages "${{ inputs.max_pages }}" \
+              --continue-on-error "${{ inputs.continue_on_error }}"
+          else
+            python scripts/sec_master_view_to_sheet.py \
+              --tab-name "${{ inputs.tab_name }}" \
+              --dataset-preset "${{ inputs.dataset_preset }}" \
+              --datasets "${{ inputs.custom_datasets }}" \
+              --proj-id "${{ inputs.proj_id }}" \
+              --proj-ids "${{ inputs.proj_ids }}" \
+              --fund-status "${{ inputs.fund_status }}" \
+              --registered-max-funds "${{ inputs.registered_max_funds }}" \
+              --fund-class-name "${{ inputs.fund_class_name }}" \
+              --latest "${{ inputs.latest }}" \
+              --start-date "${{ inputs.start_date }}" \
+              --end-date "${{ inputs.end_date }}" \
+              --start-period "${{ inputs.start_period }}" \
+              --end-period "${{ inputs.end_period }}" \
+              --start-nav-date "${{ inputs.start_nav_date }}" \
+              --end-nav-date "${{ inputs.end_nav_date }}" \
+              --max-pages "${{ inputs.max_pages }}" \
+              --continue-on-error "${{ inputs.continue_on_error }}"
+          fi
