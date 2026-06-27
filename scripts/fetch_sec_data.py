@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -438,6 +439,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch SEC fund data and export CSV files.")
     parser.add_argument("--output-dir", default="sec_output", help="Directory for CSV output.")
     parser.add_argument("--proj-id", default="", help="Optional project ID for fund-specific endpoints.")
+    parser.add_argument(
+        "--proj-ids",
+        default="",
+        help="Optional project IDs separated by comma, whitespace, or new lines.",
+    )
     parser.add_argument("--fund-status", default="Registered", help="Optional fund_status filter for profiles.")
     parser.add_argument(
         "--registered-only",
@@ -757,6 +763,27 @@ def selected_datasets(raw: str) -> list[str]:
     return keys
 
 
+def parse_project_ids(raw: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in re.split(r"[\s,;]+", str(raw or "").strip()):
+        proj_id = item.strip()
+        if not proj_id or proj_id in seen:
+            continue
+        seen.add(proj_id)
+        values.append(proj_id)
+    return values
+
+
+def requested_proj_ids(args: argparse.Namespace) -> list[str]:
+    raw_values = []
+    if getattr(args, "proj_id", ""):
+        raw_values.append(args.proj_id)
+    if getattr(args, "proj_ids", ""):
+        raw_values.append(args.proj_ids)
+    return parse_project_ids(" ".join(raw_values))
+
+
 def add_if_present(params: dict[str, Any], key: str, value: Any) -> None:
     if value is None:
         return
@@ -850,6 +877,44 @@ def fetch_registered_profiles(
         query_params=params,
         max_pages=args.max_pages,
     )
+    rows, _ = transform_dataset_rows("profiles", rows)
+    return rows
+
+
+def fetch_profiles_for_proj_ids(
+    proj_ids: list[str],
+    api_key: str,
+    args: argparse.Namespace,
+    errors: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    total = len(proj_ids)
+    for index, proj_id in enumerate(proj_ids, start=1):
+        params = {"page_size": args.page_size, "project_info": proj_id}
+        add_if_present(params, "fund_status", args.fund_status)
+        try:
+            project_rows = fetch_sec_all_pages(
+                ENDPOINTS["profiles"],
+                api_key,
+                query_params=params,
+                max_pages=args.max_pages,
+            )
+            rows.extend(project_rows)
+            print(f"Fetched profiles for proj_id {index}/{total}: {proj_id}")
+        except Exception as exc:
+            if errors is not None:
+                errors.append(
+                    {
+                        "dataset": "profiles",
+                        "endpoint": ENDPOINTS["profiles"],
+                        "proj_id": proj_id,
+                        "params": json.dumps(params, ensure_ascii=False, separators=(",", ":")),
+                        "error": str(exc),
+                    }
+                )
+            print(f"ERROR fetching profiles for proj_id={proj_id}: {exc}", file=sys.stderr)
+            if not should_continue_on_error(args):
+                raise
     rows, _ = transform_dataset_rows("profiles", rows)
     return rows
 
@@ -1098,10 +1163,27 @@ def main() -> int:
     rows_by_dataset: dict[str, list[dict[str, Any]]] = {}
     errors: list[dict[str, Any]] = []
     datasets = selected_datasets(args.datasets)
+    explicit_proj_ids = requested_proj_ids(args)
     registered_profile_rows: list[dict[str, Any]] = []
     registered_ids: list[str] = []
 
-    if should_use_registered_only(args) and not args.proj_id.strip():
+    if explicit_proj_ids:
+        registered_ids = explicit_proj_ids
+        if "profiles" in datasets:
+            registered_profile_rows = fetch_profiles_for_proj_ids(
+                explicit_proj_ids,
+                api_key,
+                args,
+                errors,
+            )
+            print(f"Explicit profiles: {len(registered_profile_rows)} rows")
+            for path in output_paths(output_dir, "00_registered_proj_ids.csv", args):
+                write_csv(
+                    path,
+                    registered_proj_id_rows(explicit_proj_ids),
+                    preferred_headers=["proj_id"],
+                )
+    elif should_use_registered_only(args) and not args.proj_id.strip():
         needs_registered_ids = any(dataset in PROJECT_ID_DATASETS for dataset in datasets)
         if needs_registered_ids or "profiles" in datasets:
             registered_profile_rows = fetch_registered_profiles(api_key, args)
@@ -1125,9 +1207,10 @@ def main() -> int:
             rows = registered_profile_rows
             preferred_headers = PROFILE_COLUMNS
         elif (
-            should_use_registered_only(args)
-            and not args.proj_id.strip()
+            (explicit_proj_ids or should_use_registered_only(args))
+            and not (args.proj_id.strip() and not explicit_proj_ids)
             and dataset in PROJECT_ID_DATASETS
+            and registered_ids
         ):
             rows = fetch_dataset_for_registered_proj_ids(
                 dataset,

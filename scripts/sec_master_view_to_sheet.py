@@ -21,10 +21,12 @@ from fetch_sec_data import (
     add_if_present,
     dataset_params,
     fetch_dataset_for_registered_proj_ids,
+    fetch_profiles_for_proj_ids,
     fetch_registered_profiles,
     fetch_sec_all_pages,
     get_api_key,
     registered_proj_ids,
+    requested_proj_ids,
     should_continue_on_error,
     transform_dataset_rows,
 )
@@ -53,6 +55,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional comma-separated dataset keys. Overrides --dataset-preset.",
     )
     parser.add_argument("--proj-id", default="", help="Optional single SEC project ID for testing.")
+    parser.add_argument(
+        "--proj-ids",
+        default="",
+        help="Optional project IDs separated by comma, whitespace, or new lines.",
+    )
     parser.add_argument("--fund-status", default="Registered", help="Profiles fund_status filter.")
     parser.add_argument(
         "--registered-max-funds",
@@ -409,6 +416,11 @@ def fetch_dataset(
 
 
 def fetch_profile_rows(api_key: str, args: argparse.Namespace) -> list[dict[str, Any]]:
+    explicit_proj_ids = requested_proj_ids(args)
+    if explicit_proj_ids:
+        errors: list[dict[str, Any]] = []
+        return fetch_profiles_for_proj_ids(explicit_proj_ids, api_key, args, errors)
+
     if not args.proj_id.strip():
         return fetch_registered_profiles(api_key, args)
 
