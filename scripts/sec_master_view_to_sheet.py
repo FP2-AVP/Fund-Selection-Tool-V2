@@ -456,12 +456,16 @@ def values_from_rows(headers: list[str], rows: list[dict[str, Any]]) -> list[lis
     return [headers] + [[row.get(header, "") for header in headers] for row in rows]
 
 
-def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> None:
+def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> int:
     metadata = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    existing = {sheet["properties"]["title"] for sheet in metadata.get("sheets", [])}
+    existing = {
+        sheet["properties"]["title"]: sheet["properties"]["sheetId"]
+        for sheet in metadata.get("sheets", [])
+    }
     if tab_name in existing:
-        return
-    sheets.spreadsheets().batchUpdate(
+        return existing[tab_name]
+
+    result = sheets.spreadsheets().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={
             "requests": [
@@ -475,10 +479,42 @@ def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> None:
             ]
         },
     ).execute()
+    return result["replies"][0]["addSheet"]["properties"]["sheetId"]
+
+
+def resize_sheet_grid(
+    sheets: Any,
+    spreadsheet_id: str,
+    sheet_id: int,
+    row_count: int,
+    column_count: int,
+) -> None:
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [
+                {
+                    "updateSheetProperties": {
+                        "properties": {
+                            "sheetId": sheet_id,
+                            "gridProperties": {
+                                "rowCount": max(row_count, 1),
+                                "columnCount": max(column_count, 1),
+                            },
+                        },
+                        "fields": "gridProperties(rowCount,columnCount)",
+                    }
+                }
+            ]
+        },
+    ).execute()
 
 
 def write_values_to_sheet(sheets: Any, spreadsheet_id: str, tab_name: str, values: list[list[Any]]) -> None:
-    ensure_sheet(sheets, spreadsheet_id, tab_name)
+    sheet_id = ensure_sheet(sheets, spreadsheet_id, tab_name)
+    row_count = len(values) if values else 1
+    column_count = max((len(row) for row in values), default=1)
+    resize_sheet_grid(sheets, spreadsheet_id, sheet_id, row_count, column_count)
     sheets.spreadsheets().values().clear(
         spreadsheetId=spreadsheet_id,
         range=f"'{tab_name}'",
