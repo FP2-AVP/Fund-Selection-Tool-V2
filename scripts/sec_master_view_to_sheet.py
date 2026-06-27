@@ -269,7 +269,18 @@ def summarize_risk(headers: list[str], row: dict[str, Any], rows_by_dataset: dic
 
 def summarize_statistics(headers: list[str], row: dict[str, Any], rows_by_dataset: dict[str, list[dict[str, Any]]]) -> None:
     latest = latest_by_proj(rows_by_dataset.get("statistics", [])).get(normalized_text(row.get("proj_id")), {})
-    for column in ["maximum_drawdown", "sharpe_ratio", "beta", "alpha", "tracking_error", "yield_to_maturity"]:
+    for column in [
+        "portfolio_turnover_ratio",
+        "recovering_period",
+        "portfolio_duration_period",
+        "maximum_drawdown",
+        "sharpe_ratio",
+        "beta",
+        "alpha",
+        "fx_hedging",
+        "tracking_error",
+        "yield_to_maturity",
+    ]:
         add_column(headers, row, column, latest.get(column))
 
 
