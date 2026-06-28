@@ -297,6 +297,7 @@ def build_status_rows(
     row_counts: dict[str, int],
     project_ids: list[str],
     errors: list[dict[str, Any]],
+    args: argparse.Namespace,
 ) -> list[dict[str, Any]]:
     error_counts: dict[str, int] = {}
     for error in errors:
@@ -312,6 +313,17 @@ def build_status_rows(
             "project_count": len(project_ids),
             "error_count": error_counts.get(dataset, 0),
             "status": "ready" if row_counts.get(dataset, 0) else "empty",
+            "fund_status": args.fund_status,
+            "fund_class_name": args.fund_class_name,
+            "latest": args.latest,
+            "start_date": args.start_date,
+            "end_date": args.end_date,
+            "start_period": args.start_period,
+            "end_period": args.end_period,
+            "start_nav_date": args.start_nav_date,
+            "end_nav_date": args.end_nav_date,
+            "registered_max_funds": args.registered_max_funds,
+            "max_pages": args.max_pages,
         }
         for dataset in datasets
     ]
@@ -372,14 +384,32 @@ def main() -> int:
             values_from_rows(registered_proj_id_rows(project_ids), ["proj_id"]),
         )
 
-    status_rows = build_status_rows(datasets, row_counts, project_ids, errors)
+    status_rows = build_status_rows(datasets, row_counts, project_ids, errors, args)
     write_values_to_sheet(
         sheets,
         args.spreadsheet_id.strip(),
         args.status_tab_name,
         values_from_rows(
             status_rows,
-            ["dataset", "tab_name", "row_count", "project_count", "error_count", "status"],
+            [
+                "dataset",
+                "tab_name",
+                "row_count",
+                "project_count",
+                "error_count",
+                "status",
+                "fund_status",
+                "fund_class_name",
+                "latest",
+                "start_date",
+                "end_date",
+                "start_period",
+                "end_period",
+                "start_nav_date",
+                "end_nav_date",
+                "registered_max_funds",
+                "max_pages",
+            ],
         ),
     )
 
