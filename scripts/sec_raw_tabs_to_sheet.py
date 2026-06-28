@@ -29,6 +29,8 @@ from fetch_sec_data import (
 )
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+GOOGLE_SHEETS_MAX_CELL_CHARS = 50_000
+SAFE_CELL_CHARS = 49_000
 
 
 def parse_args() -> argparse.Namespace:
@@ -120,12 +122,21 @@ def credentials_from_env() -> Any:
     raise RuntimeError("Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS first.")
 
 
+def truncate_cell_value(value: Any) -> Any:
+    if not isinstance(value, str) or len(value) <= SAFE_CELL_CHARS:
+        return value
+    return (
+        value[:SAFE_CELL_CHARS]
+        + f"...[truncated {len(value) - SAFE_CELL_CHARS} chars to fit Google Sheets cell limit]"
+    )
+
+
 def flatten_value(value: Any) -> Any:
     if value is None:
         return ""
     if isinstance(value, (str, int, float, bool)):
-        return value
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return truncate_cell_value(value)
+    return truncate_cell_value(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
 
 
 def ordered_headers(rows: list[dict[str, Any]], preferred: list[str] | None = None) -> list[str]:
@@ -220,6 +231,10 @@ def write_values_to_sheet(
 
     for start in range(0, len(values), 1000):
         chunk = values[start : start + 1000]
+        chunk = [
+            [truncate_cell_value(cell) for cell in row]
+            for row in chunk
+        ]
         sheets.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=f"'{tab_name}'!A{start + 1}",

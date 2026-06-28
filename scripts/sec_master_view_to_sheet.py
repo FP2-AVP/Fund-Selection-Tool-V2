@@ -33,6 +33,7 @@ from fetch_sec_data import (
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 CONFIG_PATH = Path(__file__).with_name("sec_master_view_config.json")
+SAFE_CELL_CHARS = 49_000
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,8 +133,19 @@ def normalized_text(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    return str(value).strip()
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(value).strip()
+    return truncate_cell_value(text)
+
+
+def truncate_cell_value(value: Any) -> Any:
+    if not isinstance(value, str) or len(value) <= SAFE_CELL_CHARS:
+        return value
+    return (
+        value[:SAFE_CELL_CHARS]
+        + f"...[truncated {len(value) - SAFE_CELL_CHARS} chars to fit Google Sheets cell limit]"
+    )
 
 
 def compact_join(values: list[Any], sep: str = " | ", limit: int = 6) -> str:
@@ -476,7 +488,10 @@ def build_master_view(
 
 
 def values_from_rows(headers: list[str], rows: list[dict[str, Any]]) -> list[list[Any]]:
-    return [headers] + [[row.get(header, "") for header in headers] for row in rows]
+    return [headers] + [
+        [truncate_cell_value(row.get(header, "")) for header in headers]
+        for row in rows
+    ]
 
 
 def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> int:
@@ -547,7 +562,10 @@ def write_values_to_sheet(sheets: Any, spreadsheet_id: str, tab_name: str, value
         return
 
     for start in range(0, len(values), 1000):
-        chunk = values[start : start + 1000]
+        chunk = [
+            [truncate_cell_value(cell) for cell in row]
+            for row in values[start : start + 1000]
+        ]
         range_name = f"'{tab_name}'!A{start + 1}"
         sheets.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
