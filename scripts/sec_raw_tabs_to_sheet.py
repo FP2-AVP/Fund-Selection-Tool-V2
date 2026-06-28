@@ -23,6 +23,7 @@ from fetch_sec_data import (
     get_api_key,
     registered_proj_id_rows,
     registered_proj_ids,
+    requested_proj_class_pairs,
     requested_proj_ids,
     should_continue_on_error,
     transform_dataset_rows,
@@ -50,6 +51,11 @@ def parse_args() -> argparse.Namespace:
         "--proj-ids",
         default="",
         help="Optional project IDs separated by comma, whitespace, or new lines.",
+    )
+    parser.add_argument(
+        "--proj-class-pairs",
+        default="",
+        help="Optional lines of proj_id|fund_class_name. Leave fund_class_name blank to fetch all classes.",
     )
     parser.add_argument("--fund-status", default="Registered", help="Profiles fund_status filter.")
     parser.add_argument(
@@ -376,7 +382,7 @@ def fetch_and_write_project_dataset(
     dataset: str,
     api_key: str,
     args: argparse.Namespace,
-    project_ids: list[str],
+    project_pairs: list[tuple[str, str]],
     errors: list[dict[str, Any]],
 ) -> int:
     endpoint = ENDPOINTS[dataset]
@@ -387,7 +393,7 @@ def fetch_and_write_project_dataset(
     next_write_row = 2
     row_count = 0
     buffer: list[dict[str, Any]] = []
-    total = len(project_ids)
+    total = len(project_pairs)
     batch_projects = max(1, int(getattr(args, "sheet_write_batch_projects", 100) or 100))
     batch_rows = max(1, int(getattr(args, "sheet_write_batch_rows", 5000) or 5000))
 
@@ -408,9 +414,11 @@ def fetch_and_write_project_dataset(
         print(f"Checkpoint {dataset}: wrote {row_count} rows ({reason})")
         buffer = []
 
-    for index, proj_id in enumerate(project_ids, start=1):
+    for index, (proj_id, fund_class_name) in enumerate(project_pairs, start=1):
         params = dataset_params(dataset, args)
         params["proj_id"] = proj_id
+        if fund_class_name:
+            params["fund_class_name"] = fund_class_name
         try:
             raw_rows = fetch_sec_all_pages(
                 endpoint,
@@ -420,7 +428,8 @@ def fetch_and_write_project_dataset(
             )
             rows, _ = transform_dataset_rows(dataset, raw_rows)
             buffer.extend(rows)
-            print(f"Fetched {dataset} for registered proj_id {index}/{total}: {proj_id}")
+            class_note = f" / {fund_class_name}" if fund_class_name else ""
+            print(f"Fetched {dataset} for proj_id pair {index}/{total}: {proj_id}{class_note}")
         except Exception as exc:
             errors.append(
                 {
@@ -493,10 +502,26 @@ def main() -> int:
     datasets = selected_datasets(args.datasets)
     errors: list[dict[str, Any]] = []
     explicit_project_ids = requested_proj_ids(args)
+    explicit_project_pairs = requested_proj_class_pairs(args)
 
     if explicit_project_ids:
         profile_rows = fetch_profiles_for_proj_ids(explicit_project_ids, api_key, args, errors)
         project_ids = explicit_project_ids
+        class_filters_by_proj: dict[str, set[str]] = {}
+        all_classes_proj_ids: set[str] = set()
+        for proj_id, fund_class_name in explicit_project_pairs:
+            if fund_class_name:
+                class_filters_by_proj.setdefault(proj_id, set()).add(fund_class_name)
+            else:
+                all_classes_proj_ids.add(proj_id)
+        for proj_id in all_classes_proj_ids:
+            class_filters_by_proj.pop(proj_id, None)
+        if class_filters_by_proj:
+            profile_rows = [
+                row for row in profile_rows
+                if not class_filters_by_proj.get(str(row.get("proj_id") or "").strip())
+                or str(row.get("fund_class_name") or "").strip() in class_filters_by_proj[str(row.get("proj_id") or "").strip()]
+            ]
     else:
         profile_rows = fetch_registered_profiles(api_key, args)
         project_ids = registered_proj_ids(profile_rows, args.registered_max_funds)
@@ -506,6 +531,10 @@ def main() -> int:
                 row for row in profile_rows
                 if str(row.get("proj_id") or "").strip() in project_id_set
             ]
+        explicit_project_pairs = [(proj_id, str(args.fund_class_name or "").strip()) for proj_id in project_ids]
+
+    if not explicit_project_pairs:
+        explicit_project_pairs = [(proj_id, str(args.fund_class_name or "").strip()) for proj_id in project_ids]
 
     print(f"Selected datasets: {', '.join(datasets)}")
     print(f"Profiles rows: {len(profile_rows)}")
@@ -525,7 +554,7 @@ def main() -> int:
                 dataset,
                 api_key,
                 args,
-                project_ids,
+                explicit_project_pairs,
                 errors,
             )
             print(f"Dataset {dataset}: {row_counts[dataset]} rows -> {tab_name}")

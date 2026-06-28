@@ -26,6 +26,7 @@ from fetch_sec_data import (
     fetch_sec_all_pages,
     get_api_key,
     registered_proj_ids,
+    requested_proj_class_pairs,
     requested_proj_ids,
     should_continue_on_error,
     transform_dataset_rows,
@@ -60,6 +61,11 @@ def parse_args() -> argparse.Namespace:
         "--proj-ids",
         default="",
         help="Optional project IDs separated by comma, whitespace, or new lines.",
+    )
+    parser.add_argument(
+        "--proj-class-pairs",
+        default="",
+        help="Optional lines of proj_id|fund_class_name. Leave fund_class_name blank to fetch all classes.",
     )
     parser.add_argument("--fund-status", default="Registered", help="Profiles fund_status filter.")
     parser.add_argument(
@@ -431,7 +437,23 @@ def fetch_profile_rows(api_key: str, args: argparse.Namespace) -> list[dict[str,
     explicit_proj_ids = requested_proj_ids(args)
     if explicit_proj_ids:
         errors: list[dict[str, Any]] = []
-        return fetch_profiles_for_proj_ids(explicit_proj_ids, api_key, args, errors)
+        rows = fetch_profiles_for_proj_ids(explicit_proj_ids, api_key, args, errors)
+        class_filters_by_proj: dict[str, set[str]] = {}
+        all_classes_proj_ids: set[str] = set()
+        for proj_id, fund_class_name in requested_proj_class_pairs(args):
+            if fund_class_name:
+                class_filters_by_proj.setdefault(proj_id, set()).add(fund_class_name)
+            else:
+                all_classes_proj_ids.add(proj_id)
+        for proj_id in all_classes_proj_ids:
+            class_filters_by_proj.pop(proj_id, None)
+        if not class_filters_by_proj:
+            return rows
+        return [
+            row for row in rows
+            if not class_filters_by_proj.get(normalized_text(row.get("proj_id")))
+            or normalized_text(row.get("fund_class_name")) in class_filters_by_proj[normalized_text(row.get("proj_id"))]
+        ]
 
     if not args.proj_id.strip():
         return fetch_registered_profiles(api_key, args)

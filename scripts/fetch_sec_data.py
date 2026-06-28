@@ -445,6 +445,11 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Optional project IDs separated by comma, whitespace, or new lines.",
     )
+    parser.add_argument(
+        "--proj-class-pairs",
+        default="",
+        help="Optional lines of proj_id|fund_class_name. Leave fund_class_name blank to fetch all classes.",
+    )
     parser.add_argument("--fund-status", default="Registered", help="Optional fund_status filter for profiles.")
     parser.add_argument(
         "--registered-only",
@@ -799,13 +804,44 @@ def parse_project_ids(raw: str) -> list[str]:
     return values
 
 
+def parse_project_class_pairs(raw: str) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in str(raw or "").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if "|" in text:
+            proj_id, fund_class_name = text.split("|", 1)
+        elif "\t" in text:
+            proj_id, fund_class_name = text.split("\t", 1)
+        else:
+            parts = [part.strip() for part in text.split(",", 1)]
+            proj_id = parts[0]
+            fund_class_name = parts[1] if len(parts) > 1 else ""
+        pair = (proj_id.strip(), fund_class_name.strip())
+        if pair[0] and pair not in seen:
+            seen.add(pair)
+            pairs.append(pair)
+    return pairs
+
+
 def requested_proj_ids(args: argparse.Namespace) -> list[str]:
     raw_values = []
     if getattr(args, "proj_id", ""):
         raw_values.append(args.proj_id)
     if getattr(args, "proj_ids", ""):
         raw_values.append(args.proj_ids)
+    raw_values.extend(proj_id for proj_id, _fund_class_name in parse_project_class_pairs(getattr(args, "proj_class_pairs", "")))
     return parse_project_ids(" ".join(raw_values))
+
+
+def requested_proj_class_pairs(args: argparse.Namespace) -> list[tuple[str, str]]:
+    pairs = parse_project_class_pairs(getattr(args, "proj_class_pairs", ""))
+    if pairs:
+        return pairs
+    fund_class_name = str(getattr(args, "fund_class_name", "") or "").strip()
+    return [(proj_id, fund_class_name) for proj_id in requested_proj_ids(args)]
 
 
 def add_if_present(params: dict[str, Any], key: str, value: Any) -> None:
