@@ -84,6 +84,18 @@ def parse_args() -> argparse.Namespace:
         default="sec_endpoint_status",
         help="Tab name for endpoint status summary.",
     )
+    parser.add_argument(
+        "--sheet-write-batch-projects",
+        type=int,
+        default=100,
+        help="For project-scoped datasets, write progress to Google Sheets after this many proj_id values.",
+    )
+    parser.add_argument(
+        "--sheet-write-batch-rows",
+        type=int,
+        default=5000,
+        help="For project-scoped datasets, write progress to Google Sheets after this many fetched rows.",
+    )
     return parser.parse_args()
 
 
@@ -244,6 +256,72 @@ def write_values_to_sheet(
         print(f"Wrote {tab_name} rows {start + 1} - {start + len(chunk)}")
 
 
+def write_sheet_header(
+    sheets: Any,
+    spreadsheet_id: str,
+    tab_name: str,
+    headers: list[str],
+) -> int:
+    sheet_id = ensure_sheet(sheets, spreadsheet_id, tab_name)
+    resize_sheet_grid(sheets, spreadsheet_id, sheet_id, 1, len(headers) or 1)
+    sheets.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{tab_name}'",
+        body={},
+    ).execute()
+    if headers:
+        sheets.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'!A1",
+            valueInputOption="RAW",
+            body={"values": [headers]},
+        ).execute()
+    return sheet_id
+
+
+def row_values(headers: list[str], rows: list[dict[str, Any]]) -> list[list[Any]]:
+    return [
+        [flatten_value(row.get(header, "")) for header in headers]
+        for row in rows
+    ]
+
+
+def append_rows_to_sheet(
+    sheets: Any,
+    spreadsheet_id: str,
+    tab_name: str,
+    sheet_id: int,
+    headers: list[str],
+    rows: list[dict[str, Any]],
+    start_row: int,
+) -> int:
+    if not rows:
+        return start_row
+    values = row_values(headers, rows)
+    resize_sheet_grid(
+        sheets,
+        spreadsheet_id,
+        sheet_id,
+        start_row + len(values) - 1,
+        len(headers) or 1,
+    )
+    for offset in range(0, len(values), 1000):
+        chunk = values[offset : offset + 1000]
+        chunk = [
+            [truncate_cell_value(cell) for cell in row]
+            for row in chunk
+        ]
+        row_number = start_row + offset
+        sheets.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'!A{row_number}",
+            valueInputOption="RAW",
+            body={"values": chunk},
+        ).execute()
+        print(f"Wrote {tab_name} rows {row_number} - {row_number + len(chunk) - 1}")
+    return start_row + len(values)
+
+
 def fetch_dataset_rows(
     dataset: str,
     api_key: str,
@@ -292,6 +370,81 @@ def fetch_dataset_rows(
         return rows, headers
 
 
+def fetch_and_write_project_dataset(
+    sheets: Any,
+    spreadsheet_id: str,
+    dataset: str,
+    api_key: str,
+    args: argparse.Namespace,
+    project_ids: list[str],
+    errors: list[dict[str, Any]],
+) -> int:
+    endpoint = ENDPOINTS[dataset]
+    tab_name = dataset_tab_name(dataset)
+    _, preferred_headers = transform_dataset_rows(dataset, [])
+    headers = ordered_headers([], preferred_headers)
+    sheet_id = write_sheet_header(sheets, spreadsheet_id, tab_name, headers)
+    next_write_row = 2
+    row_count = 0
+    buffer: list[dict[str, Any]] = []
+    total = len(project_ids)
+    batch_projects = max(1, int(getattr(args, "sheet_write_batch_projects", 100) or 100))
+    batch_rows = max(1, int(getattr(args, "sheet_write_batch_rows", 5000) or 5000))
+
+    def flush(reason: str) -> None:
+        nonlocal next_write_row, row_count, buffer
+        if not buffer:
+            return
+        next_write_row = append_rows_to_sheet(
+            sheets,
+            spreadsheet_id,
+            tab_name,
+            sheet_id,
+            headers,
+            buffer,
+            next_write_row,
+        )
+        row_count += len(buffer)
+        print(f"Checkpoint {dataset}: wrote {row_count} rows ({reason})")
+        buffer = []
+
+    for index, proj_id in enumerate(project_ids, start=1):
+        params = dataset_params(dataset, args)
+        params["proj_id"] = proj_id
+        try:
+            raw_rows = fetch_sec_all_pages(
+                endpoint,
+                api_key,
+                query_params=params,
+                max_pages=args.max_pages,
+            )
+            rows, _ = transform_dataset_rows(dataset, raw_rows)
+            buffer.extend(rows)
+            print(f"Fetched {dataset} for registered proj_id {index}/{total}: {proj_id}")
+        except Exception as exc:
+            errors.append(
+                {
+                    "dataset": dataset,
+                    "endpoint": endpoint,
+                    "proj_id": proj_id,
+                    "params": json.dumps(params, ensure_ascii=False, separators=(",", ":")),
+                    "error": str(exc),
+                }
+            )
+            print(f"ERROR fetching {dataset} for proj_id={proj_id}: {exc}")
+            if not should_continue_on_error(args):
+                flush("before fatal error")
+                raise
+
+        if index % batch_projects == 0 or len(buffer) >= batch_rows:
+            flush(f"proj_id {index}/{total}")
+
+    flush("dataset complete")
+    if row_count == 0:
+        print(f"Dataset {dataset}: no rows -> {tab_name}")
+    return row_count
+
+
 def build_status_rows(
     datasets: list[str],
     row_counts: dict[str, int],
@@ -324,6 +477,8 @@ def build_status_rows(
             "end_nav_date": args.end_nav_date,
             "registered_max_funds": args.registered_max_funds,
             "max_pages": args.max_pages,
+            "sheet_write_batch_projects": args.sheet_write_batch_projects,
+            "sheet_write_batch_rows": args.sheet_write_batch_rows,
         }
         for dataset in datasets
     ]
@@ -362,6 +517,20 @@ def main() -> int:
     row_counts: dict[str, int] = {}
 
     for dataset in datasets:
+        tab_name = dataset_tab_name(dataset)
+        if dataset in PROJECT_ID_DATASETS and project_ids:
+            row_counts[dataset] = fetch_and_write_project_dataset(
+                sheets,
+                args.spreadsheet_id.strip(),
+                dataset,
+                api_key,
+                args,
+                project_ids,
+                errors,
+            )
+            print(f"Dataset {dataset}: {row_counts[dataset]} rows -> {tab_name}")
+            continue
+
         rows, preferred_headers = fetch_dataset_rows(
             dataset,
             api_key,
@@ -371,7 +540,6 @@ def main() -> int:
             errors,
         )
         row_counts[dataset] = len(rows)
-        tab_name = dataset_tab_name(dataset)
         values = values_from_rows(rows, preferred_headers)
         write_values_to_sheet(sheets, args.spreadsheet_id.strip(), tab_name, values)
         print(f"Dataset {dataset}: {len(rows)} rows -> {tab_name}")
@@ -409,6 +577,8 @@ def main() -> int:
                 "end_nav_date",
                 "registered_max_funds",
                 "max_pages",
+                "sheet_write_batch_projects",
+                "sheet_write_batch_rows",
             ],
         ),
     )

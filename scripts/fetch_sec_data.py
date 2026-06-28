@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -516,6 +517,7 @@ def fetch_sec_data(
     api_key: str,
     query_params: dict[str, Any] | None = None,
     timeout: int = 60,
+    retries: int = 5,
 ) -> dict[str, Any]:
     headers = {
         "Content-Type": "application/json",
@@ -526,19 +528,41 @@ def fetch_sec_data(
     if query_params:
         params.update(query_params)
 
-    response = requests.get(
-        f"{BASE_URL}{endpoint_path}",
-        headers=headers,
-        params=params,
-        timeout=timeout,
-    )
+    retryable_statuses = {429, 500, 502, 503, 504}
+    last_error: Exception | None = None
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"SEC API error {response.status_code} for {endpoint_path}: {response.text[:1000]}"
-        )
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.get(
+                f"{BASE_URL}{endpoint_path}",
+                headers=headers,
+                params=params,
+                timeout=timeout,
+            )
 
-    return response.json()
+            if response.status_code == 200:
+                return response.json()
+
+            if response.status_code not in retryable_statuses:
+                raise RuntimeError(
+                    f"SEC API error {response.status_code} for {endpoint_path}: {response.text[:1000]}"
+                )
+
+            last_error = RuntimeError(
+                f"SEC API retryable error {response.status_code} for {endpoint_path}: {response.text[:1000]}"
+            )
+        except (requests.exceptions.RequestException, json.JSONDecodeError) as exc:
+            last_error = exc
+
+        if attempt < retries:
+            delay = min(60, 2 ** attempt)
+            print(
+                f"Retry {attempt}/{retries - 1} for {endpoint_path} after {delay}s: {last_error}",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+
+    raise RuntimeError(f"SEC API request failed after {retries} attempts for {endpoint_path}: {last_error}")
 
 
 def unwrap_items(data: Any) -> list[dict[str, Any]]:
