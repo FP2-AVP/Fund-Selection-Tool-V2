@@ -29,6 +29,7 @@ on:
         options:
           - "raw_tabs"
           - "master_view"
+          - "master_from_raw"
       proj_id:
         description: "Optional single SEC project id for testing"
         required: false
@@ -151,6 +152,9 @@ jobs:
               --end-nav-date "${{ inputs.end_nav_date }}" \
               --max-pages "${{ inputs.max_pages }}" \
               --continue-on-error "${{ inputs.continue_on_error }}"
+          elif [ "${{ inputs.output_mode }}" = "master_from_raw" ]; then
+            python scripts/sec_master_view_from_raw_tabs.py \
+              --output-tab "${{ inputs.tab_name }}"
           else
             python scripts/sec_master_view_to_sheet.py \
               --tab-name "${{ inputs.tab_name }}" \
