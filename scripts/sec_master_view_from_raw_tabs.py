@@ -7,10 +7,12 @@ import argparse
 import json
 import os
 import re
+import time
 from typing import Any
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SAFE_CELL_CHARS = 49_000
+SHEET_WRITE_CHUNK_ROWS = 100
 PROFILE_BASE_COLUMNS = [
     "comp_name_th",
     "proj_id",
@@ -157,11 +159,29 @@ def truncate_cell_value(value: Any) -> Any:
     )
 
 
+def execute_with_retry(request: Any, label: str, retries: int = 5) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return request.execute()
+        except Exception as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            delay = min(60, 2 ** attempt)
+            print(f"Retry Google Sheets {label} {attempt}/{retries - 1} after {delay}s: {exc}")
+            time.sleep(delay)
+    raise RuntimeError(f"Google Sheets {label} failed after {retries} attempts: {last_error}")
+
+
 def read_tab_rows(sheets: Any, spreadsheet_id: str, tab_name: str) -> list[dict[str, Any]]:
-    result = sheets.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{tab_name}'",
-    ).execute()
+    result = execute_with_retry(
+        sheets.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'",
+        ),
+        f"read {tab_name}",
+    )
     values = result.get("values", [])
     if not values:
         print(f"Read {tab_name}: 0 rows")
@@ -397,17 +417,23 @@ def seq_asset_lookup(rows: list[dict[str, Any]], output_column: str, date_column
 
 
 def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> int:
-    metadata = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    metadata = execute_with_retry(
+        sheets.spreadsheets().get(spreadsheetId=spreadsheet_id),
+        "get spreadsheet metadata",
+    )
     existing = {
         sheet["properties"]["title"]: sheet["properties"]["sheetId"]
         for sheet in metadata.get("sheets", [])
     }
     if tab_name in existing:
         return existing[tab_name]
-    result = sheets.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
-    ).execute()
+    result = execute_with_retry(
+        sheets.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+        ),
+        f"add sheet {tab_name}",
+    )
     return result["replies"][0]["addSheet"]["properties"]["sheetId"]
 
 
@@ -418,25 +444,28 @@ def resize_sheet_grid(
     row_count: int,
     column_count: int,
 ) -> None:
-    sheets.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={
-            "requests": [
-                {
-                    "updateSheetProperties": {
-                        "properties": {
-                            "sheetId": sheet_id,
-                            "gridProperties": {
-                                "rowCount": max(row_count, 1),
-                                "columnCount": max(column_count, 1),
+    execute_with_retry(
+        sheets.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "gridProperties": {
+                                    "rowCount": max(row_count, 1),
+                                    "columnCount": max(column_count, 1),
+                                },
                             },
-                        },
-                        "fields": "gridProperties(rowCount,columnCount)",
+                            "fields": "gridProperties(rowCount,columnCount)",
+                        }
                     }
-                }
-            ]
-        },
-    ).execute()
+                ]
+            },
+        ),
+        "resize grid",
+    )
 
 
 def write_values_to_sheet(sheets: Any, spreadsheet_id: str, tab_name: str, values: list[list[Any]]) -> None:
@@ -444,24 +473,30 @@ def write_values_to_sheet(sheets: Any, spreadsheet_id: str, tab_name: str, value
     row_count = len(values) if values else 1
     column_count = max((len(row) for row in values), default=1)
     resize_sheet_grid(sheets, spreadsheet_id, sheet_id, row_count, column_count)
-    sheets.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{tab_name}'",
-        body={},
-    ).execute()
+    execute_with_retry(
+        sheets.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'",
+            body={},
+        ),
+        f"clear {tab_name}",
+    )
     if not values:
         return
-    for start in range(0, len(values), 1000):
+    for start in range(0, len(values), SHEET_WRITE_CHUNK_ROWS):
         chunk = [
             [truncate_cell_value(cell) for cell in row]
-            for row in values[start : start + 1000]
+            for row in values[start : start + SHEET_WRITE_CHUNK_ROWS]
         ]
-        sheets.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=f"'{tab_name}'!A{start + 1}",
-            valueInputOption="RAW",
-            body={"values": chunk},
-        ).execute()
+        execute_with_retry(
+            sheets.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{tab_name}'!A{start + 1}",
+                valueInputOption="RAW",
+                body={"values": chunk},
+            ),
+            f"write {tab_name} rows {start + 1}-{start + len(chunk)}",
+        )
         print(f"Wrote {tab_name} rows {start + 1} - {start + len(chunk)}")
 
 
