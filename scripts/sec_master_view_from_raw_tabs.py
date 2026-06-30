@@ -6,10 +6,73 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from typing import Any
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SAFE_CELL_CHARS = 49_000
+PROFILE_BASE_COLUMNS = [
+    "comp_name_th",
+    "proj_id",
+    "regis_id",
+    "fund_class_name",
+    "proj_name_th",
+    "proj_name_en",
+    "proj_abbr_name",
+    "fund_status",
+    "invest_country_flag_label",
+    "investment_policy_desc",
+    "management_style",
+    "feederfund_master_fund",
+    "feederfund_country",
+    "exchange_rate_protection_policy",
+    "fund_class_detail",
+    "fund_class_description",
+    "fund_class_tax_incentive_type",
+    "fund_class_isin_code",
+]
+MASTER_HEADERS = PROFILE_BASE_COLUMNS + [
+    "pdf_factsheet",
+    "amc_url_factsheet",
+    "ipo_start_date",
+    "benchmarks",
+    "minimum_sub_ipo",
+    "minimum_sub",
+    "type_settlement_period",
+    "settlement_period",
+    "risk_spectrum",
+    "risk_spectrum_desc",
+    "maximum_drawdown",
+    "recovering_period",
+    "fx_hedging",
+    "portfolio_turnover_ratio",
+    "portfolio_duration_period",
+    "yield_to_maturity",
+    "sharpe_ratio",
+    "beta",
+    "alpha",
+    "statistics_last_upd_date",
+    "dividend_policy",
+    "rate_fee_type_desc_nav",
+    "actual_value_fee_type_desc_nav",
+    "rate_fee_type_desc_buy",
+    "actual_value_fee_type_desc_buy",
+    "fees_last_upd_date",
+    "ผลตอบแทนกองทุนรวมแบบปักหมุด",
+    "ผลตอบแทนตัวชี้วัดแบบปักหมุด",
+    "ค่าเฉลี่ยในกลุ่มเดียวกันแบบปักหมุด",
+    "ความผันผวนของกองทุนรวมแบบปักหมุด",
+    "ความผันผวนของตัวชี้วัดแบบปักหมุด",
+    "ผลตอบแทนกองทุนรวม 5 ปีย้อนหลัง",
+    "ความผันผวนของกองทุนรวม 5 ปีย้อนหลัง",
+    "ผลตอบแทนตัวชี้วัด 5 ปีย้อนหลัง",
+    "ความผันผวนของตัวชี้วัด 5 ปีย้อนหลัง",
+    "performance_last_upd_date",
+    "asset_allocation",
+    "asset_allocation_last_upd_date",
+    "top5_holdings",
+    "top5_holdings_last_upd_date",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +108,7 @@ def normalized_text(value: Any) -> str:
 
 
 def normalized_key(value: Any) -> str:
-    return normalized_text(value).casefold()
+    return re.sub(r"\s+", " ", normalized_text(value)).casefold()
 
 
 def numeric_text(value: Any) -> str:
@@ -53,6 +116,14 @@ def numeric_text(value: Any) -> str:
     if text.endswith(".0"):
         return text[:-2]
     return text
+
+
+def numeric_sort_value(value: Any) -> tuple[int, str]:
+    text = numeric_text(value)
+    try:
+        return int(float(text)), text
+    except ValueError:
+        return 999_999, text
 
 
 def row_date(row: dict[str, Any]) -> str:
@@ -123,45 +194,206 @@ def latest_lookup_by_key(rows: list[dict[str, Any]], key_fn) -> dict[Any, dict[s
     return {key: latest_row(items) for key, items in grouped.items()}
 
 
-def fee_management_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
-    filtered = [
-        row for row in rows
-        if normalized_key(row.get("fee_type_desc")) == "management fee"
-    ]
-    return latest_lookup_by_key(filtered, proj_class_key)
-
-
-def top1_lookup(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    filtered = [
-        row for row in rows
-        if numeric_text(row.get("asset_seq")) == "1"
-    ]
-    return latest_lookup_by_key(filtered, row_proj)
-
-
-def performance_1y_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
-    filtered: list[dict[str, Any]] = []
+def latest_group_lookup_by_key(rows: list[dict[str, Any]], key_fn) -> dict[Any, list[dict[str, Any]]]:
+    grouped: dict[Any, list[dict[str, Any]]] = {}
     for row in rows:
-        ref = normalized_key(row.get("reference_period")).replace(" ", "")
-        if ref in {"1y", "1yr", "1year"}:
-            filtered.append(row)
-    return latest_lookup_by_key(filtered, proj_class_key)
+        key = key_fn(row)
+        if key:
+            grouped.setdefault(key, []).append(row)
+
+    out: dict[Any, list[dict[str, Any]]] = {}
+    for key, items in grouped.items():
+        latest_date = row_date(latest_row(items))
+        out[key] = [item for item in items if row_date(item) == latest_date] or items
+    return out
+
+
+def copy_fields(row: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    return {field: normalized_text(row.get(field)) for field in fields}
+
+
+def join_parts(parts: list[str]) -> str:
+    return " | ".join(part for part in parts if normalized_text(part))
 
 
 def benchmarks_lookup(rows: list[dict[str, Any]]) -> dict[str, str]:
     grouped: dict[str, list[str]] = {}
-    seen_by_proj: dict[str, set[str]] = {}
-    for row in sorted(rows, key=lambda item: (row_proj(item), numeric_text(item.get("group_seq")), row_date(item))):
-        proj_id = row_proj(row)
-        benchmark = normalized_text(row.get("benchmark"))
-        if not proj_id or not benchmark:
-            continue
-        seen = seen_by_proj.setdefault(proj_id, set())
-        if benchmark in seen:
-            continue
-        seen.add(benchmark)
-        grouped.setdefault(proj_id, []).append(benchmark)
+    rows_by_proj = latest_group_lookup_by_key(rows, row_proj)
+    for proj_id, project_rows in rows_by_proj.items():
+        seen: set[str] = set()
+        for row in sorted(project_rows, key=lambda item: numeric_sort_value(item.get("group_seq"))):
+            benchmark = normalized_text(row.get("benchmark"))
+            if not benchmark:
+                continue
+            group_seq = numeric_text(row.get("group_seq"))
+            text = f"{group_seq}.{benchmark}" if group_seq else benchmark
+            if text in seen:
+                continue
+            seen.add(text)
+            grouped.setdefault(proj_id, []).append(text)
     return {proj_id: " | ".join(values) for proj_id, values in grouped.items()}
+
+
+def latest_field_lookup(rows: list[dict[str, Any]], key_fn, fields: list[str]) -> dict[Any, dict[str, Any]]:
+    return {
+        key: copy_fields(row, fields)
+        for key, row in latest_lookup_by_key(rows, key_fn).items()
+    }
+
+
+def fee_type_matches(row: dict[str, Any], aliases: list[str]) -> bool:
+    desc = normalized_key(row.get("fee_type_desc"))
+    return any(normalized_key(alias) == desc for alias in aliases)
+
+
+def format_fee_group(rows: list[dict[str, Any]], specs: list[tuple[str, list[str]]], value_field: str) -> str:
+    parts: list[str] = []
+    for label, aliases in specs:
+        row = latest_row([item for item in rows if fee_type_matches(item, aliases)])
+        value = normalized_text(row.get(value_field))
+        if value:
+            parts.append(f"{label} : {value}")
+    fee_other_desc = join_parts([
+        normalized_text(item.get("fee_other_desc"))
+        for item in rows
+        if normalized_text(item.get("fee_other_desc"))
+    ])
+    if fee_other_desc:
+        parts.append(fee_other_desc)
+    return join_parts(parts)
+
+
+def fees_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, str]]:
+    nav_specs = [
+        ("ค่าธรรมเนียมการจัดการ (Management Fee)", ["Management Fee"]),
+        ("ค่าธรรมเนียมและค่าใช้จ่ายรวมทั้งหมด (Total Fee and Expense)", ["Total Fee and Expense"]),
+    ]
+    buy_specs = [
+        ("ค่าธรรมเนียมการขายหน่วยลงทุน (Front-end Fee)", ["Front-end Fee"]),
+        ("ค่าธรรมเนียมการรับซื้อคืนหน่วยลงทุน (Back-end Fee)", ["Back-end Fee"]),
+        ("ค่าธรรมเนียมการสับเปลี่ยนหน่วยลงทุนเข้า (Switching In)", ["Switching In", "SWITCHING IN"]),
+        ("ค่าธรรมเนียมการสับเปลี่ยนหน่วยลงทุนออก (Switching Out)", ["Switching Out", "SWITCHING OUT"]),
+        ("ค่าธรรมเนียมการโอนหน่วยลงทุน (Transfer Fee)", ["Transfer Fee"]),
+    ]
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    for key, fee_rows in latest_group_lookup_by_key(rows, proj_class_key).items():
+        out[key] = {
+            "rate_fee_type_desc_nav": format_fee_group(fee_rows, nav_specs, "rate"),
+            "actual_value_fee_type_desc_nav": format_fee_group(fee_rows, nav_specs, "actual_value"),
+            "rate_fee_type_desc_buy": format_fee_group(fee_rows, buy_specs, "rate"),
+            "actual_value_fee_type_desc_buy": format_fee_group(fee_rows, buy_specs, "actual_value"),
+            "fees_last_upd_date": row_date(latest_row(fee_rows)),
+        }
+    return out
+
+
+PINNED_PERIODS = [
+    ("year to date", {"year to date", "ytd"}),
+    ("3 months", {"3 months", "3 month", "3m"}),
+    ("6 months", {"6 months", "6 month", "6m"}),
+    ("1 year", {"1 year", "1y", "1 yr", "1yr"}),
+    ("3 year", {"3 year", "3 years", "3y", "3 yr", "3yr"}),
+    ("5 year", {"5 year", "5 years", "5y", "5 yr", "5yr"}),
+    ("10 year", {"10 year", "10 years", "10y", "10 yr", "10yr"}),
+    ("inception date", {"inception date", "since inception", "inception"}),
+]
+PINNED_PERFORMANCE_COLUMNS = [
+    "ผลตอบแทนกองทุนรวมแบบปักหมุด",
+    "ผลตอบแทนตัวชี้วัดแบบปักหมุด",
+    "ค่าเฉลี่ยในกลุ่มเดียวกันแบบปักหมุด",
+    "ความผันผวนของกองทุนรวมแบบปักหมุด",
+    "ความผันผวนของตัวชี้วัดแบบปักหมุด",
+]
+ANNUAL_PERFORMANCE_COLUMNS = [
+    "ผลตอบแทนกองทุนรวม 5 ปีย้อนหลัง",
+    "ความผันผวนของกองทุนรวม 5 ปีย้อนหลัง",
+    "ผลตอบแทนตัวชี้วัด 5 ปีย้อนหลัง",
+    "ความผันผวนของตัวชี้วัด 5 ปีย้อนหลัง",
+]
+
+
+def performance_type_matches(value: Any, output_column: str) -> bool:
+    desc = normalized_key(value)
+    target = output_column.replace("แบบปักหมุด", "").replace(" 5 ปีย้อนหลัง", "")
+    return normalized_key(target) == desc or normalized_key(target) in desc
+
+
+def pinned_period_label(value: Any) -> str:
+    ref = normalized_key(value)
+    compact = ref.replace(" ", "")
+    for label, aliases in PINNED_PERIODS:
+        if ref in aliases or compact in {alias.replace(" ", "") for alias in aliases}:
+            return label
+    return ""
+
+
+def format_pinned_performance(rows: list[dict[str, Any]], output_column: str) -> str:
+    type_rows = [row for row in rows if performance_type_matches(row.get("performance_type_desc"), output_column)]
+    parts: list[str] = []
+    for label, _aliases in PINNED_PERIODS:
+        period_rows = [row for row in type_rows if pinned_period_label(row.get("reference_period")) == label]
+        row = latest_row(period_rows)
+        value = normalized_text(row.get("performance_value"))
+        if value:
+            parts.append(f"{label} : {value}")
+    return join_parts(parts)
+
+
+def format_annual_performance(rows: list[dict[str, Any]], output_column: str) -> str:
+    type_rows = [row for row in rows if performance_type_matches(row.get("performance_type_desc"), output_column)]
+    by_year: dict[int, dict[str, Any]] = {}
+    for row in type_rows:
+        ref = numeric_text(row.get("reference_period"))
+        if not re.fullmatch(r"\d{4}", ref):
+            continue
+        year = int(ref)
+        current = by_year.get(year)
+        if current is None or row_date(row) >= row_date(current):
+            by_year[year] = row
+    return join_parts([
+        f"{year} : {normalized_text(by_year[year].get('performance_value'))}"
+        for year in sorted(by_year)
+        if normalized_text(by_year[year].get("performance_value"))
+    ])
+
+
+def performance_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, str]]:
+    out: dict[tuple[str, str], dict[str, str]] = {}
+    for key, perf_rows in latest_group_lookup_by_key(rows, proj_class_key).items():
+        values = {
+            column: format_pinned_performance(perf_rows, column)
+            for column in PINNED_PERFORMANCE_COLUMNS
+        }
+        values.update({
+            column: format_annual_performance(perf_rows, column)
+            for column in ANNUAL_PERFORMANCE_COLUMNS
+        })
+        values["performance_last_upd_date"] = row_date(latest_row(perf_rows))
+        out[key] = values
+    return out
+
+
+def seq_asset_lookup(rows: list[dict[str, Any]], output_column: str, date_column: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for proj_id, project_rows in latest_group_lookup_by_key(rows, row_proj).items():
+        parts: list[str] = []
+        seen: set[str] = set()
+        for row in sorted(project_rows, key=lambda item: numeric_sort_value(item.get("asset_seq"))):
+            seq = numeric_text(row.get("asset_seq"))
+            name = normalized_text(row.get("asset_name"))
+            ratio = normalized_text(row.get("asset_ratio"))
+            if not name:
+                continue
+            text = f"{seq}.{name} : {ratio}" if seq else f"{name} : {ratio}"
+            if text in seen:
+                continue
+            seen.add(text)
+            parts.append(text)
+        out[proj_id] = {
+            output_column: join_parts(parts),
+            date_column: row_date(latest_row(project_rows)),
+        }
+    return out
 
 
 def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> int:
@@ -235,38 +467,98 @@ def write_values_to_sheet(sheets: Any, spreadsheet_id: str, tab_name: str, value
 
 def build_master_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     profiles = raw_tabs["02_profiles"]
-    management_fees = fee_management_lookup(raw_tabs["14_fees"])
-    top1_holdings = top1_lookup(raw_tabs["17_top5_holdings"])
-    performance_1y = performance_1y_lookup(raw_tabs["15_performance"])
+    factsheet_urls = latest_field_lookup(
+        raw_tabs["06_factsheet_urls"],
+        proj_class_key,
+        ["pdf_factsheet", "amc_url_factsheet"],
+    )
+    ipos = latest_field_lookup(raw_tabs["07_ipos"], row_proj, ["start_date"])
     benchmarks = benchmarks_lookup(raw_tabs["08_benchmarks"])
+    minimums = latest_field_lookup(
+        raw_tabs["09_subscription_redemption_minimums"],
+        proj_class_key,
+        ["minimum_sub_ipo", "minimum_sub"],
+    )
+    periods = latest_field_lookup(
+        raw_tabs["10_subscription_redemption_periods"],
+        proj_class_key,
+        ["type", "settlement_period"],
+    )
+    risks = latest_field_lookup(
+        raw_tabs["11_risk_spectrum"],
+        row_proj,
+        ["risk_spectrum", "risk_spectrum_desc"],
+    )
+    statistics = latest_field_lookup(
+        raw_tabs["12_statistics"],
+        proj_class_key,
+        [
+            "maximum_drawdown",
+            "recovering_period",
+            "fx_hedging",
+            "portfolio_turnover_ratio",
+            "portfolio_duration_period",
+            "yield_to_maturity",
+            "sharpe_ratio",
+            "beta",
+            "alpha",
+            "last_upd_date",
+        ],
+    )
+    dividend_policies = latest_field_lookup(
+        raw_tabs["13_dividend_policy"],
+        proj_class_key,
+        ["dividend_policy"],
+    )
+    fees = fees_lookup(raw_tabs["14_fees"])
+    performance = performance_lookup(raw_tabs["15_performance"])
+    asset_allocations = seq_asset_lookup(
+        raw_tabs["16_asset_allocation"],
+        "asset_allocation",
+        "asset_allocation_last_upd_date",
+    )
+    top5_holdings = seq_asset_lookup(
+        raw_tabs["17_top5_holdings"],
+        "top5_holdings",
+        "top5_holdings_last_upd_date",
+    )
 
     master_rows: list[dict[str, Any]] = []
     for profile in profiles:
         proj_id = row_proj(profile)
         fund_class_name = row_class(profile)
         key = (proj_id, fund_class_name)
-        fee = management_fees.get(key, {})
-        holding = top1_holdings.get(proj_id, {})
-        performance = performance_1y.get(key, {})
+        statistics_row = statistics.get(key, {})
+        period = periods.get(key, {})
 
-        master_rows.append(
-            {
-                "proj_id": proj_id,
-                "fund_class_name": fund_class_name,
-                "fund_name": normalized_text(
-                    profile.get("proj_abbr_name")
-                    or profile.get("proj_name_th")
-                    or profile.get("proj_name_en")
-                ),
-                "fund_status": normalized_text(profile.get("fund_status")),
-                "last_upd_date": normalized_text(profile.get("last_upd_date")),
-                "management_fee_actual": normalized_text(fee.get("actual_value")),
-                "top1_holding_name": normalized_text(holding.get("asset_name")),
-                "top1_holding_ratio": normalized_text(holding.get("asset_ratio")),
-                "performance_1y": normalized_text(performance.get("performance_value")),
-                "benchmarks": benchmarks.get(proj_id, ""),
-            }
-        )
+        row = {column: normalized_text(profile.get(column)) for column in PROFILE_BASE_COLUMNS}
+        row.update(factsheet_urls.get(key, {}))
+        row["ipo_start_date"] = normalized_text(ipos.get(proj_id, {}).get("start_date"))
+        row["benchmarks"] = benchmarks.get(proj_id, "")
+        row.update(minimums.get(key, {}))
+        row["type_settlement_period"] = normalized_text(period.get("type"))
+        row["settlement_period"] = normalized_text(period.get("settlement_period"))
+        row.update(risks.get(proj_id, {}))
+        for column in [
+            "maximum_drawdown",
+            "recovering_period",
+            "fx_hedging",
+            "portfolio_turnover_ratio",
+            "portfolio_duration_period",
+            "yield_to_maturity",
+            "sharpe_ratio",
+            "beta",
+            "alpha",
+        ]:
+            row[column] = normalized_text(statistics_row.get(column))
+        row["statistics_last_upd_date"] = normalized_text(statistics_row.get("last_upd_date"))
+        row.update(dividend_policies.get(key, {}))
+        row.update(fees.get(key, {}))
+        row.update(performance.get(key, {}))
+        row.update(asset_allocations.get(proj_id, {}))
+        row.update(top5_holdings.get(proj_id, {}))
+
+        master_rows.append(row)
     return master_rows
 
 
@@ -288,9 +580,17 @@ def main() -> int:
     spreadsheet_id = args.spreadsheet_id.strip()
     required_tabs = [
         "02_profiles",
+        "06_factsheet_urls",
+        "07_ipos",
         "08_benchmarks",
+        "09_subscription_redemption_minimums",
+        "10_subscription_redemption_periods",
+        "11_risk_spectrum",
+        "12_statistics",
+        "13_dividend_policy",
         "14_fees",
         "15_performance",
+        "16_asset_allocation",
         "17_top5_holdings",
     ]
     raw_tabs = {
@@ -298,19 +598,7 @@ def main() -> int:
         for tab_name in required_tabs
     }
     rows = build_master_rows(raw_tabs)
-    headers = [
-        "proj_id",
-        "fund_class_name",
-        "fund_name",
-        "fund_status",
-        "last_upd_date",
-        "management_fee_actual",
-        "top1_holding_name",
-        "top1_holding_ratio",
-        "performance_1y",
-        "benchmarks",
-    ]
-    write_values_to_sheet(sheets, spreadsheet_id, args.output_tab.strip(), rows_to_values(rows, headers))
+    write_values_to_sheet(sheets, spreadsheet_id, args.output_tab.strip(), rows_to_values(rows, MASTER_HEADERS))
     print(f"Master view rows: {len(rows)}")
     return 0
 
