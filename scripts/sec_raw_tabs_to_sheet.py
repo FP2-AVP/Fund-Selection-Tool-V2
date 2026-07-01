@@ -59,6 +59,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fund-status", default="Registered", help="Profiles fund_status filter.")
     parser.add_argument(
+        "--use-existing-profiles",
+        choices=["true", "false"],
+        default="true",
+        help="When possible, read existing 02_profiles from the output spreadsheet instead of fetching profiles again.",
+    )
+    parser.add_argument(
+        "--profiles-tab-name",
+        default="02_profiles",
+        help="Tab name to read when --use-existing-profiles=true.",
+    )
+    parser.add_argument(
         "--registered-max-funds",
         type=int,
         default=0,
@@ -105,14 +116,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def selected_datasets(raw: str) -> list[str]:
+def truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def selected_datasets(raw: str, include_profiles: bool = True) -> list[str]:
     if raw.strip().lower() == "all":
         return list(ENDPOINTS.keys())
     keys = [item.strip() for item in raw.split(",") if item.strip()]
     unknown = [key for key in keys if key not in ENDPOINTS]
     if unknown:
         raise ValueError(f"Unknown datasets: {', '.join(unknown)}")
-    if "profiles" not in keys:
+    if include_profiles and "profiles" not in keys:
         keys.insert(0, "profiles")
     return list(dict.fromkeys(keys))
 
@@ -182,6 +197,62 @@ def values_from_rows(
     return [headers] + [
         [flatten_value(row.get(header, "")) for header in headers]
         for row in rows
+    ]
+
+
+def rows_from_values(values: list[list[Any]]) -> list[dict[str, Any]]:
+    if not values:
+        return []
+    headers = [str(header or "").strip() for header in values[0]]
+    rows: list[dict[str, Any]] = []
+    for raw_row in values[1:]:
+        row = {
+            header: raw_row[index] if index < len(raw_row) else ""
+            for index, header in enumerate(headers)
+            if header
+        }
+        if any(str(value or "").strip() for value in row.values()):
+            rows.append(row)
+    return rows
+
+
+def read_values_from_sheet(
+    sheets: Any,
+    spreadsheet_id: str,
+    tab_name: str,
+) -> list[list[Any]]:
+    result = sheets.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{tab_name}'",
+    ).execute()
+    return result.get("values", [])
+
+
+def read_existing_profiles(
+    sheets: Any,
+    spreadsheet_id: str,
+    tab_name: str,
+) -> list[dict[str, Any]]:
+    try:
+        values = read_values_from_sheet(sheets, spreadsheet_id, tab_name)
+    except Exception as exc:
+        print(f"Existing profiles not available from {tab_name}: {exc}")
+        return []
+    rows = rows_from_values(values)
+    if rows:
+        print(f"Loaded existing profiles from {tab_name}: {len(rows)} rows")
+    else:
+        print(f"Existing profiles tab {tab_name} is empty")
+    return rows
+
+
+def filter_profiles_by_status(rows: list[dict[str, Any]], fund_status: str) -> list[dict[str, Any]]:
+    wanted = str(fund_status or "").strip()
+    if not wanted:
+        return rows
+    return [
+        row for row in rows
+        if str(row.get("fund_status") or "").strip() == wanted
     ]
 
 
@@ -460,6 +531,7 @@ def build_status_rows(
     project_ids: list[str],
     errors: list[dict[str, Any]],
     args: argparse.Namespace,
+    profiles_source: str,
 ) -> list[dict[str, Any]]:
     error_counts: dict[str, int] = {}
     for error in errors:
@@ -477,6 +549,8 @@ def build_status_rows(
             "status": "ready" if row_counts.get(dataset, 0) else "empty",
             "fund_status": args.fund_status,
             "fund_class_name": args.fund_class_name,
+            "profiles_source": profiles_source,
+            "use_existing_profiles": args.use_existing_profiles,
             "latest": args.latest,
             "start_date": args.start_date,
             "end_date": args.end_date,
@@ -499,10 +573,17 @@ def main() -> int:
         raise RuntimeError("Missing --spreadsheet-id or SEC_MASTER_VIEW_SPREADSHEET_ID.")
 
     api_key = get_api_key()
-    datasets = selected_datasets(args.datasets)
+    requested_datasets = selected_datasets(args.datasets, include_profiles=False)
+    use_existing_profiles = truthy(args.use_existing_profiles) and "profiles" not in requested_datasets
+    datasets = selected_datasets(args.datasets, include_profiles=not use_existing_profiles)
     errors: list[dict[str, Any]] = []
     explicit_project_ids = requested_proj_ids(args)
     explicit_project_pairs = requested_proj_class_pairs(args)
+    profiles_source = "sec_api"
+
+    from googleapiclient.discovery import build
+
+    sheets = build("sheets", "v4", credentials=credentials_from_env(), cache_discovery=False)
 
     if explicit_project_ids:
         profile_rows = fetch_profiles_for_proj_ids(explicit_project_ids, api_key, args, errors)
@@ -523,7 +604,21 @@ def main() -> int:
                 or str(row.get("fund_class_name") or "").strip() in class_filters_by_proj[str(row.get("proj_id") or "").strip()]
             ]
     else:
-        profile_rows = fetch_registered_profiles(api_key, args)
+        profile_rows = []
+        if use_existing_profiles:
+            profile_rows = read_existing_profiles(
+                sheets,
+                args.spreadsheet_id.strip(),
+                args.profiles_tab_name,
+            )
+            profile_rows = filter_profiles_by_status(profile_rows, args.fund_status)
+            if profile_rows:
+                profiles_source = f"existing:{args.profiles_tab_name}"
+        if not profile_rows:
+            profile_rows = fetch_registered_profiles(api_key, args)
+            profiles_source = "sec_api"
+            if "profiles" not in datasets:
+                datasets.insert(0, "profiles")
         project_ids = registered_proj_ids(profile_rows, args.registered_max_funds)
         if args.registered_max_funds and project_ids:
             project_id_set = set(project_ids)
@@ -538,11 +633,8 @@ def main() -> int:
 
     print(f"Selected datasets: {', '.join(datasets)}")
     print(f"Profiles rows: {len(profile_rows)}")
+    print(f"Profiles source: {profiles_source}")
     print(f"Project IDs: {len(project_ids)}")
-
-    from googleapiclient.discovery import build
-
-    sheets = build("sheets", "v4", credentials=credentials_from_env(), cache_discovery=False)
     row_counts: dict[str, int] = {}
 
     for dataset in datasets:
@@ -581,7 +673,7 @@ def main() -> int:
             values_from_rows(registered_proj_id_rows(project_ids), ["proj_id"]),
         )
 
-    status_rows = build_status_rows(datasets, row_counts, project_ids, errors, args)
+    status_rows = build_status_rows(datasets, row_counts, project_ids, errors, args, profiles_source)
     write_values_to_sheet(
         sheets,
         args.spreadsheet_id.strip(),
@@ -597,6 +689,8 @@ def main() -> int:
                 "status",
                 "fund_status",
                 "fund_class_name",
+                "profiles_source",
+                "use_existing_profiles",
                 "latest",
                 "start_date",
                 "end_date",
