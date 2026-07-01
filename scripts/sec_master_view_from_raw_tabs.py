@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build SEC master_view from raw endpoint tabs already stored in Google Sheets."""
+"""Build SEC data_preparation rows from raw endpoint tabs already stored in Google Sheets."""
 
 from __future__ import annotations
 
@@ -78,13 +78,18 @@ MASTER_HEADERS = PROFILE_BASE_COLUMNS + [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build SEC master_view from existing raw Google Sheet tabs.")
+    parser = argparse.ArgumentParser(description="Build SEC data_preparation from existing raw Google Sheet tabs.")
     parser.add_argument(
         "--spreadsheet-id",
         default=os.environ.get("SEC_MASTER_VIEW_SPREADSHEET_ID", ""),
-        help="Google Sheet ID. Can also be set by SEC_MASTER_VIEW_SPREADSHEET_ID.",
+        help="Destination Google Sheet ID or URL. Can also be set by SEC_MASTER_VIEW_SPREADSHEET_ID.",
     )
-    parser.add_argument("--output-tab", default="master_view", help="Target tab name for master_view.")
+    parser.add_argument(
+        "--source-spreadsheet-id",
+        default=os.environ.get("SEC_MASTER_VIEW_SPREADSHEET_ID", ""),
+        help="Source raw-tabs Google Sheet ID or URL. Defaults to SEC_MASTER_VIEW_SPREADSHEET_ID.",
+    )
+    parser.add_argument("--output-tab", default="data_preparation", help="Target tab name for data_preparation.")
     return parser.parse_args()
 
 
@@ -107,6 +112,14 @@ def normalized_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def spreadsheet_id_from_value(value: str) -> str:
+    text = normalized_text(value)
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", text)
+    if match:
+        return match.group(1)
+    return text
 
 
 def normalized_key(value: Any) -> str:
@@ -608,11 +621,14 @@ def main() -> int:
     args = parse_args()
     if not args.spreadsheet_id.strip():
         raise RuntimeError("Missing --spreadsheet-id or SEC_MASTER_VIEW_SPREADSHEET_ID.")
+    if not args.source_spreadsheet_id.strip():
+        raise RuntimeError("Missing --source-spreadsheet-id or SEC_MASTER_VIEW_SPREADSHEET_ID.")
 
     from googleapiclient.discovery import build
 
     sheets = build("sheets", "v4", credentials=credentials_from_env(), cache_discovery=False)
-    spreadsheet_id = args.spreadsheet_id.strip()
+    source_spreadsheet_id = spreadsheet_id_from_value(args.source_spreadsheet_id)
+    destination_spreadsheet_id = spreadsheet_id_from_value(args.spreadsheet_id)
     required_tabs = [
         "02_profiles",
         "06_factsheet_urls",
@@ -629,12 +645,17 @@ def main() -> int:
         "17_top5_holdings",
     ]
     raw_tabs = {
-        tab_name: read_tab_rows(sheets, spreadsheet_id, tab_name)
+        tab_name: read_tab_rows(sheets, source_spreadsheet_id, tab_name)
         for tab_name in required_tabs
     }
     rows = build_master_rows(raw_tabs)
-    write_values_to_sheet(sheets, spreadsheet_id, args.output_tab.strip(), rows_to_values(rows, MASTER_HEADERS))
-    print(f"Master view rows: {len(rows)}")
+    write_values_to_sheet(
+        sheets,
+        destination_spreadsheet_id,
+        args.output_tab.strip() or "data_preparation",
+        rows_to_values(rows, MASTER_HEADERS),
+    )
+    print(f"data_preparation rows: {len(rows)}")
     return 0
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a SEC fund master view and write it directly to Google Sheets.
+"""Build a SEC fund data_preparation view and write it directly to Google Sheets.
 
 The script is designed for GitHub Actions. It uses profiles as the base table,
 then appends selected SEC endpoint summaries as columns joined by proj_id and,
@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -38,11 +39,11 @@ SAFE_CELL_CHARS = 49_000
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Write SEC master_view to Google Sheets.")
+    parser = argparse.ArgumentParser(description="Write SEC data_preparation to Google Sheets.")
     parser.add_argument(
         "--spreadsheet-id",
         default=os.environ.get("SEC_MASTER_VIEW_SPREADSHEET_ID", ""),
-        help="Google Sheet ID to write to. Can also be set by SEC_MASTER_VIEW_SPREADSHEET_ID.",
+        help="Google Sheet ID or URL to write to. Can also be set by SEC_MASTER_VIEW_SPREADSHEET_ID.",
     )
     parser.add_argument("--tab-name", default="", help="Target tab name. Default from config.")
     parser.add_argument(
@@ -96,6 +97,14 @@ def parse_args() -> argparse.Namespace:
         help="Continue when endpoint returns an error.",
     )
     return parser.parse_args()
+
+
+def spreadsheet_id_from_value(value: str) -> str:
+    text = normalized_text(value)
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", text)
+    if match:
+        return match.group(1)
+    return text
 
 
 def load_config() -> dict[str, Any]:
@@ -602,6 +611,7 @@ def main() -> int:
     args = parse_args()
     if not args.spreadsheet_id.strip():
         raise RuntimeError("Missing --spreadsheet-id or SEC_MASTER_VIEW_SPREADSHEET_ID.")
+    spreadsheet_id = spreadsheet_id_from_value(args.spreadsheet_id)
 
     config = load_config()
     tab_name = args.tab_name.strip() or config["sheet"]["default_tab_name"]
@@ -639,8 +649,8 @@ def main() -> int:
         datasets,
         base_columns=config["base_columns"],
     )
-    print(f"Master view rows: {len(rows)}")
-    print(f"Master view columns: {len(headers)}")
+    print(f"data_preparation rows: {len(rows)}")
+    print(f"data_preparation columns: {len(headers)}")
 
     from googleapiclient.discovery import build
 
@@ -648,7 +658,7 @@ def main() -> int:
     sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False)
     write_values_to_sheet(
         sheets=sheets,
-        spreadsheet_id=args.spreadsheet_id.strip(),
+        spreadsheet_id=spreadsheet_id,
         tab_name=tab_name,
         values=values_from_rows(headers, rows),
     )
@@ -657,7 +667,7 @@ def main() -> int:
         error_values = values_from_rows(["dataset", "error"], errors)
         write_values_to_sheet(
             sheets=sheets,
-            spreadsheet_id=args.spreadsheet_id.strip(),
+            spreadsheet_id=spreadsheet_id,
             tab_name=f"{tab_name}_errors",
             values=error_values,
         )
