@@ -1,4 +1,4 @@
-name: SEC Master View to Google Sheet
+name: SEC Data Preparation to Google Sheet
 
 on:
   workflow_dispatch:
@@ -6,9 +6,13 @@ on:
       tab_name:
         description: "Target Google Sheet tab name"
         required: true
-        default: "master_view"
+        default: "data_preparation"
+      output_spreadsheet_id:
+        description: "Destination Google Sheet ID or URL for data_preparation output"
+        required: false
+        default: "16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w"
       dataset_preset:
-        description: "Preset endpoints to summarize into master_view"
+        description: "Preset endpoints to summarize into data_preparation"
         required: true
         default: "master_core"
         type: choice
@@ -22,13 +26,13 @@ on:
         required: false
         default: ""
       output_mode:
-        description: "Write summarized master_view or raw endpoint tabs"
+        description: "Write summarized data_preparation or raw endpoint tabs"
         required: true
         default: "raw_tabs"
         type: choice
         options:
           - "raw_tabs"
-          - "master_view"
+          - "data_preparation"
           - "master_from_raw"
       proj_id:
         description: "Optional single SEC project id for testing"
@@ -100,7 +104,7 @@ on:
           - "false"
 
 jobs:
-  sec-master-view-to-google-sheet:
+  sec-data-preparation-to-google-sheet:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -119,7 +123,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r scripts/requirements-sec.txt
 
-      - name: Build SEC master view and write Google Sheet
+      - name: Build SEC data_preparation and write Google Sheet
         env:
           SEC_API_KEY: ${{ secrets.SEC_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -154,9 +158,12 @@ jobs:
               --continue-on-error "${{ inputs.continue_on_error }}"
           elif [ "${{ inputs.output_mode }}" = "master_from_raw" ]; then
             python scripts/sec_master_view_from_raw_tabs.py \
+              --source-spreadsheet-id "${{ secrets.SEC_MASTER_VIEW_SPREADSHEET_ID }}" \
+              --spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
               --output-tab "${{ inputs.tab_name }}"
           else
             python scripts/sec_master_view_to_sheet.py \
+              --spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
               --tab-name "${{ inputs.tab_name }}" \
               --dataset-preset "${{ inputs.dataset_preset }}" \
               --datasets "${{ inputs.custom_datasets }}" \
