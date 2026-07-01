@@ -50,6 +50,14 @@ on:
         description: "Profiles fund_status filter"
         required: true
         default: "Registered"
+      use_existing_profiles:
+        description: "Read existing 02_profiles from the output spreadsheet instead of fetching profiles again when profiles is not selected"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
       registered_max_funds:
         description: "Limit registered funds for testing. Use 0 for no limit."
         required: true
@@ -146,6 +154,7 @@ jobs:
               --proj-ids "${{ inputs.proj_ids }}" \
               --proj-class-pairs "${{ inputs.proj_class_pairs }}" \
               --fund-status "${{ inputs.fund_status }}" \
+              --use-existing-profiles "${{ inputs.use_existing_profiles }}" \
               --registered-max-funds "${{ inputs.registered_max_funds }}" \
               --fund-class-name "${{ inputs.fund_class_name }}" \
               --latest "${{ inputs.latest }}" \
