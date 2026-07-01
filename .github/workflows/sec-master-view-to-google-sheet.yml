@@ -10,7 +10,7 @@ on:
       output_spreadsheet_id:
         description: "Destination Google Sheet ID or URL for data_preparation output"
         required: false
-        default: "16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w"
+        default: "1SsL8fXFmKsAfnakrIBTtglZqhErrYz8SfiiZb4wKGDs"
       dataset_preset:
         description: "Preset endpoints to summarize into data_preparation"
         required: true
@@ -140,6 +140,7 @@ jobs:
               esac
             fi
             python scripts/sec_raw_tabs_to_sheet.py \
+              --spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
               --datasets "$DATASETS" \
               --proj-id "${{ inputs.proj_id }}" \
               --proj-ids "${{ inputs.proj_ids }}" \
@@ -158,7 +159,7 @@ jobs:
               --continue-on-error "${{ inputs.continue_on_error }}"
           elif [ "${{ inputs.output_mode }}" = "master_from_raw" ]; then
             python scripts/sec_master_view_from_raw_tabs.py \
-              --source-spreadsheet-id "${{ secrets.SEC_MASTER_VIEW_SPREADSHEET_ID }}" \
+              --source-spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
               --spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
               --output-tab "${{ inputs.tab_name }}"
           else
