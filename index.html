@@ -6,7 +6,7 @@
   <title>Fund Selection Tool – FP2</title>
   <meta name="description" content="Fund Selection Tool for FP2 ใช้สำหรับคัดเลือก เปรียบเทียบ และวิเคราะห์ข้อมูลกองทุนจาก Google Sheets ภายในองค์กร">
   <meta name="theme-color" content="#1a3c6e">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20260627-sec-workflow-dispatch">
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" defer></script>
   <!-- SheetJS for Excel export -->
@@ -102,6 +102,18 @@
             </span>
             คู่มือการใช้งาน
           </a>
+          <a class="nav-item" data-page="data-import" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </span>
+            เตรียมข้อมูล
+          </a>
+          <a class="nav-item" data-page="sec-data-import" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/><path d="M19 17v4"/><path d="M5 17v4"/></svg>
+            </span>
+            เตรียมข้อมูลจาก SEC
+          </a>
         </div>
         <div class="nav-section">
           <div class="nav-label">ภาพรวม</div>
@@ -126,6 +138,18 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
             </span>
             เลือกกองทุน
+          </a>
+          <a class="nav-item" data-page="fund-data-manager" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/><path d="m15 5 3 3"/></svg>
+            </span>
+            แก้ไขข้อมูลกองทุน
+          </a>
+          <a class="nav-item" data-page="master-fund-data-manager" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/><path d="M3 7h6"/><path d="M3 11h4"/></svg>
+            </span>
+            แก้ไขข้อมูลกอง Master Fund
           </a>
           <a class="nav-item" data-page="thai-annualized-v2" href="#">
             <span class="nav-icon">
@@ -193,14 +217,25 @@
             </span>
             Top 10 Holding
           </a>
-          <a class="nav-item" data-page="master-placeholder-6" href="#">
+        </div>
+
+        <div class="nav-section">
+          <div class="nav-label">Income Fund</div>
+          <a class="nav-item" data-page="income-fund-1" href="#">
             <span class="nav-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14a3.5 3.5 0 0 1 0 7H6"/></svg>
             </span>
             Income Fund
           </a>
+          <a class="nav-item" data-page="income-fund-2" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10"/><path d="M7 13h6"/><path d="M16 17h1"/></svg>
+            </span>
+            Income Fund 2
+          </a>
         </div>
-<div class="nav-section">
+
+        <div class="nav-section">
           <div class="nav-label">เครื่องมือ</div>
           <a class="nav-item" data-page="avenger-studio" href="#">
             <span class="nav-icon">
@@ -287,10 +322,10 @@
 
   <!-- Marked.js – Markdown renderer for Guide page -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js" defer></script>
-  <script src="js/config.js?v=20260413c"></script>
-  <script src="js/config.override.js?v=20260413c"></script>
-  <script src="js/sheets.js?v=20260413c"></script>
+  <script src="js/config.js?v=20260620-client-847033645933"></script>
+  <script src="js/config.override.js?v=20260628-github-token"></script>
+  <script src="js/sheets.js?v=20260620-import-files"></script>
   <script src="js/avenger-studio.js?v=20260413c"></script>
-  <script src="js/app.js?v=20260617-fee-compare-quarter"></script>
+  <script src="js/app.js?v=20260628-draft-api-proxy"></script>
 </body>
 </html>
