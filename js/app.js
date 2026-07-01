@@ -62,7 +62,108 @@ const State = {
   currentQuarter: null,      // ← active quarter tab (auto-detected from Sheets)
   availableQuarters: [],     // ← list of detected quarter tabs
   currentUser: { name: '', email: '' },
+  fundOverrides: { items: {}, updatedAt: null },
+  fundDataManager: {
+    query: '',
+    selectedKey: '',
+    showOnlyMapped: false,
+    draftMapping: null,
+  },
+  dataImport: {
+    selectedJobKey: 'percentrank',
+    rawTab: '',
+    targetTab: '',
+    preview: null,
+    columnTypes: {},
+    rawFiles: [],
+    rawFilesError: '',
+    isImporting: false,
+    jsonReadiness: null,
+    isCheckingJson: false,
+  },
+  masterAllocations: { items: {}, updatedAt: null },
 };
+
+const RAW_FILES_FOLDER_ID = '1_9lmPWFmack0DqaKuen5kbY57RJCFtmM';
+const RAW_FILES_FOLDER_URL = 'https://drive.google.com/drive/u/2/folders/1_9lmPWFmack0DqaKuen5kbY57RJCFtmM';
+const JSON_EXPORT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwV-OUqOXxv1GAkdXJP5ICbXAa4gzEAxWjU6Yd9Z_KKkO2y1dhm4aWrjHik7_4gJNHx/exec';
+const JSON_EXPORT_SECRET_KEY = 'sheets-to-drive-json';
+const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyX3plEd-uz34i6th4_tOdJNRP-NiJJeyB9q3NdStzKKH1eucATrVX8yfm9FR3Mi9VCFA/exec';
+const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
+
+const JSON_STORE = {
+  rootName: 'Fund List Tool JSON',
+  baseFiles: {
+    percentrank: 'Fund Key Performance AVP.json',
+    thaiQuality: 'AVP Thai Fund for Quality.json',
+    masterFund: 'AVP Master Fund ID.json',
+  },
+  overrideFiles: {
+    fundOverrides: 'fund_overrides.json',
+    masterAllocations: 'fund_master_allocations.json',
+  },
+};
+
+const DATA_IMPORT_JOBS = {
+  percentrank: {
+    key: 'percentrank',
+    sourceLabel: 'Fund Key Performance AVP _ Morningstar (Use)',
+    sourceType: 'google-sheet',
+    sourceFileName: 'Fund Key Performance AVP _ Morningstar (Use)',
+    targetLabel: 'Percentrank Freestyle',
+    label: 'Percentrank Freestyle',
+    rawSheetId: '1B8xjgXN9D1-hYR7uVn61y-LyBKbdy9eLX3kFZdAFCAU',
+    rawGid: 1255878181,
+    rawFolderId: RAW_FILES_FOLDER_ID,
+    rawFolderUrl: RAW_FILES_FOLDER_URL,
+    targetSheetId: '1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4',
+    targetPageKey: 'select-fund',
+    defaultTab: '2026-Q1',
+  },
+  thaiQuality: {
+    key: 'thaiQuality',
+    sourceLabel: 'AVP Thai Fund for Quality.xlsx',
+    sourceType: 'xlsx',
+    sourceFileName: 'AVP Thai Fund for Quality.xlsx',
+    targetLabel: 'AVP Thai Fund for Quality',
+    label: 'AVP Thai Fund for Quality',
+    rawFolderId: RAW_FILES_FOLDER_ID,
+    rawFolderUrl: RAW_FILES_FOLDER_URL,
+    targetSheetId: '1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM',
+    targetPageKey: 'thai-annualized-v2',
+    cleaner: 'masterFundRaw',
+    defaultTab: '2026-Q1',
+  },
+  masterFund: {
+    key: 'masterFund',
+    sourceLabel: 'AVP Master Fund ID.xlsx',
+    sourceType: 'xlsx',
+    sourceFileName: 'AVP Master Fund ID.xlsx',
+    cleaner: 'masterFundRaw',
+    targetLabel: 'AVP Master Fund ID',
+    label: 'AVP Master Fund ID',
+    rawFolderId: RAW_FILES_FOLDER_ID,
+    rawFolderUrl: RAW_FILES_FOLDER_URL,
+    targetSheetId: '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
+    targetPageKey: 'master-annualized-v2',
+    defaultTab: '2026-Q1',
+  },
+};
+
+const DATA_IMPORT_JSON_EXPORTS = [
+  { jobKey: 'percentrank', dataset: 'fund-key-performance', fileName: JSON_STORE.baseFiles.percentrank },
+  { jobKey: 'thaiQuality', dataset: 'thai-quality', fileName: JSON_STORE.baseFiles.thaiQuality },
+  { jobKey: 'masterFund', dataset: 'master-fund', fileName: JSON_STORE.baseFiles.masterFund },
+];
+
+const SEC_DATA_PREPARATION_TARGETS = [
+  {
+    key: 'data_preparation',
+    label: 'data_preparation',
+    spreadsheetId: '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
+    url: 'https://docs.google.com/spreadsheets/d/16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w/edit#gid=0',
+  },
+];
 
 const SIDEBAR_PREF_KEY = 'fund-selection-sidebar-collapsed';
 
@@ -1620,6 +1721,14 @@ function ensureExtendedPageConfigs() {
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
     },
+    'income-fund-1': {
+      title: 'Income Fund',
+      source: 'Income Fund',
+    },
+    'income-fund-2': {
+      title: 'Income Fund 2',
+      source: 'Income Fund',
+    },
   };
 
   Object.entries(defaults).forEach(([pageKey, fallback]) => {
@@ -1901,12 +2010,153 @@ function buildSelectedFundsCatalog(rows) {
   }).filter(f => f.code);
 }
 
+function normalizeFundOverrideItem(item) {
+  const code = String(item?.code || item?.key || '').trim().toUpperCase();
+  if (!code) return null;
+  return {
+    key: code,
+    code,
+    name: String(item.name || '').trim(),
+    category: String(item.category || '').trim(),
+    type: String(item.type || '').trim(),
+    dividend: String(item.dividend || '').trim(),
+    style: String(item.style || '').trim(),
+    masterId: String(item.masterId || '').trim(),
+    masterName: String(item.masterName || '').trim(),
+    assetHouse: String(item.assetHouse || '').trim(),
+    note: String(item.note || '').trim(),
+    status: String(item.status || 'Active Override').trim(),
+    mode: String(item.mode || 'edited').trim(),
+    createdAt: item.createdAt || '',
+    updatedAt: item.updatedAt || '',
+  };
+}
+
+function applyFundOverrides(catalog, overrides = State.fundOverrides?.items || {}) {
+  const map = new Map((catalog || []).map(fund => [fund.key, { ...fund, isOverride: false }]));
+  Object.values(overrides || {}).forEach(raw => {
+    const override = normalizeFundOverrideItem(raw);
+    if (!override) return;
+    const base = map.get(override.key) || {
+      key: override.key,
+      code: override.code,
+      name: '',
+      category: '',
+      type: deriveFundType(override.code),
+      dividend: deriveDividend(override.code),
+      style: 'Active',
+      masterId: '',
+      masterName: '',
+      assetHouse: '',
+    };
+    map.set(override.key, {
+      ...base,
+      ...Object.fromEntries(Object.entries(override).filter(([, value]) => value !== '')),
+      isOverride: true,
+      override,
+    });
+  });
+  return [...map.values()];
+}
+
+async function loadFundOverrides(force = false) {
+  if (!force && State.fundOverridesLoaded) return State.fundOverrides;
+  try {
+    const resp = await fetch('/api/fund-overrides', { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    State.fundOverrides = {
+      items: data.items || {},
+      updatedAt: data.updatedAt || null,
+      source: data.source || 'Data/fund_overrides.json',
+    };
+    State.fundOverridesLoaded = true;
+  } catch (err) {
+    State.fundOverrides = State.fundOverrides || { items: {}, updatedAt: null };
+    State.fundOverridesLoadError = err.message || String(err);
+  }
+  return State.fundOverrides;
+}
+
+async function saveFundOverride(fund) {
+  const resp = await fetch('/api/fund-overrides', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fund }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || `บันทึกไม่สำเร็จ (${resp.status})`);
+  }
+  State.fundOverridesLoaded = false;
+  await loadFundOverrides(true);
+  return data.fund;
+}
+
+async function deleteFundOverride(key) {
+  const resp = await fetch(`/api/fund-overrides/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || `ลบไม่สำเร็จ (${resp.status})`);
+  }
+  State.fundOverridesLoaded = false;
+  await loadFundOverrides(true);
+  return data;
+}
+
+async function loadMasterAllocations(force = false) {
+  if (!force && State.masterAllocationsLoaded) return State.masterAllocations;
+  try {
+    const resp = await fetch('/api/master-allocations', { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    State.masterAllocations = {
+      items: data.items || {},
+      updatedAt: data.updatedAt || null,
+      source: data.source || 'Data/fund_master_allocations.json',
+    };
+    State.masterAllocationsLoaded = true;
+    State.masterAllocationsLoadError = '';
+  } catch (err) {
+    State.masterAllocations = State.masterAllocations || { items: {}, updatedAt: null };
+    State.masterAllocationsLoadError = err.message || String(err);
+  }
+  return State.masterAllocations;
+}
+
+async function saveMasterAllocation(item) {
+  const resp = await fetch('/api/master-allocations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(item),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || `บันทึก mapping ไม่สำเร็จ (${resp.status})`);
+  }
+  State.masterAllocationsLoaded = false;
+  await loadMasterAllocations(true);
+  return data.item;
+}
+
+async function deleteMasterAllocation(key) {
+  const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || `ลบ mapping ไม่สำเร็จ (${resp.status})`);
+  }
+  State.masterAllocationsLoaded = false;
+  await loadMasterAllocations(true);
+  return data;
+}
+
 async function ensureSelectedFundsCatalog() {
   if (Object.keys(State.selectedFunds || {}).length) {
     return State.selectedFunds;
   }
   const rows = await fetchCached('select-fund');
-  const allFunds = buildSelectedFundsCatalog(rows);
+  await loadFundOverrides();
+  const allFunds = applyFundOverrides(buildSelectedFundsCatalog(rows));
   State.selectedFunds = Object.fromEntries(allFunds.map(f => [f.key, f]));
   return State.selectedFunds;
 }
@@ -4025,6 +4275,2279 @@ const Pages = {
     render();
   },
 
+  async dataImport(area) {
+    setLoading(area, 'กำลังเตรียมหน้าเตรียมข้อมูล...');
+
+    const jobList = Object.values(DATA_IMPORT_JOBS);
+    const workbookCache = {};
+
+    const normalizeFileName = (value) => String(value || '').trim().toLowerCase();
+    const findRawFileForJob = (job) => {
+      const expected = normalizeFileName(job.sourceFileName);
+      return (State.dataImport.rawFiles || []).find(file => normalizeFileName(file.name) === expected)
+        || (State.dataImport.rawFiles || []).find(file => normalizeFileName(file.name).includes(expected.replace(/\.xlsx$/i, '')));
+    };
+    const isBlankCell = (value) => value === null || value === undefined || String(value).trim() === '';
+    const cleanImportText = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
+    const transposeRows = (rows = []) => {
+      const maxCols = rows.length ? Math.max(...rows.map(row => row.length)) : 0;
+      return Array.from({ length: maxCols }, (_, colIdx) => rows.map(row => row[colIdx] ?? ''));
+    };
+    const rowsToObjects = (rows = []) => {
+      const headers = rows[0] || [];
+      return rows.slice(1).map(row => {
+        const record = {};
+        headers.forEach((header, idx) => {
+          const key = String(header || `Column${idx + 1}`);
+          record[key] = row[idx] ?? '';
+        });
+        return record;
+      });
+    };
+    const objectsToRows = (records = []) => {
+      if (!records.length) return [];
+      const headers = [];
+      records.forEach(record => {
+        Object.keys(record).forEach(key => {
+          if (!headers.includes(key)) headers.push(key);
+        });
+      });
+      return [
+        headers,
+        ...records.map(record => headers.map(header => record[header] ?? '')),
+      ];
+    };
+    const cleanMasterFundRawRows = (rawRows = []) => {
+      if (!rawRows.length) return [];
+
+      // Mirrors the workbook's Power Query: promote first row, skip the next 5 metadata rows.
+      // In array terms this starts from original row 7 because row 1 became headers.
+      const skipped = rawRows.slice(6);
+      let transposed = transposeRows(skipped);
+      transposed = transposed.filter(row => !isBlankCell(row[3]));
+      transposed = transposed.map(row => row.filter((_, idx) => idx !== 1 && idx !== 2));
+
+      let currentGroup = '';
+      transposed = transposed.map(row => {
+        const next = [...row];
+        if (!isBlankCell(next[0])) currentGroup = next[0];
+        next[0] = currentGroup;
+        return next;
+      });
+
+      transposed = transposed.map(row => {
+        // After removing Column2 and Column3, Power Query's Column4 is now array index 1.
+        const column4 = cleanImportText(row[1]);
+        const column1 = cleanImportText(row[0]);
+        const merged = cleanImportText([column4, column1].filter(Boolean).join(' '));
+        return [merged, ...row.slice(2)];
+      });
+
+      const seen = new Set();
+      transposed = transposed.filter(row => {
+        const key = String(row[0] ?? '');
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      let cleaned = transposeRows(transposed);
+      cleaned = cleaned.filter(row => !isBlankCell(row[1]));
+      if (!cleaned.length) return [];
+
+      const headers = cleaned[0].map((header, idx) => cleanImportText(header) || `Column ${idx + 1}`);
+      return [
+        headers,
+        ...cleaned.slice(1).map(row => headers.map((_, idx) => row[idx] ?? '')),
+      ];
+    };
+    const cleanRowsForJob = (job, rows) => {
+      if (job.cleaner === 'masterFundRaw') return cleanMasterFundRawRows(rows);
+      return rows;
+    };
+    const readXlsxWorkbook = async (job) => {
+      if (workbookCache[job.key]) return workbookCache[job.key];
+      if (typeof XLSX === 'undefined') {
+        throw new Error('ยังโหลดตัวอ่าน Excel ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บแล้วลองอีกครั้ง');
+      }
+      const file = findRawFileForJob(job);
+      if (!file?.id) {
+        throw new Error(`ไม่พบไฟล์ ${job.sourceFileName} ใน Raw Files Folder`);
+      }
+      const buffer = await SheetsAPI.downloadDriveFile(file.id);
+      const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
+      workbookCache[job.key] = { file, workbook };
+      return workbookCache[job.key];
+    };
+    const getRowsFromXlsx = async (job, tabName) => {
+      const { workbook } = await readXlsxWorkbook(job);
+      const sheetName = workbook.SheetNames.includes(tabName) ? tabName : workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) return [];
+      return XLSX.utils.sheet_to_json(sheet, {
+        header: 1,
+        raw: false,
+        defval: '',
+        blankrows: false,
+      });
+    };
+    const loadJobMeta = async (job) => {
+      const targetMeta = await SheetsAPI.getSheetTabs(job.targetSheetId);
+      if (job.sourceType === 'xlsx') {
+        const { file, workbook } = await readXlsxWorkbook(job);
+        return {
+          job,
+          targetMeta,
+          rawMeta: {
+            title: file.name || job.sourceLabel,
+            tabs: workbook.SheetNames,
+            sheetTabs: workbook.SheetNames.map(title => ({ title, sheetId: null })),
+          },
+        };
+      }
+      const rawMeta = await SheetsAPI.getSheetTabs(job.rawSheetId);
+      return { job, rawMeta, targetMeta };
+    };
+
+    try {
+      State.dataImport.rawFiles = await SheetsAPI.listDriveFolderFiles(RAW_FILES_FOLDER_ID);
+      State.dataImport.rawFilesError = '';
+    } catch (e) {
+      State.dataImport.rawFiles = [];
+      State.dataImport.rawFilesError = e.message || String(e);
+    }
+
+    if (!DATA_IMPORT_JOBS[State.dataImport.selectedJobKey]) {
+      State.dataImport.selectedJobKey = 'percentrank';
+    }
+
+    let active;
+    try {
+      active = await loadJobMeta(DATA_IMPORT_JOBS[State.dataImport.selectedJobKey]);
+    } catch (e) {
+      setError(area, e.message, 'data-import');
+      return;
+    }
+
+    const applyJobDefaults = (job, rawMeta) => {
+      const rawTabs = rawMeta.sheetTabs || (rawMeta.tabs || []).map(title => ({ title, sheetId: null }));
+      const defaultRawTab = rawTabs.find(tab => Number(tab.sheetId) === Number(job.rawGid))?.title
+        || rawTabs[0]?.title
+        || '';
+      const validRawTab = rawTabs.some(tab => tab.title === State.dataImport.rawTab);
+      const defaultTargetTab = State.currentQuarter
+        || CONFIG.PAGES?.[job.targetPageKey]?.tabName
+        || job.defaultTab;
+
+      if (!validRawTab) State.dataImport.rawTab = defaultRawTab;
+      if (!State.dataImport.targetTab) State.dataImport.targetTab = defaultTargetTab;
+    };
+    const getQuarterYear = (quarter) => {
+      const match = String(quarter || '').trim().match(/^(\d{4})-Q[1-4]$/i);
+      return match?.[1] || 'unknown-year';
+    };
+    const getJsonBasePath = (job, quarter) => {
+      const cleanQuarter = String(quarter || '').trim() || job.defaultTab;
+      const fileName = JSON_STORE.baseFiles[job.key] || `${job.targetLabel || job.label}.json`;
+      return `${JSON_STORE.rootName}/${getQuarterYear(cleanQuarter)}/${cleanQuarter}/base/${fileName}`;
+    };
+    const getJsonOverridesPath = (quarter) => {
+      const cleanQuarter = String(quarter || '').trim() || State.currentQuarter || 'unknown-quarter';
+      return `${JSON_STORE.rootName}/${getQuarterYear(cleanQuarter)}/${cleanQuarter}/overrides/`;
+    };
+    const quoteImportSheetName = (tabName) => `'${String(tabName || '').replace(/'/g, "''")}'`;
+    const fetchImportHeaderPreview = async (sheetId, tabName) => {
+      const range = encodeURIComponent(`${quoteImportSheetName(tabName)}!A1:ZZ1`);
+      const params = 'valueRenderOption=FORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING';
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?${params}`;
+      const data = await SheetsAPI._fetchGoogleJson(url);
+      return data.values?.[0] || [];
+    };
+    const checkJsonReadiness = async (quarter) => {
+      const cleanQuarter = String(quarter || '').trim().toUpperCase();
+      const results = await Promise.all(DATA_IMPORT_JSON_EXPORTS.map(async item => {
+        const importJob = DATA_IMPORT_JOBS[item.jobKey];
+        try {
+          const meta = await SheetsAPI.getSheetTabs(importJob.targetSheetId);
+          const hasTab = (meta.tabs || []).includes(cleanQuarter);
+          if (!hasTab) {
+            return {
+              ...item,
+              label: importJob.targetLabel || importJob.label,
+              sheetTitle: meta.title || importJob.targetLabel || importJob.label,
+              ok: false,
+              status: 'missing-tab',
+              message: `ไม่พบ Tab ${cleanQuarter}`,
+              columns: 0,
+            };
+          }
+          const header = await fetchImportHeaderPreview(importJob.targetSheetId, cleanQuarter);
+          const nonBlankColumns = header.filter(value => String(value ?? '').trim()).length;
+          return {
+            ...item,
+            label: importJob.targetLabel || importJob.label,
+            sheetTitle: meta.title || importJob.targetLabel || importJob.label,
+            ok: nonBlankColumns > 0,
+            status: nonBlankColumns > 0 ? 'ready' : 'empty',
+            message: nonBlankColumns > 0 ? `พร้อมสร้าง JSON (${nonBlankColumns.toLocaleString()} columns)` : 'พบ Tab แล้ว แต่หัวตารางว่าง',
+            columns: nonBlankColumns,
+          };
+        } catch (err) {
+          return {
+            ...item,
+            label: importJob.targetLabel || importJob.label,
+            sheetTitle: importJob.targetLabel || importJob.label,
+            ok: false,
+            status: 'error',
+            message: err.message || String(err),
+            columns: 0,
+          };
+        }
+      }));
+      return {
+        quarter: cleanQuarter,
+        checkedAt: new Date().toISOString(),
+        results,
+        allReady: results.every(item => item.ok),
+      };
+    };
+    const buildJsonExportUrl = (quarter, dataset = 'all') => {
+      const url = new URL(JSON_EXPORT_WEB_APP_URL);
+      url.searchParams.set('quarter', String(quarter || '').trim().toUpperCase());
+      url.searchParams.set('dataset', dataset);
+      url.searchParams.set('key', JSON_EXPORT_SECRET_KEY);
+      return url.toString();
+    };
+    const renderJsonReadiness = (readiness) => {
+      const quarter = String(State.dataImport.targetTab || '').trim().toUpperCase() || '-';
+      const jsonBaseFolder = `${JSON_STORE.rootName}/${getQuarterYear(quarter)}/${quarter}/base/`;
+      const jsonOverridesPath = getJsonOverridesPath(quarter);
+      const results = readiness?.results || DATA_IMPORT_JSON_EXPORTS.map(item => {
+        const importJob = DATA_IMPORT_JOBS[item.jobKey];
+        return {
+          ...item,
+          label: importJob.targetLabel || importJob.label,
+          sheetTitle: importJob.targetLabel || importJob.label,
+          ok: false,
+          status: 'pending',
+          message: 'ยังไม่ได้ตรวจสอบ',
+        };
+      });
+      return `
+        <div class="json-readiness-box">
+          <div class="json-readiness-copy">
+            ตรวจสอบก่อนว่า Google Sheets ปลายทางมี Tab ${esc(quarter)} ครบทั้ง 3 ชุด แล้วค่อยสร้างไฟล์ JSON ลงโฟลเดอร์ base ของ Quarter นี้
+          </div>
+          <div class="json-path-grid">
+            <div class="fund-field data-import-path-field">
+              <span>Base JSON Folder</span>
+              <input class="fund-input" value="${esc(jsonBaseFolder)}" readonly>
+            </div>
+            <div class="fund-field data-import-path-field">
+              <span>Overrides ของ Quarter นี้</span>
+              <input class="fund-input" value="${esc(jsonOverridesPath)}" readonly>
+            </div>
+          </div>
+          <div class="json-readiness-list">
+            ${results.map(item => `
+              <div class="json-readiness-item ${item.ok ? 'is-ready' : `is-${esc(item.status || 'pending')}`}">
+                <div>
+                  <strong>${esc(item.fileName)}</strong>
+                  <span>${esc(item.sheetTitle)} · dataset=${esc(item.dataset)}</span>
+                </div>
+                <span class="badge ${item.ok ? 'badge-success' : (item.status === 'pending' ? 'badge-muted' : 'badge-warning')}">${esc(item.message)}</span>
+              </div>
+            `).join('')}
+          </div>
+          <div class="data-import-actions json-export-actions">
+            <button class="btn btn-ghost" id="json-readiness-check" type="button" ${State.dataImport.isCheckingJson ? 'disabled' : ''}>
+              ${State.dataImport.isCheckingJson ? 'กำลังตรวจสอบ...' : 'ตรวจสอบความพร้อม'}
+            </button>
+            <button class="btn btn-primary import-commit-btn" id="json-export-open" type="button" ${readiness?.allReady ? '' : 'disabled'}>
+              สร้าง JSON ทั้ง 3 ไฟล์
+            </button>
+            ${readiness && !readiness.allReady ? '<span class="json-export-hint">ต้องพร้อมครบทั้ง 3 ชุดก่อนจึงจะสร้าง JSON ได้</span>' : ''}
+          </div>
+        </div>`;
+    };
+
+    applyJobDefaults(active.job, active.rawMeta);
+
+    const detectImportValueType = (value) => {
+      const text = String(value ?? '').trim();
+      if (!text) return '';
+      if (/^[-–—]+$/.test(text)) return '';
+      if (/^(n\/a|na|null|none)$/i.test(text)) return '';
+      if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(text)) return 'date';
+      if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(text)) return 'date';
+      if (/^-?\d+(,\d{3})*(\.\d+)?%$/.test(text) || /^-?\d+(\.\d+)?%$/.test(text)) return 'percent';
+      if (/^-?\d+(,\d{3})*(\.\d+)?$/.test(text) || /^-?\d+(\.\d+)?$/.test(text)) return 'number';
+      return 'text';
+    };
+    const analyzeImportColumns = (rows = []) => {
+      const headers = rows[0] || [];
+      const maxCols = rows.length ? Math.max(...rows.map(row => row.length)) : headers.length;
+      return Array.from({ length: maxCols }, (_, colIdx) => {
+        const counts = { text: 0, number: 0, percent: 0, date: 0 };
+        rows.slice(1, 101).forEach(row => {
+          const type = detectImportValueType(row[colIdx]);
+          if (type) counts[type] += 1;
+        });
+        const used = Object.entries(counts).filter(([, count]) => count > 0);
+        const type = used.length === 0
+          ? 'blank'
+          : (used.length === 1 ? used[0][0] : 'mixed');
+        const key = `${colIdx}:${headers[colIdx] || `Column ${colIdx + 1}`}`;
+        return {
+          key,
+          index: colIdx + 1,
+          name: headers[colIdx] || `Column ${colIdx + 1}`,
+          detectedType: type,
+          type: State.dataImport.columnTypes[key] || type,
+          counts,
+        };
+      });
+    };
+    const normalizeImportHeader = (value) => cleanImportText(value)
+      .replace(/\s+/g, ' ')
+      .replace(/\s*\(\s*/g, '(')
+      .replace(/\s*\)\s*/g, ')')
+      .toLowerCase();
+    const analyzeImportHeaders = (rows = []) => {
+      const headers = rows[0] || [];
+      const maxCols = rows.length ? Math.max(...rows.map(row => row.length)) : headers.length;
+      const exact = new Map();
+      const normalized = new Map();
+
+      Array.from({ length: maxCols }, (_, colIdx) => {
+        const fallback = `Column ${colIdx + 1}`;
+        const name = cleanImportText(headers[colIdx]) || fallback;
+        const exactKey = name;
+        const normalizedKey = normalizeImportHeader(name);
+        exact.set(exactKey, [...(exact.get(exactKey) || []), { name, index: colIdx + 1 }]);
+        normalized.set(normalizedKey, [...(normalized.get(normalizedKey) || []), { name, index: colIdx + 1 }]);
+      });
+
+      const exactDuplicates = [...exact.values()]
+        .filter(items => items.length > 1)
+        .map(items => ({
+          name: items[0].name,
+          columns: items.map(item => item.index),
+          suggestion: items.map((item, idx) => idx === 0 ? item.name : `${item.name}_${idx + 1}`),
+        }));
+      const normalizedDuplicates = [...normalized.values()]
+        .filter(items => items.length > 1 && new Set(items.map(item => item.name)).size > 1)
+        .map(items => ({
+          normalizedName: normalizeImportHeader(items[0].name),
+          variants: items.map(item => ({ name: item.name, index: item.index })),
+        }));
+
+      return {
+        totalHeaders: maxCols,
+        duplicateCount: exactDuplicates.length,
+        similarCount: normalizedDuplicates.length,
+        exactDuplicates,
+        normalizedDuplicates,
+      };
+    };
+    const typeBadgeClass = (type) => ({
+      number: 'badge-success',
+      percent: 'badge-accent',
+      date: 'badge-primary',
+      text: 'badge-data-origin',
+      mixed: 'badge-warning',
+      blank: 'badge-muted',
+    }[type] || 'badge-data-origin');
+    const typeLabel = (type) => {
+      const labels = {
+        number: 'Number',
+        percent: 'Percent',
+        date: 'Date',
+        text: 'Text',
+        mixed: 'Mixed',
+        blank: 'Blank',
+      };
+      return labels[type] || String(type || '').replace(/^./, c => c.toUpperCase());
+    };
+    const buildImportColumnKey = (colIdx, headers = []) => `${colIdx}:${headers[colIdx] || `Column ${colIdx + 1}`}`;
+    const refreshImportPreviewMeta = (preview, rows, patch = {}) => {
+      const colCount = rows.length ? Math.max(...rows.map(row => row.length)) : 0;
+      return {
+        ...preview,
+        ...patch,
+        rows,
+        rowCount: rows.length,
+        colCount,
+        headerText: (rows[0] || []).slice(0, 6).join(' | '),
+        columns: analyzeImportColumns(rows),
+        headerReport: analyzeImportHeaders(rows),
+      };
+    };
+    const renameDuplicateImportHeaders = (rows = []) => {
+      if (!rows.length) return rows;
+      const headers = [...(rows[0] || [])];
+      const seen = new Map();
+      const renamed = headers.map((header, idx) => {
+        const base = cleanImportText(header) || `Column ${idx + 1}`;
+        const count = (seen.get(base) || 0) + 1;
+        seen.set(base, count);
+        return count === 1 ? base : `${base}_${count}`;
+      });
+      return [renamed, ...rows.slice(1)];
+    };
+    const removeImportColumns = (rows = [], columnIndexes = []) => {
+      const removeSet = new Set(columnIndexes.map(Number).filter(Number.isInteger));
+      if (!rows.length || !removeSet.size) return rows;
+      return rows.map(row => row.filter((_, idx) => !removeSet.has(idx)));
+    };
+    const importTypeSelect = (col) => {
+      const typeOptions = [
+        ['auto', 'Auto'],
+        ['text', 'Text'],
+        ['number', 'Number'],
+        ['percent', 'Percent'],
+        ['date', 'Date'],
+        ['blank', 'Blank'],
+      ];
+      return `
+        <div class="import-header-type">
+          <strong class="badge ${typeBadgeClass(col.type)}">${esc(typeLabel(col.type))}</strong>
+          <select class="import-type-select" data-column-key="${esc(col.key)}" aria-label="เลือกชนิดข้อมูลของ ${esc(col.name)}">
+            ${typeOptions.map(([value, label]) => `
+              <option value="${value}" ${(State.dataImport.columnTypes[col.key] || 'auto') === value ? 'selected' : ''}>
+                ${label}${value === 'auto' ? ` (${typeLabel(col.detectedType)})` : ''}
+              </option>`).join('')}
+          </select>
+        </div>`;
+    };
+
+    const sampleTable = (rows = []) => {
+      if (!rows.length) return '<div class="state-box">ไม่พบข้อมูลสำหรับ Preview</div>';
+      const headers = rows[0] || [];
+      const dataRows = rows.slice(1);
+      const visibleRows = [headers, ...dataRows.slice(0, 5)];
+      const maxCols = Math.max(...rows.map(row => row.length));
+      const columns = State.dataImport.preview?.columns || analyzeImportColumns(rows);
+      const duplicateHeaderColumns = new Set(
+        (State.dataImport.preview?.headerReport?.exactDuplicates || [])
+          .flatMap(item => item.columns || [])
+          .map(col => Number(col) - 1)
+      );
+      const deleteHeaderButton = (colIdx) => duplicateHeaderColumns.has(colIdx)
+        ? `<button class="import-delete-column-btn" type="button" data-delete-column="${colIdx}" title="ลบคอลัมน์นี้ออกจาก Preview">ลบคอลัมน์นี้</button>`
+        : '';
+      return `
+        <div class="table-wrapper import-preview-table">
+          <table>
+            <tbody>
+              ${visibleRows.map((row, rowIdx) => `
+                <tr class="${rowIdx === 0 ? 'is-header-row' : ''}">
+                  ${Array.from({ length: maxCols }, (_, i) => rowIdx === 0
+                    ? `<td class="${duplicateHeaderColumns.has(i) ? 'is-duplicate-header' : ''}"><div class="import-header-cell"><span>${esc(row[i] ?? `Column ${i + 1}`)}</span>${importTypeSelect(columns[i] || { key: buildImportColumnKey(i, headers), name: `Column ${i + 1}`, type: 'blank', detectedType: 'blank' })}${deleteHeaderButton(i)}</div></td>`
+                    : `<td>${esc(row[i] ?? '')}</td>`).join('')}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="pg-info import-preview-note">แสดงทุกคอลัมน์ และตัวอย่าง 5 แถวแรกจาก ${dataRows.length.toLocaleString()} rows</div>`;
+    };
+    const renderHeaderReport = (report) => {
+      if (!report) return '';
+      const hasExact = report.exactDuplicates?.length > 0;
+      const hasSimilar = report.normalizedDuplicates?.length > 0;
+      const statusClass = hasExact ? 'is-danger' : (hasSimilar ? 'is-warning' : 'is-ok');
+      const statusText = hasExact
+        ? `พบหัวตารางซ้ำ ${report.duplicateCount.toLocaleString()} รายการ`
+        : (hasSimilar ? `พบชื่อคล้ายกัน ${report.similarCount.toLocaleString()} รายการ` : 'ไม่พบหัวตารางซ้ำ');
+      return `
+        <div class="import-header-report ${statusClass}">
+          <div class="import-header-report-head">
+            <strong>ตรวจหัวตาราง</strong>
+            <span class="badge ${hasExact ? 'badge-danger' : (hasSimilar ? 'badge-warning' : 'badge-success')}">${esc(statusText)}</span>
+          </div>
+          ${hasExact ? `
+            <div class="import-header-actions">
+              <span class="import-header-action-copy">
+                ตอนนี้พบหัวตารางที่มีชื่อซ้ำ สามารถเลือกที่จะเปลี่ยนชื่อซ้ำอัตโนมัติ หรือลบคอลัมน์ซ้ำได้ โดยหัวตารางที่มีชื่อซ้ำกันจะถูกไฮไลท์ด้วยสีแดง
+              </span>
+              <button class="btn btn-primary btn-sm" id="import-rename-duplicates" type="button">เปลี่ยนชื่อซ้ำอัตโนมัติ</button>
+              <button class="btn btn-danger btn-sm" id="import-remove-duplicate-columns" type="button">ลบคอลัมน์ซ้ำ</button>
+              <span>ถ้าไม่แน่ใจ ให้เปลี่ยนชื่อก่อน เพราะจะไม่ทำข้อมูลหาย</span>
+            </div>
+            <div class="import-header-report-list">
+              ${report.exactDuplicates.slice(0, 8).map(item => `
+                <div class="import-header-report-item">
+                  <span>โดยหัวตารางที่ซ้ำกัน คือ ${esc(item.name)}</span>
+                  <small>ซ้ำที่คอลัมน์ ${esc(item.columns.join(', '))} · ชื่อแนะนำ: ${esc(item.suggestion.join(' | '))}</small>
+                </div>
+              `).join('')}
+              ${report.exactDuplicates.length > 8 ? `<div class="import-header-report-more">และอีก ${(report.exactDuplicates.length - 8).toLocaleString()} รายการ</div>` : ''}
+            </div>
+          ` : ''}
+          ${!hasExact && hasSimilar ? `
+            <div class="import-header-report-list">
+              ${report.normalizedDuplicates.slice(0, 6).map(item => `
+                <div class="import-header-report-item">
+                  <span>${esc(item.variants.map(variant => variant.name).join(' | '))}</span>
+                  <small>ชื่อคล้ายกันหลังปรับช่องว่าง/วงเล็บ · คอลัมน์ ${esc(item.variants.map(variant => variant.index).join(', '))}</small>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>`;
+    };
+
+    const render = () => {
+      const job = active.job;
+      const rawMeta = active.rawMeta;
+      const targetMeta = active.targetMeta;
+      const rawTabs = rawMeta.sheetTabs || (rawMeta.tabs || []).map(title => ({ title, sheetId: null }));
+      const targetTabs = targetMeta.tabs || [];
+      const preview = State.dataImport.preview;
+      const targetExists = preview
+        ? preview.targetExists
+        : targetTabs.includes(State.dataImport.targetTab);
+      const rawFiles = State.dataImport.rawFiles || [];
+      const selectedFile = findRawFileForJob(job);
+      area.innerHTML = `
+        <div class="data-import-grid">
+          <div class="card data-import-card">
+            <div class="card-header">
+              <span class="card-title data-import-card-title-step">
+                <span class="data-import-step-no">1</span>
+                อัพเดตข้อมูลผ่าน Raw Files Folder
+                <a href="${esc(job.rawFolderUrl)}" target="_blank" rel="noopener noreferrer" class="data-import-title-link">เปิด Raw Files Folder</a>
+              </span>
+              <span class="badge badge-data-origin">Google Sheets</span>
+            </div>
+          </div>
+
+          <div class="card data-import-card">
+            <div class="card-header">
+              <span class="card-title data-import-card-title-step">
+                <span class="data-import-step-no">2</span>
+                เลือกข้อมูลที่ต้องการจะดึง
+                <span class="data-import-title-subtext">ไฟล์ใน Raw Files Folder</span>
+              </span>
+              ${State.dataImport.rawFilesError
+                ? `<span class="badge badge-warning">อ่าน Drive ไม่ได้</span>`
+                : `<span class="row-count-badge">${rawFiles.length.toLocaleString()} files</span>`}
+            </div>
+            <div class="card-body">
+              <div class="data-import-raw-files data-import-raw-files-flat">
+                ${State.dataImport.rawFilesError ? `
+                  <div class="state-box import-drive-warning">${esc(State.dataImport.rawFilesError)}</div>
+                ` : `
+                  <div class="import-file-select-row">
+                    <select class="fund-input" id="import-job-select" aria-label="เลือกไฟล์ต้นทาง">
+                      ${jobList.map(item => `
+                        <option value="${esc(item.key)}" ${item.key === job.key ? 'selected' : ''}>
+                          ${esc(item.sourceFileName)} → ${esc(item.targetLabel)}
+                        </option>
+                      `).join('')}
+                    </select>
+                    <button class="btn btn-primary btn-sm" id="import-preview" type="button">ดึงข้อมูล</button>
+                    ${selectedFile?.webViewLink ? `
+                      <a href="${esc(selectedFile.webViewLink)}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm">เปิดไฟล์</a>
+                    ` : ''}
+                  </div>
+                  <div class="import-file-selected">
+                    <span>${esc(selectedFile?.name || job.sourceFileName)}</span>
+                    <small>${esc(selectedFile?.modifiedTime ? new Date(selectedFile.modifiedTime).toLocaleString('th-TH') : 'ยังไม่พบไฟล์นี้ในโฟลเดอร์')}</small>
+                  </div>
+                `}
+              </div>
+            </div>
+          </div>
+
+          <div class="card data-import-card">
+            <div class="card-header">
+              <span class="card-title data-import-card-title-step"><span class="data-import-step-no">3</span>ยืนยันไฟล์ต้นทาง และ Tab ต้นทางที่ต้องการดึง</span>
+            </div>
+            <div class="card-body">
+              <div class="data-import-section-grid">
+                <div class="fund-field">
+                  <span>ไฟล์ต้นทาง</span>
+                  <input class="fund-input" value="${esc(rawMeta.title || job.rawSheetId)}" readonly>
+                </div>
+                <div class="fund-field">
+                  <span>เลือก Tab ต้นทางที่ต้องการดึง</span>
+                  <select class="fund-input" id="import-raw-tab">
+                    ${rawTabs.map(tab => `<option value="${esc(tab.title)}" ${tab.title === State.dataImport.rawTab ? 'selected' : ''}>${esc(tab.title)}</option>`).join('')}
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          ${preview ? `
+          <div class="card data-import-card data-import-preview-card">
+            <div class="card-header">
+              <span class="card-title data-import-card-title-step"><span class="data-import-step-no">4</span>กำหนด Type ให้ถูกต้องก่อนบันทึกข้อมูล</span>
+              <div class="page-tools-meta">
+                <span class="row-count-badge">${preview.rowCount.toLocaleString()} rows</span>
+                <span class="row-count-badge">${preview.colCount.toLocaleString()} columns</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="import-status-grid">
+                <div><span>Raw Tab</span><strong>${esc(preview.rawTab)}</strong></div>
+                <div><span>Target Tab</span><strong>${esc(preview.targetTab)}</strong></div>
+                <div><span>Header</span><strong>${esc(preview.headerText || '-')}</strong></div>
+                ${preview.cleaner ? `
+                  <div><span>Cleaning</span><strong>${esc(preview.cleaner)}</strong></div>
+                  <div><span>Raw Rows</span><strong>${Number(preview.sourceRowCount || 0).toLocaleString()}</strong></div>
+                  <div><span>Output Rows</span><strong>${Number(preview.rowCount || 0).toLocaleString()}</strong></div>
+                ` : ''}
+              </div>
+              ${renderHeaderReport(preview.headerReport)}
+              ${sampleTable(preview.rows)}
+            </div>
+          </div>` : ''}
+
+          <div class="card data-import-card">
+            <div class="card-header">
+              <span class="card-title data-import-card-title-step"><span class="data-import-step-no">5</span>ฐานข้อมูลปลายทางที่ต้องการจะบันทึก</span>
+              <div class="page-tools-meta">
+                <span class="badge ${targetExists ? 'badge-warning' : 'badge-success'}">
+                  ${targetExists ? 'พบ Tab แล้ว' : 'ยังไม่มี Tab นี้'}
+                </span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="data-import-form">
+                <div class="fund-field">
+                  <span>ฐานข้อมูลปลายทาง</span>
+                  <input class="fund-input" value="${esc(targetMeta.title || job.targetLabel || job.label)}" readonly>
+                </div>
+                <div class="fund-field">
+                  <span>ระบุข้อมูล โดยรูปแบบ : XXX-QX เช่น 2026-Q1 = ปี ค.ศ. 2026 ไตรมาส 1</span>
+                  <input class="fund-input" id="import-target-tab" value="${esc(State.dataImport.targetTab)}" placeholder="2026-Q1">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card data-import-card">
+            <div class="card-header">
+              <span class="card-title data-import-card-title-step"><span class="data-import-step-no">6</span>บันทึกข้อมูลปลายทางไปที่ Google Sheets</span>
+              <div class="page-tools-meta">
+                <span class="badge ${targetExists ? 'badge-warning' : 'badge-success'}">
+                  ${targetExists ? 'พบ Tab แล้ว' : 'ยังไม่มี Tab นี้'}
+                </span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="import-status-grid">
+                <div><span>Sheet</span><strong>${esc(job.targetLabel || job.label)}</strong></div>
+                <div><span>Tab</span><strong>${esc(State.dataImport.targetTab || '-')}</strong></div>
+                <div><span>Mode</span><strong>${targetExists ? 'เขียนทับเมื่อยืนยัน' : 'สร้าง Tab ใหม่'}</strong></div>
+                <div class="import-status-action-cell">
+                  <span>Action</span>
+                  <div class="data-import-actions data-import-status-actions">
+                    ${preview ? `<button class="btn btn-primary import-commit-btn" id="import-commit" type="button" ${State.dataImport.isImporting ? 'disabled' : ''}>บันทึกข้อมูล</button>` : ''}
+                    ${preview?.targetExists ? `
+                      <label class="fund-manager-check import-confirm">
+                        <input type="checkbox" id="import-overwrite-confirm">
+                        ติ๊กเพื่อยืนยันการเขียนทับข้อมูลใน ${esc(preview.targetTab)}
+                      </label>` : ''}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card data-import-card">
+            <div class="card-header">
+              <span class="card-title data-import-card-title-step"><span class="data-import-step-no">7</span>บันทึกข้อมูลเป็นไฟล์ JSON</span>
+              <div class="page-tools-meta">
+                <span class="badge ${State.dataImport.jsonReadiness?.allReady ? 'badge-success' : 'badge-data-origin'}">
+                  ${State.dataImport.jsonReadiness?.allReady ? 'พร้อมสร้าง JSON' : 'ตรวจไฟล์ทั้ง 3 ชุดก่อน'}
+                </span>
+              </div>
+            </div>
+            <div class="card-body">
+              ${renderJsonReadiness(State.dataImport.jsonReadiness)}
+            </div>
+          </div>
+        </div>`;
+
+      $('#import-job-select', area)?.addEventListener('change', async e => {
+        const nextJob = DATA_IMPORT_JOBS[e.target.value] || DATA_IMPORT_JOBS.percentrank;
+        State.dataImport.selectedJobKey = nextJob.key;
+        State.dataImport.rawTab = '';
+        State.dataImport.targetTab = State.currentQuarter
+          || CONFIG.PAGES?.[nextJob.targetPageKey]?.tabName
+          || nextJob.defaultTab;
+        State.dataImport.preview = null;
+        State.dataImport.columnTypes = {};
+        setLoading(area, `กำลังโหลดข้อมูลจาก ${nextJob.sourceFileName}...`);
+        try {
+          active = await loadJobMeta(nextJob);
+          applyJobDefaults(active.job, active.rawMeta);
+          render();
+        } catch (err) {
+          setError(area, err.message || 'โหลดไฟล์ต้นทางไม่สำเร็จ', 'data-import');
+        }
+      });
+      $('#import-raw-tab', area)?.addEventListener('change', e => {
+        State.dataImport.rawTab = e.target.value;
+        State.dataImport.preview = null;
+        render();
+      });
+      $('#import-target-tab', area)?.addEventListener('input', e => {
+        State.dataImport.targetTab = e.target.value.trim();
+        State.dataImport.jsonReadiness = null;
+        if (State.dataImport.preview) {
+          State.dataImport.preview = {
+            ...State.dataImport.preview,
+            targetTab: State.dataImport.targetTab,
+            targetExists: (targetMeta.tabs || []).includes(State.dataImport.targetTab),
+          };
+        }
+      });
+      $('#import-target-tab', area)?.addEventListener('change', e => {
+        State.dataImport.targetTab = e.target.value.trim() || job.defaultTab;
+        State.dataImport.jsonReadiness = null;
+        if (State.dataImport.preview) {
+          State.dataImport.preview = {
+            ...State.dataImport.preview,
+            targetTab: State.dataImport.targetTab,
+            targetExists: (targetMeta.tabs || []).includes(State.dataImport.targetTab),
+          };
+        }
+        render();
+      });
+      $$('.import-type-select', area).forEach(select => {
+        select.addEventListener('change', e => {
+          const key = e.target.dataset.columnKey;
+          const value = e.target.value;
+          if (!key) return;
+          if (value === 'auto') {
+            delete State.dataImport.columnTypes[key];
+          } else {
+            State.dataImport.columnTypes[key] = value;
+          }
+          if (State.dataImport.preview?.rows) {
+            State.dataImport.preview = {
+              ...State.dataImport.preview,
+              columns: analyzeImportColumns(State.dataImport.preview.rows),
+            };
+          }
+          render();
+        });
+      });
+      $('#import-rename-duplicates', area)?.addEventListener('click', () => {
+        const previewNow = State.dataImport.preview;
+        if (!previewNow?.rows?.length) return;
+        const rows = renameDuplicateImportHeaders(previewNow.rows);
+        State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
+        toast('เปลี่ยนชื่อหัวตารางซ้ำอัตโนมัติแล้ว', 'success');
+        render();
+      });
+      $('#import-remove-duplicate-columns', area)?.addEventListener('click', () => {
+        const previewNow = State.dataImport.preview;
+        const duplicates = previewNow?.headerReport?.exactDuplicates || [];
+        const removeIndexes = duplicates.flatMap(item => (item.columns || []).slice(1).map(col => Number(col) - 1));
+        if (!previewNow?.rows?.length || !removeIndexes.length) return;
+        const rows = removeImportColumns(previewNow.rows, removeIndexes);
+        State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
+        toast(`ลบคอลัมน์ซ้ำ ${removeIndexes.length.toLocaleString()} คอลัมน์ออกจาก Preview แล้ว`, 'success', 4200);
+        render();
+      });
+      $$('[data-delete-column]', area).forEach(button => {
+        button.addEventListener('click', e => {
+          const previewNow = State.dataImport.preview;
+          const colIdx = Number(e.currentTarget.dataset.deleteColumn);
+          if (!previewNow?.rows?.length || !Number.isInteger(colIdx)) return;
+          const headerName = cleanImportText(previewNow.rows[0]?.[colIdx]) || `Column ${colIdx + 1}`;
+          const rows = removeImportColumns(previewNow.rows, [colIdx]);
+          State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
+          toast(`ลบคอลัมน์ ${headerName} ออกจาก Preview แล้ว`, 'success', 4200);
+          render();
+        });
+      });
+      $('#import-preview', area)?.addEventListener('click', async () => {
+        const rawTab = $('#import-raw-tab', area)?.value || State.dataImport.rawTab;
+        const targetTab = $('#import-target-tab', area)?.value.trim() || job.defaultTab;
+        State.dataImport.rawTab = rawTab;
+        State.dataImport.targetTab = targetTab;
+        State.dataImport.jsonReadiness = null;
+        setLoading(area, 'กำลังอ่านข้อมูลจาก Raw...');
+        try {
+          const [sourceRows, latestTargetMeta] = await Promise.all([
+            job.sourceType === 'xlsx'
+              ? getRowsFromXlsx(job, rawTab)
+              : SheetsAPI.fetchSheetData(job.rawSheetId, rawTab),
+            SheetsAPI.getSheetTabs(job.targetSheetId),
+          ]);
+          const rows = cleanRowsForJob(job, sourceRows);
+          State.dataImport.preview = refreshImportPreviewMeta({
+            rawTab,
+            targetTab,
+            sourceRowCount: sourceRows.length,
+            cleaner: job.cleaner || '',
+            targetExists: (latestTargetMeta.tabs || []).includes(targetTab),
+          }, rows);
+          render();
+        } catch (err) {
+          toast(err.message || 'ตรวจสอบข้อมูลไม่สำเร็จ', 'error', 5000);
+          render();
+        }
+      });
+      $('#import-commit', area)?.addEventListener('click', async () => {
+        const previewNow = State.dataImport.preview;
+        if (!previewNow?.rows?.length) {
+          toast('ไม่มีข้อมูลสำหรับนำเข้า', 'warning');
+          return;
+        }
+        if (previewNow.targetExists && !$('#import-overwrite-confirm', area)?.checked) {
+          toast('กรุณายืนยันก่อนเขียนทับ Tab เดิม', 'warning');
+          return;
+        }
+        State.dataImport.isImporting = true;
+        setLoading(area, 'กำลังบันทึกข้อมูลไปยัง Google Sheets...');
+        try {
+          if (!previewNow.targetExists) {
+            await SheetsAPI.addSheetTab(job.targetSheetId, previewNow.targetTab);
+          } else {
+            await SheetsAPI.clearSheetValues(job.targetSheetId, previewNow.targetTab);
+          }
+          await SheetsAPI.updateSheetValues(job.targetSheetId, previewNow.targetTab, previewNow.rows);
+          clearCache();
+          State.dataImport.isImporting = false;
+          toast(`บันทึกข้อมูล ${previewNow.rowCount.toLocaleString()} rows ไปที่ ${previewNow.targetTab} แล้ว`, 'success', 5000);
+          State.dataImport.jsonReadiness = null;
+          State.dataImport.preview = {
+            ...previewNow,
+            targetExists: true,
+          };
+          render();
+        } catch (err) {
+          State.dataImport.isImporting = false;
+          toast(err.message || 'บันทึกข้อมูลไม่สำเร็จ', 'error', 6000);
+          render();
+        }
+      });
+      $('#json-readiness-check', area)?.addEventListener('click', async () => {
+        const targetTab = ($('#import-target-tab', area)?.value || State.dataImport.targetTab || job.defaultTab).trim().toUpperCase();
+        if (!/^\d{4}-Q[1-4]$/.test(targetTab)) {
+          toast('กรุณาระบุ Quarter รูปแบบ 2026-Q3 ก่อนตรวจ JSON', 'warning');
+          return;
+        }
+        State.dataImport.targetTab = targetTab;
+        State.dataImport.isCheckingJson = true;
+        render();
+        try {
+          State.dataImport.jsonReadiness = await checkJsonReadiness(targetTab);
+          State.dataImport.isCheckingJson = false;
+          toast(State.dataImport.jsonReadiness.allReady ? 'ไฟล์ทั้ง 3 ชุดพร้อมสร้าง JSON แล้ว' : 'ยังมีบางชุดไม่พร้อมสร้าง JSON', State.dataImport.jsonReadiness.allReady ? 'success' : 'warning', 5000);
+          render();
+        } catch (err) {
+          State.dataImport.isCheckingJson = false;
+          toast(err.message || 'ตรวจสอบความพร้อม JSON ไม่สำเร็จ', 'error', 6000);
+          render();
+        }
+      });
+      $('#json-export-open', area)?.addEventListener('click', () => {
+        const readiness = State.dataImport.jsonReadiness;
+        const targetTab = (readiness?.quarter || State.dataImport.targetTab || job.defaultTab).trim().toUpperCase();
+        if (!readiness?.allReady) {
+          toast('กรุณาตรวจสอบให้พร้อมครบทั้ง 3 ชุดก่อนสร้าง JSON', 'warning');
+          return;
+        }
+        const exportUrl = buildJsonExportUrl(targetTab, 'all');
+        window.open(exportUrl, '_blank', 'noopener,noreferrer');
+        toast('เปิด Apps Script เพื่อสร้าง JSON ทั้ง 3 ไฟล์แล้ว', 'success', 5000);
+      });
+    };
+
+    render();
+    App._currentExport = null;
+  },
+
+  secDataImport(area) {
+    const secDatasets = [
+      { id: '01_amcs', title: 'รายชื่อ บลจ.', file: '01_amcs.csv', endpoint: '/v2/fund/general-info/amcs', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['unique_id'], columns: ['unique_id', 'comp_name_th', 'comp_name_en'] },
+      { id: '02_profiles', title: 'ข้อมูลกองทุนรวม', file: '02_profiles.csv', endpoint: '/v2/fund/general-info/profiles', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'proj_abbr_name', 'fund_status', 'last_upd_date'] },
+      { id: '03_specifications', title: 'ประเภทกองทุนตามลักษณะพิเศษ', file: '03_specifications.csv', endpoint: '/v2/fund/general-info/specifications', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'spec_desc', 'last_upd_date'] },
+      { id: '04_mutual_fund_fees', title: 'ค่าธรรมเนียมตามโครงการ', file: '04_mutual_fund_fees.csv', endpoint: '/v2/fund/general-info/mutual-fund-fees', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'fee_type_desc', 'rate', 'last_upd_date'] },
+      { id: '05_involve_parties', title: 'ผู้เกี่ยวข้องกับกองทุน', file: '05_involve_parties.csv', endpoint: '/v2/fund/general-info/involve-parties', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'entity_type', 'entity_name_th', 'last_upd_date'] },
+      { id: '06_factsheet_urls', title: 'URL Fund Fact Sheet', file: '06_factsheet_urls.csv', endpoint: '/v2/fund/factsheet/urls', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'pdf_factsheet', 'as_of_date', 'last_upd_date'] },
+      { id: '07_ipos', title: 'การเสนอขายกองทุนรวม', file: '07_ipos.csv', endpoint: '/v2/fund/factsheet/ipos', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'start_date', 'end_date', 'first_sell_start_date', 'last_upd_date'] },
+      { id: '08_benchmarks', title: 'ดัชนีชี้วัด', file: '08_benchmarks.csv', endpoint: '/v2/fund/factsheet/benchmarks', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'benchmark', 'start_date', 'end_date', 'last_upd_date'] },
+      { id: '09_subscription_redemption_minimums', title: 'ขั้นต่ำซื้อขายคงเหลือ', file: '09_subscription_redemption_minimums.csv', endpoint: '/v2/fund/factsheet/subscription-redemption-minimums', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'minimum_sub', 'minimum_redempt', 'last_upd_date'] },
+      { id: '10_subscription_redemption_periods', title: 'ระยะเวลาซื้อขายคืน', file: '10_subscription_redemption_periods.csv', endpoint: '/v2/fund/factsheet/subscription-redemption-periods', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'type', 'period', 'last_upd_date'] },
+      { id: '11_risk_spectrum', title: 'ระดับความเสี่ยง', file: '11_risk_spectrum.csv', endpoint: '/v2/fund/factsheet/risk-spectrum', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'risk_spectrum', 'risk_spectrum_desc', 'last_upd_date'] },
+      { id: '12_statistics', title: 'ข้อมูลเชิงสถิติ', file: '12_statistics.csv', endpoint: '/v2/fund/factsheet/statistics', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'maximum_drawdown', 'sharpe_ratio', 'last_upd_date'] },
+      { id: '13_dividend_policy', title: 'นโยบายปันผล', file: '13_dividend_policy.csv', endpoint: '/v2/fund/factsheet/dividend-policy', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'dividend_policy', 'last_upd_date'] },
+      { id: '14_fees', title: 'ค่าธรรมเนียม Factsheet', file: '14_fees.csv', endpoint: '/v2/fund/factsheet/fees', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'fee_type_desc', 'actual_value', 'last_upd_date'] },
+      { id: '15_performance', title: 'ผลการดำเนินงานย้อนหลัง', file: '15_performance.csv', endpoint: '/v2/fund/factsheet/performance', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'fund_class_name', 'reference_period', 'performance_value', 'last_upd_date'] },
+      { id: '16_asset_allocation', title: 'สัดส่วนประเภททรัพย์สิน', file: '16_asset_allocation.csv', endpoint: '/v2/fund/factsheet/asset-allocation', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'asset_name', 'asset_ratio', 'last_upd_date'] },
+      { id: '17_top5_holdings', title: 'ทรัพย์สินที่ลงทุน 5 อันดับแรก', file: '17_top5_holdings.csv', endpoint: '/v2/fund/factsheet/top5-holdings', group: 'Factsheet', cadence: 'เดือนละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'asset_seq', 'asset_name', 'asset_ratio', 'last_upd_date'] },
+      { id: '18_outstanding_portfolio', title: 'Portfolio รายไตรมาส', file: '18_outstanding_portfolio.csv', endpoint: '/v2/fund/outstanding/portfolio', group: 'Outstanding', cadence: 'รายไตรมาส', keys: ['proj_id', 'period'], columns: ['proj_id', 'period', 'isin_code', 'issuer', 'percent_nav', 'last_upd_date'] },
+      { id: '19_portfolio_asset_type', title: 'Asset Type รายเดือน', file: '19_portfolio_asset_type.csv', endpoint: '/v2/fund/outstanding/portfolio-asset-type', group: 'Outstanding', cadence: 'รายเดือน', keys: ['proj_id', 'period'], columns: ['proj_id', 'period', 'assetliab_desc', 'percent_nav'] },
+      { id: '20_nav_daily', title: 'NAV รายวัน', file: '20_nav_daily.csv', endpoint: '/v2/fund/daily-info/nav', group: 'Daily', cadence: 'ทุกวัน', keys: ['proj_id', 'fund_class_name', 'nav_date'], columns: ['proj_id', 'fund_class_name', 'nav_date', 'last_val', 'last_upd_date'] },
+      { id: '21_dividend_history', title: 'ประวัติปันผล', file: '21_dividend_history.csv', endpoint: '/v2/fund/daily-info/dividend-history', group: 'Weekly', cadence: 'สัปดาห์ละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'class_abbr_name', 'dividend_date', 'dividend_value', 'last_upd_date'] },
+    ];
+
+    const secImportPrefsKey = 'sec-data-import-prefs-v1';
+    const defaultSelectedDatasetIds = secDatasets
+      .filter(item => {
+        const datasetNo = Number(String(item.id).slice(0, 2));
+        return datasetNo >= 3 && datasetNo <= 19;
+      })
+      .map(item => item.id);
+    const legacyDefaultSelectedDatasetIds = secDatasets
+      .filter(item => !['01_amcs', '02_profiles'].includes(item.id))
+      .map(item => item.id);
+    const sameDatasetSet = (left, right) => (
+      left.length === right.length && left.every(id => right.includes(id))
+    );
+    const configuredGithubToken = String(CONFIG?.GITHUB_TOKEN || window.APP_SECRETS?.githubToken || '').trim();
+    const readSecImportPrefs = () => {
+      try {
+        return JSON.parse(localStorage.getItem(secImportPrefsKey) || '{}') || {};
+      } catch {
+        return {};
+      }
+    };
+    const writeSecImportPrefs = prefs => {
+      try {
+        localStorage.setItem(secImportPrefsKey, JSON.stringify(prefs));
+      } catch {
+        /* ignore preference persistence failures */
+      }
+    };
+    const secImportPrefs = readSecImportPrefs();
+    const savedSelectedDatasetIds = Array.isArray(secImportPrefs.selectedDatasetIds)
+      ? secImportPrefs.selectedDatasetIds.filter(id => secDatasets.some(item => item.id === id))
+      : [];
+    const useDefaultDatasetIds = !savedSelectedDatasetIds.length || sameDatasetSet(savedSelectedDatasetIds, legacyDefaultSelectedDatasetIds);
+    const selectedDatasetIds = new Set(useDefaultDatasetIds ? defaultSelectedDatasetIds : savedSelectedDatasetIds);
+    const secWorkflowUrl = 'https://github.com/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml';
+    const secSpreadsheetId = '1SsL8fXFmKsAfnakrIBTtglZqhErrYz8SfiiZb4wKGDs';
+    const secDataPreparationDefaultTarget = SEC_DATA_PREPARATION_TARGETS[0];
+    const secDataPreparationSpreadsheetId = secDataPreparationDefaultTarget.spreadsheetId;
+    const secDataPreparationSheetUrl = secDataPreparationDefaultTarget.url;
+    const secWorkflowDispatchUrl = 'https://api.github.com/repos/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml/dispatches';
+    const secWorkflowRunsUrl = 'https://api.github.com/repos/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml/runs';
+    const datasetKey = item => item.id.replace(/^\d+_/, '');
+    const dataPreparationRequiredTabs = new Set([
+      '02_profiles',
+      '06_factsheet_urls',
+      '07_ipos',
+      '08_benchmarks',
+      '09_subscription_redemption_minimums',
+      '10_subscription_redemption_periods',
+      '11_risk_spectrum',
+      '12_statistics',
+      '13_dividend_policy',
+      '14_fees',
+      '15_performance',
+      '16_asset_allocation',
+      '17_top5_holdings',
+    ]);
+    const dataPreparationRequirementBadge = item => dataPreparationRequiredTabs.has(item.id)
+      ? '<span class="sec-dataset-status is-selected">จำเป็นต้องมี</span>'
+      : '<span class="sec-dataset-status">เสริม</span>';
+    const chip = (value, tone = '') => `<span class="sec-data-chip ${tone}">${esc(value)}</span>`;
+    const presetOptions = [
+      ['custom', 'เลือก endpoint raw tabs เอง'],
+    ].map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('');
+    const renderChips = (values, tone = '') => values.map(value => chip(value, tone)).join('');
+    const renderDatasetHeader = item => `
+      <th class="sec-dataset-select-cell" title="${esc(item.title)}">
+        <label class="sec-dataset-toggle">
+          <input
+            type="checkbox"
+            class="sec-dataset-check"
+            value="${esc(item.id)}"
+            ${selectedDatasetIds.has(item.id) ? 'checked' : ''}
+          >
+          <span>${esc(datasetKey(item))}</span>
+        </label>
+      </th>`;
+    const renderDatasetCells = () => secDatasets.map(item => `
+      <td data-sec-dataset-cell="${esc(item.id)}">
+        <span class="sec-dataset-status ${selectedDatasetIds.has(item.id) ? 'is-selected' : ''}">
+          ${selectedDatasetIds.has(item.id) ? 'เลือก' : '-'}
+        </span>
+      </td>`).join('');
+    const prefValue = (key, fallback = '') => secImportPrefs[key] ?? fallback;
+    const savedProjectPairs = Array.isArray(secImportPrefs.projectPairs)
+      ? secImportPrefs.projectPairs
+      : String(secImportPrefs.projIds || '').split(/\n+/).filter(Boolean).map(projId => ({ projId, fundClassName: '' }));
+    const normalizedProjectPairs = pairs => {
+      const rows = (pairs || []).map(pair => ({
+        projId: String(pair.projId || '').trim(),
+        fundClassName: String(pair.fundClassName || '').trim(),
+      }));
+      return rows.length ? rows : [{ projId: '', fundClassName: '' }];
+    };
+    const renderProjectPairRows = pairs => normalizedProjectPairs(pairs).map((pair, index) => `
+      <div class="sec-project-pair-row" data-sec-project-pair-row>
+        <input
+          class="fund-input sec-project-pair-proj"
+          type="text"
+          value="${esc(pair.projId)}"
+          placeholder="${index === 0 ? 'เว้นว่างเพื่อใช้ Registered list' : 'proj_id'}"
+        >
+        <input
+          class="fund-input sec-project-pair-class"
+          type="text"
+          value="${esc(pair.fundClassName)}"
+          placeholder="fund_class_name เว้นว่างได้"
+        >
+        <button class="btn btn-secondary sec-project-pair-remove" type="button" title="ลบบรรทัด">ลบ</button>
+      </div>
+    `).join('');
+    const spreadsheetIdFromValue = value => {
+      const text = String(value || '').trim();
+      const match = text.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+      return match ? match[1] : text;
+    };
+    const masterViewColumns = {
+      '01_amcs': { label: 'amc_name', values: ['บริษัทหลักทรัพย์จัดการกองทุนตัวอย่าง', 'บริษัทหลักทรัพย์จัดการกองทุนตัวอย่าง'] },
+      '02_profiles': { label: 'fund_class_name', values: ['main', 'R'] },
+      '03_specifications': { label: 'specifications', values: ['Thai ESG | RMF', 'SSF'] },
+      '04_mutual_fund_fees': { label: 'mutual_fund_fees', values: ['Management Fee 1.07% | Total Fee 1.38%', 'Management Fee 0.95% | Total Fee 1.22%'] },
+      '05_involve_parties': { label: 'involve_parties', values: ['Registrar: TSD | Trustee: Bank', 'Registrar: TSD | Trustee: Bank'] },
+      '06_factsheet_urls': { label: 'factsheet_url_latest', values: ['https://.../factsheet_M0000.pdf', 'https://.../factsheet_M0001.pdf'] },
+      '07_ipos': { label: 'ipo_period', values: ['2009-01-05 - 2009-01-12', '2009-02-02 - 2009-02-09'] },
+      '08_benchmarks': { label: 'benchmark_latest', values: ['SET TRI | MSCI ACWI', 'SET TRI'] },
+      '09_subscription_redemption_minimums': { label: 'minimums', values: ['Sub 1,000 | Redeem 1,000', 'Sub 500 | Redeem 500'] },
+      '10_subscription_redemption_periods': { label: 'subscription_redemption_periods', values: ['ทุกวันทำการ | T+3', 'ทุกวันทำการ | T+2'] },
+      '11_risk_spectrum': { label: 'risk_spectrum', values: ['RS6', 'RS5'] },
+      '12_statistics': { label: 'statistics', values: ['Max DD -12.4 | Sharpe 0.51', 'Max DD -9.8 | Sharpe 0.62'] },
+      '13_dividend_policy': { label: 'dividend_policy', values: ['จ่ายเงินปันผล', 'ไม่จ่ายเงินปันผล'] },
+      '14_fees': { label: 'factsheet_fees', values: ['Front-end 1.00 | Total 1.38', 'Front-end 0.50 | Total 1.22'] },
+      '15_performance': { label: 'performance_latest', values: ['1Y 8.42 | 3Y 5.10 | 5Y 4.88', '1Y 6.15 | 3Y 4.22 | 5Y 3.90'] },
+      '16_asset_allocation': { label: 'asset_allocation', values: ['Equity 82.5 | Cash 7.1', 'Bond 65.2 | Equity 21.3'] },
+      '17_top5_holdings': { label: 'top5_holdings', values: ['AAPL 8.2%, MSFT 7.1%, NVDA 6.4%', 'PTT 6.1%, CPALL 5.4%, AOT 4.9%'] },
+      '18_outstanding_portfolio': { label: 'outstanding_portfolio', values: ['202603 | 1,246 holdings', '202603 | 842 holdings'] },
+      '19_portfolio_asset_type': { label: 'portfolio_asset_type', values: ['202605 | Equity 74.2 | Cash 4.3', '202605 | Bond 58.8 | Cash 10.2'] },
+      '20_nav_daily': { label: 'nav_latest', values: ['2026-06-24 | NAV 12.4567', '2026-06-24 | NAV 10.2345'] },
+      '21_dividend_history': { label: 'dividend_history', values: ['ล่าสุด 2026-05-15 | 0.18', 'ล่าสุด 2026-04-18 | 0.12'] },
+    };
+    const masterBaseRows = [
+      { proj_id: 'M0000_2552', fund_name: 'กองทุนตัวอย่าง', status: 'Registered', last_upd_date: '2026-06-24' },
+      { proj_id: 'M0001_2552', fund_name: 'กองทุนตัวอย่าง Class R', status: 'Registered', last_upd_date: '2026-06-24' },
+    ];
+    const renderMasterViewHead = ids => `
+      <tr>
+        <th>proj_id</th>
+        <th>fund_name</th>
+        <th>status</th>
+        <th>last_upd_date</th>
+        ${ids.map(id => `<th>${esc(masterViewColumns[id]?.label || datasetKey({ id }))}</th>`).join('')}
+      </tr>`;
+    const renderMasterViewBody = ids => masterBaseRows.map((row, rowIndex) => `
+      <tr>
+        <td>${esc(row.proj_id)}</td>
+        <td>${esc(row.fund_name)}</td>
+        <td>${esc(row.status)}</td>
+        <td>${esc(row.last_upd_date)}</td>
+        ${ids.map(id => `<td>${esc(masterViewColumns[id]?.values[rowIndex] || '-')}</td>`).join('')}
+      </tr>`).join('');
+
+    area.innerHTML = `
+      <div class="sec-data-layout">
+        <div class="card sec-data-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">1</span>กำหนดเงื่อนไขการดึงข้อมูล SEC</span>
+            <div class="page-tools-meta">
+              <span class="badge badge-data-origin">21 datasets</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="sec-data-form-grid">
+              <label class="fund-field sec-data-field-main">
+                <span>รูปแบบการเลือกข้อมูล</span>
+                <select class="fund-input sec-data-highlight" id="sec-dataset-preset">
+                  ${presetOptions}
+                </select>
+              </label>
+              <label class="fund-field">
+                <span>โหมดการดึง</span>
+                <select class="fund-input sec-data-highlight" id="sec-fund-status">
+                  <option value="Registered" ${prefValue('fundStatus', 'Registered') === 'Registered' ? 'selected' : ''}>Registered only</option>
+                  <option value="" ${prefValue('fundStatus', 'Registered') === '' ? 'selected' : ''}>ดึงทุกสถานะ</option>
+                </select>
+              </label>
+              <div class="fund-field sec-data-field-full sec-project-pair-editor">
+                <span>คู่ proj_id และ fund_class_name</span>
+                <div class="sec-project-pair-head">
+                  <span>proj_id</span>
+                  <span>fund_class_name</span>
+                  <span></span>
+                </div>
+                <div class="sec-project-pair-list" id="sec-project-pair-list">
+                  ${renderProjectPairRows(savedProjectPairs)}
+                </div>
+                <button class="btn btn-secondary sec-project-pair-add" id="sec-add-project-pair" type="button">เพิ่ม proj_id และ fund_class_name ที่ต้องการค้นหา</button>
+              </div>
+              <label class="fund-field sec-data-field-half">
+                <span>วันที่เริ่มต้น</span>
+                <input class="fund-input" id="sec-start-date" type="date" value="${esc(prefValue('startDate', '2026-01-01'))}">
+              </label>
+              <label class="fund-field sec-data-field-half">
+                <span>วันที่สิ้นสุด</span>
+                <input class="fund-input" id="sec-end-date" type="date" value="${esc(prefValue('endDate', '2026-06-30'))}">
+              </label>
+              <label class="fund-field sec-data-field-half">
+                <span>period เริ่มต้น</span>
+                <input class="fund-input" id="sec-start-period" type="text" value="${esc(prefValue('startPeriod', '202601'))}" placeholder="YYYYMM">
+              </label>
+              <label class="fund-field sec-data-field-half">
+                <span>period สิ้นสุด</span>
+                <input class="fund-input" id="sec-end-period" type="text" value="${esc(prefValue('endPeriod', '202606'))}" placeholder="YYYYMM">
+              </label>
+              <label class="fund-field sec-data-field-half">
+                <span>registered_max_funds (ระบุเป็น 0 หากต้องการจะทุกกอง)</span>
+                <input class="fund-input sec-data-highlight" id="sec-registered-max-funds" type="number" min="0" step="1" value="${esc(prefValue('registeredMaxFunds', '300'))}">
+              </label>
+              <label class="fund-field sec-data-field-half">
+                <span>max_pages</span>
+                <input class="fund-input sec-data-highlight" id="sec-max-pages" type="number" min="0" step="1" value="${esc(prefValue('maxPages', '0'))}">
+              </label>
+              <label class="fund-field sec-data-field-main">
+                <span>GitHub token</span>
+                <input class="fund-input" id="sec-github-token" type="password" value="${esc(configuredGithubToken)}" placeholder="ใส่ token ตอนจะรัน หรือกำหนดไว้ใน config.override.js">
+              </label>
+              <div class="sec-data-actions">
+                <button class="btn btn-secondary" id="sec-open-master-sheet" type="button">เปิด Google Sheet</button>
+                <button class="btn btn-secondary" id="sec-check-tabs" type="button">ตรวจสถานะ Tabs</button>
+                <button class="btn sec-data-primary-btn" id="sec-run-workflow" type="button">รัน GitHub Actions</button>
+              </div>
+            </div>
+            <div class="sec-workflow-panel">
+              <div class="sec-workflow-copy">
+                <strong>ระยะที่ 2:</strong>
+                ปุ่มนี้จะส่งคำสั่งรัน workflow บน GitHub Actions จริง โดยค่าเริ่มต้นจะเขียนข้อมูลแยกเป็น tab raw ของแต่ละ endpoint
+              </div>
+              <div class="sec-workflow-input-grid">
+                <div>
+                  <span>workflow</span>
+                  <strong>SEC Data Preparation to Google Sheet</strong>
+                </div>
+                <div>
+                  <span>output_mode</span>
+                  <strong id="sec-workflow-output-mode">raw_tabs</strong>
+                </div>
+                <div>
+                  <span>dataset_preset</span>
+                  <strong id="sec-workflow-preset">custom</strong>
+                </div>
+                <div>
+                  <span>custom_datasets</span>
+                  <strong id="sec-workflow-datasets">specifications, mutual_fund_fees, factsheet_urls, benchmarks</strong>
+                </div>
+                <div>
+                  <span>registered_max_funds</span>
+                  <strong id="sec-workflow-registered-max">300</strong>
+                </div>
+                <div>
+                  <span>max_pages</span>
+                  <strong id="sec-workflow-max-pages">0</strong>
+                </div>
+              </div>
+              <div class="sec-workflow-warning">
+                เมื่อ workflow เขียนสำเร็จ ระบบจะล้างข้อมูลเดิมใน tab endpoint ที่เลือก แล้วเขียนข้อมูลชุดล่าสุดใหม่ทั้งหมด
+              </div>
+              <div class="sec-workflow-status" id="sec-workflow-status" hidden></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec-data-summary-grid">
+          <div class="sec-data-summary-card">
+            <span>Registered proj_id</span>
+            <strong>02_profiles เป็นฐาน</strong>
+          </div>
+          <div class="sec-data-summary-card">
+            <span>Join key หลัก</span>
+            <strong>proj_id + fund_class_name</strong>
+          </div>
+          <div class="sec-data-summary-card">
+            <span>เลือกไว้ตอนนี้</span>
+            <strong><span id="sec-selected-count">${selectedDatasetIds.size}</span> ชุดข้อมูล</strong>
+          </div>
+          <div class="sec-data-summary-card">
+            <span>รูปแบบไฟล์หลังบ้าน</span>
+            <strong>Raw endpoint tabs</strong>
+          </div>
+        </div>
+
+        <div class="card sec-data-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">2</span>เลือก endpoint และตรวจสถานะ raw tabs</span>
+            <div class="page-tools-meta"><span class="badge badge-success">อ่านจาก tab จริง</span></div>
+          </div>
+          <div class="card-body">
+            <div class="sec-command-preview">
+              <span>ชุดข้อมูลที่จะดึง</span>
+              <code id="sec-dataset-command">specifications, mutual_fund_fees, factsheet_urls, benchmarks</code>
+            </div>
+            <div class="sec-master-note">
+              ใช้ checkbox ด้านหน้าเพื่อเลือกว่าจะดึง endpoint ไหน ส่วนสถานะจะแสดงจาก Google Sheet ปลายทาง เช่น <strong>02_profiles</strong>, <strong>06_factsheet_urls</strong>, <strong>20_nav_daily</strong>
+            </div>
+            <div class="table-scroll sec-table-scroll">
+              <table class="sec-data-preview-table sec-tab-status-table">
+                <thead>
+                  <tr>
+                    <th>เลือก</th>
+                    <th>ความจำเป็นของข้อมูล</th>
+                    <th>Tab</th>
+                    <th>ชุดข้อมูล</th>
+                    <th>สถานะ</th>
+                    <th>หัวคอลัมน์หลัก</th>
+                  </tr>
+                </thead>
+                <tbody id="sec-tab-status-body">
+                  ${secDatasets.map(item => `
+                    <tr data-sec-tab-status-row="${esc(item.id)}" data-sec-dataset-row="${esc(item.id)}" class="${selectedDatasetIds.has(item.id) ? 'is-selected' : ''}">
+                      <td>
+                        <label class="sec-dataset-toggle sec-dataset-toggle-inline">
+                          <input
+                            type="checkbox"
+                            class="sec-dataset-check"
+                            value="${esc(item.id)}"
+                            ${selectedDatasetIds.has(item.id) ? 'checked' : ''}
+                          >
+                          <span>${selectedDatasetIds.has(item.id) ? 'เลือก' : 'ข้าม'}</span>
+                        </label>
+                      </td>
+                      <td>${dataPreparationRequirementBadge(item)}</td>
+                      <td><code>${esc(item.id)}</code></td>
+                      <td>${esc(item.title)}</td>
+                      <td><span class="sec-dataset-status">ยังไม่ได้ตรวจ</span></td>
+                      <td>${renderChips(item.columns)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="card sec-data-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">3</span>รายละเอียดหัวข้อมูล SEC ทั้ง 21 ชุด</span>
+            <div class="page-tools-meta"><span class="badge badge-data-origin">catalog</span></div>
+          </div>
+          <div class="card-body">
+            <div class="table-scroll">
+              <table class="sec-data-catalog-table">
+                <thead>
+                  <tr>
+                    <th>ชุดข้อมูล</th>
+                    <th>ชื่อข้อมูล</th>
+                    <th>ไฟล์ CSV</th>
+                    <th>กลุ่ม</th>
+                    <th>ความถี่</th>
+                    <th>Key เชื่อมโยง</th>
+                    <th>หัวคอลัมน์หลักที่จะดึง</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${secDatasets.map(item => `
+                    <tr data-sec-dataset-row="${esc(item.id)}" class="${selectedDatasetIds.has(item.id) ? 'is-selected' : ''}">
+                      <td><strong>${esc(item.id)}</strong></td>
+                      <td>
+                        <div class="sec-data-title-cell">
+                          <strong>${esc(item.title)}</strong>
+                          <span>${esc(item.endpoint)}</span>
+                        </div>
+                      </td>
+                      <td><code>${esc(item.file)}</code></td>
+                      <td>${chip(item.group, 'sec-data-chip-blue')}</td>
+                      <td>${chip(item.cadence, item.cadence === 'ทุกวัน' ? 'sec-data-chip-green' : '')}</td>
+                      <td>${renderChips(item.keys, 'sec-data-chip-key')}</td>
+                      <td>${renderChips(item.columns)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>`;
+
+    const presetMap = {
+      custom: null,
+    };
+
+    const syncSelectedState = () => {
+      const selectedIds = $$('.sec-dataset-check:checked', area).map(input => input.value);
+      const selectedSet = new Set(selectedIds);
+      const selectedDatasetKeys = selectedIds.map(id => datasetKey(secDatasets.find(item => item.id === id) || { id }));
+      const presetValue = 'custom';
+      $('#sec-selected-count', area).textContent = String(selectedIds.length);
+      $('#sec-dataset-command', area).textContent = selectedDatasetKeys.join(', ') || 'ยังไม่ได้เลือกหัวข้อมูล';
+      $('#sec-workflow-preset', area).textContent = presetValue === 'custom' ? 'custom datasets' : presetValue;
+      $('#sec-workflow-datasets', area).textContent = presetValue === 'custom' ? (selectedDatasetKeys.join(', ') || '-') : '-';
+      $('#sec-workflow-output-mode', area).textContent = 'raw_tabs';
+      $('#sec-workflow-registered-max', area).textContent = ($('#sec-registered-max-funds', area)?.value || '0').trim();
+      $('#sec-workflow-max-pages', area).textContent = ($('#sec-max-pages', area)?.value || '0').trim();
+      $$('[data-sec-dataset-row]', area).forEach(row => {
+        row.classList.toggle('is-selected', selectedSet.has(row.dataset.secDatasetRow));
+      });
+      $$('[data-sec-dataset-cell]', area).forEach(cell => {
+        const isSelected = selectedSet.has(cell.dataset.secDatasetCell);
+        cell.innerHTML = `<span class="sec-dataset-status ${isSelected ? 'is-selected' : ''}">${isSelected ? 'เลือก' : '-'}</span>`;
+      });
+      $$('.sec-dataset-toggle-inline', area).forEach(label => {
+        const input = $('input', label);
+        const text = $('span', label);
+        if (input && text) text.textContent = input.checked ? 'เลือก' : 'ข้าม';
+      });
+    };
+
+    const readProjectPairs = () => $$('[data-sec-project-pair-row]', area).map(row => ({
+      projId: $('.sec-project-pair-proj', row)?.value.trim() || '',
+      fundClassName: $('.sec-project-pair-class', row)?.value.trim() || '',
+    }));
+
+    const activeProjectPairs = () => readProjectPairs().filter(pair => pair.projId);
+
+    const projectPairPayload = () => activeProjectPairs()
+      .map(pair => `${pair.projId}|${pair.fundClassName}`)
+      .join('\n');
+
+    const projectIdsPayload = () => {
+      const ids = [];
+      const seen = new Set();
+      activeProjectPairs().forEach(pair => {
+        if (!seen.has(pair.projId)) {
+          seen.add(pair.projId);
+          ids.push(pair.projId);
+        }
+      });
+      return ids.join('\n');
+    };
+
+    const renderProjectPairEditorRows = pairs => {
+      const list = $('#sec-project-pair-list', area);
+      if (!list) return;
+      list.innerHTML = renderProjectPairRows(pairs);
+    };
+
+    const saveSecImportPrefs = () => {
+      writeSecImportPrefs({
+        datasetPreset: $('#sec-dataset-preset', area)?.value || 'custom',
+        selectedDatasetIds: $$('.sec-dataset-check:checked', area).map(input => input.value),
+        fundStatus: $('#sec-fund-status', area)?.value || '',
+        projectPairs: readProjectPairs(),
+        projIds: projectIdsPayload(),
+        fundClassName: '',
+        startDate: $('#sec-start-date', area)?.value || '',
+        endDate: $('#sec-end-date', area)?.value || '',
+        startPeriod: $('#sec-start-period', area)?.value || '',
+        endPeriod: $('#sec-end-period', area)?.value || '',
+        registeredMaxFunds: $('#sec-registered-max-funds', area)?.value || '0',
+        maxPages: $('#sec-max-pages', area)?.value || '0',
+        outputMode: 'raw_tabs',
+      });
+    };
+
+    const savedPreset = secImportPrefs.datasetPreset || 'custom';
+    if ($('#sec-dataset-preset', area) && presetMap[savedPreset] !== undefined) {
+      $('#sec-dataset-preset', area).value = savedPreset;
+    }
+
+    $$('.sec-dataset-check', area).forEach(input => {
+      input.addEventListener('change', () => {
+        $('#sec-dataset-preset', area).value = 'custom';
+        syncSelectedState();
+        saveSecImportPrefs();
+      });
+    });
+
+    $('#sec-dataset-preset', area)?.addEventListener('change', e => {
+      const values = presetMap[e.target.value];
+      if (values) {
+        const next = new Set(values);
+        $$('.sec-dataset-check', area).forEach(input => {
+          input.checked = next.has(input.value);
+        });
+      }
+      syncSelectedState();
+      saveSecImportPrefs();
+    });
+
+    let secWorkflowPollTimer = null;
+
+    const updateWorkflowStatus = (message, tone = '') => {
+      const statusEl = $('#sec-workflow-status', area);
+      if (!statusEl) return;
+      statusEl.hidden = !message;
+      statusEl.className = `sec-workflow-status ${tone}`.trim();
+      statusEl.innerHTML = message || '';
+    };
+
+    const workflowStatusLabel = run => {
+      if (!run) return 'ยังไม่พบ run';
+      if (run.status === 'completed') {
+        if (run.conclusion === 'success') return 'สำเร็จ';
+        if (run.conclusion === 'failure') return 'ล้มเหลว';
+        if (run.conclusion === 'cancelled') return 'ถูกยกเลิก';
+        return run.conclusion || 'เสร็จแล้ว';
+      }
+      if (run.status === 'in_progress') return 'กำลังรัน';
+      if (run.status === 'queued') return 'รอคิว';
+      return run.status || 'กำลังตรวจสอบ';
+    };
+
+    const workflowStatusTone = run => {
+      if (!run) return 'is-running';
+      if (run.status !== 'completed') return 'is-running';
+      return run.conclusion === 'success' ? 'is-success' : 'is-error';
+    };
+
+    const workflowRunMessage = (run, prefix = 'สถานะล่าสุด') => {
+      if (!run) return `${prefix}: ยังไม่พบ workflow run ล่าสุดจาก GitHub`;
+      const label = workflowStatusLabel(run);
+      const title = run.display_title || run.name || 'SEC Data Preparation to Google Sheet';
+      const runNumber = run.run_number ? `#${run.run_number}` : '';
+      const link = run.html_url ? ` <a href="${esc(run.html_url)}" target="_blank" rel="noopener noreferrer">เปิดรายละเอียด</a>` : '';
+      return `${prefix}: <strong>${esc(label)}</strong> ${esc(runNumber)} - ${esc(title)}${link}`;
+    };
+
+    const fetchLatestWorkflowRun = async token => {
+      const url = `${secWorkflowRunsUrl}?branch=main&event=workflow_dispatch&per_page=1`;
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || `GitHub API error ${response.status}`);
+      }
+
+      const payload = await response.json();
+      return payload.workflow_runs?.[0] || null;
+    };
+
+    const stopWorkflowPolling = () => {
+      if (!secWorkflowPollTimer) return;
+      window.clearInterval(secWorkflowPollTimer);
+      secWorkflowPollTimer = null;
+    };
+
+    const startWorkflowPolling = token => {
+      stopWorkflowPolling();
+      let pollCount = 0;
+      const maxPolls = 240;
+
+      const poll = async () => {
+        pollCount += 1;
+        try {
+          const run = await fetchLatestWorkflowRun(token);
+          updateWorkflowStatus(workflowRunMessage(run), workflowStatusTone(run));
+          if (run?.status === 'completed' || pollCount >= maxPolls) {
+            stopWorkflowPolling();
+          }
+        } catch (err) {
+          stopWorkflowPolling();
+          updateWorkflowStatus(`ส่งคำสั่งรันแล้ว แต่ตรวจสถานะไม่ได้: ${esc(err.message || 'GitHub API error')}`, 'is-warning');
+        }
+      };
+
+      poll();
+      secWorkflowPollTimer = window.setInterval(poll, 10000);
+    };
+
+    const workflowInputs = () => {
+      const presetValue = 'custom';
+      const selectedIds = $$('.sec-dataset-check:checked', area).map(input => input.value);
+      const selectedDatasetKeys = selectedIds.map(id => datasetKey(secDatasets.find(item => item.id === id) || { id }));
+      const registeredMaxFunds = ($('#sec-registered-max-funds', area)?.value || '0').trim() || '0';
+      const maxPages = ($('#sec-max-pages', area)?.value || '0').trim() || '0';
+      return {
+        output_mode: 'raw_tabs',
+        tab_name: 'data_preparation',
+        dataset_preset: presetValue === 'custom' ? 'master_core' : presetValue,
+        custom_datasets: presetValue === 'custom' ? selectedDatasetKeys.join(',') : '',
+        proj_id: '',
+        proj_ids: projectIdsPayload(),
+        proj_class_pairs: projectPairPayload(),
+        fund_status: ($('#sec-fund-status', area)?.value || '').trim(),
+        registered_max_funds: registeredMaxFunds,
+        fund_class_name: '',
+        latest: 'true',
+        start_date: ($('#sec-start-date', area)?.value || '').trim(),
+        end_date: ($('#sec-end-date', area)?.value || '').trim(),
+        start_period: ($('#sec-start-period', area)?.value || '').trim(),
+        end_period: ($('#sec-end-period', area)?.value || '').trim(),
+        start_nav_date: ($('#sec-start-date', area)?.value || '').trim(),
+        end_nav_date: ($('#sec-end-date', area)?.value || '').trim(),
+        max_pages: maxPages,
+        continue_on_error: 'true',
+      };
+    };
+
+    [
+      'sec-fund-status',
+      'sec-start-date',
+      'sec-end-date',
+      'sec-start-period',
+      'sec-end-period',
+      'sec-registered-max-funds',
+      'sec-max-pages',
+    ].forEach(id => {
+      $(`#${id}`, area)?.addEventListener('input', () => {
+        syncSelectedState();
+        saveSecImportPrefs();
+      });
+      $(`#${id}`, area)?.addEventListener('change', () => {
+        syncSelectedState();
+        saveSecImportPrefs();
+      });
+    });
+
+    $('#sec-add-project-pair', area)?.addEventListener('click', () => {
+      renderProjectPairEditorRows([...readProjectPairs(), { projId: '', fundClassName: '' }]);
+      saveSecImportPrefs();
+    });
+
+    $('#sec-project-pair-list', area)?.addEventListener('click', event => {
+      const button = event.target.closest('.sec-project-pair-remove');
+      if (!button) return;
+      const rows = readProjectPairs();
+      const rowEl = button.closest('[data-sec-project-pair-row]');
+      const rowIndex = $$('[data-sec-project-pair-row]', area).indexOf(rowEl);
+      const nextRows = rows.filter((_row, index) => index !== rowIndex);
+      renderProjectPairEditorRows(nextRows.length ? nextRows : [{ projId: '', fundClassName: '' }]);
+      saveSecImportPrefs();
+    });
+
+    $('#sec-project-pair-list', area)?.addEventListener('input', saveSecImportPrefs);
+
+    $('#sec-run-workflow', area)?.addEventListener('click', async () => {
+      const token = (($('#sec-github-token', area)?.value || '').trim() || configuredGithubToken);
+      if (!token) {
+        updateWorkflowStatus('กรุณาใส่ GitHub token ก่อนรัน workflow', 'is-warning');
+        toast('กรุณาใส่ GitHub token ก่อนรัน workflow', 'warning');
+        return;
+      }
+
+      const runButton = $('#sec-run-workflow', area);
+      const inputs = workflowInputs();
+      runButton.disabled = true;
+      stopWorkflowPolling();
+      updateWorkflowStatus('กำลังส่งคำสั่งรัน GitHub Actions...', 'is-running');
+
+      try {
+        const response = await fetch(secWorkflowDispatchUrl, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+          body: JSON.stringify({
+            ref: 'main',
+            inputs,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          if (response.status === 422 && errorText.includes('output_spreadsheet_id')) {
+            throw new Error('GitHub workflow บน repo ยังไม่รองรับ output_spreadsheet_id กรุณาอัปโหลดไฟล์ workflow เวอร์ชันล่าสุดก่อน แล้วค่อยรันใหม่');
+          }
+          throw new Error(errorText || `GitHub API error ${response.status}`);
+        }
+
+        updateWorkflowStatus('ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...', 'is-running');
+        toast('รัน GitHub Actions สำเร็จแล้ว', 'success', 5000);
+        startWorkflowPolling(token);
+      } catch (err) {
+        updateWorkflowStatus(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'is-error');
+        toast(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'error', 7000);
+      } finally {
+        runButton.disabled = false;
+      }
+    });
+
+    $('#sec-open-master-sheet', area)?.addEventListener('click', () => {
+      window.open(`https://docs.google.com/spreadsheets/d/${secSpreadsheetId}/edit#gid=0`, '_blank', 'noopener,noreferrer');
+    });
+
+    $('#sec-check-tabs', area)?.addEventListener('click', async () => {
+      const button = $('#sec-check-tabs', area);
+      button.disabled = true;
+      try {
+        const meta = await SheetsAPI.getSheetTabs(secSpreadsheetId);
+        const tabSet = new Set(meta.tabs || []);
+        const readRows = await Promise.all(secDatasets
+          .map(async item => {
+            if (!tabSet.has(item.id)) return { id: item.id, exists: false, rowCount: 0 };
+            try {
+              const values = await SheetsAPI.fetchSheetData(secSpreadsheetId, item.id);
+              return { id: item.id, exists: true, rowCount: Math.max(0, values.length - 1) };
+            } catch {
+              return { id: item.id, exists: true, rowCount: null };
+            }
+          }));
+        const statusById = new Map(readRows.map(item => [item.id, item]));
+        $$('[data-sec-tab-status-row]', area).forEach(row => {
+          const status = statusById.get(row.dataset.secTabStatusRow);
+          const cell = row.children[3];
+          if (!status?.exists) {
+            cell.innerHTML = '<span class="sec-dataset-status is-missing">ยังไม่มี</span>';
+            return;
+          }
+          const suffix = Number.isFinite(status.rowCount) ? ` · ${status.rowCount} rows` : '';
+          cell.innerHTML = `<span class="sec-dataset-status is-selected">พร้อม${esc(suffix)}</span>`;
+        });
+        toast('ตรวจสถานะ SEC tabs แล้ว', 'success');
+      } catch (err) {
+        toast(err.message || 'ตรวจสถานะ tab ไม่สำเร็จ', 'error', 7000);
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    syncSelectedState();
+  },
+
+  /* ── MASTER MAPPING MANAGER ── */
+  async fundDataManager(area) {
+    setLoading(area, 'กำลังโหลดหน้าแก้ไขข้อมูลกองทุน...');
+
+    let rawRows;
+    let masterAnnualizedRows = [];
+    let masterAnnualizedError = '';
+    try {
+      rawRows = await fetchCached('select-fund');
+      await loadFundOverrides(true);
+      await loadMasterAllocations(true);
+    } catch (e) {
+      setError(area, e.message, 'fund-data-manager');
+      return;
+    }
+    try {
+      masterAnnualizedRows = await fetchCached('master-annualized-v2');
+    } catch (e) {
+      masterAnnualizedError = e.message || String(e);
+    }
+
+    let catalog = applyFundOverrides(buildSelectedFundsCatalog(rawRows));
+    const masterHeaders = masterAnnualizedRows[0] || [];
+    const MASTER_CI = {
+      name: findColumnIndex(masterHeaders, ['Group/Investment']),
+      isin: findColumnIndex(masterHeaders, ['ISIN']),
+      currency: findColumnIndex(masterHeaders, ['Base Currency']),
+      r3m: findColumnIndex(masterHeaders, ['Return(Cumulative) 3M']),
+      r6m: findColumnIndex(masterHeaders, ['Return(Cumulative) 6M']),
+      rytd: findColumnIndex(masterHeaders, ['Return(Cumulative) YTD']),
+      r1y: findColumnIndex(masterHeaders, ['Return(Cumulative) 1Y']),
+      r3y: findColumnIndex(masterHeaders, ['Return(Annualized) 3Y']),
+      r5y: findColumnIndex(masterHeaders, ['Return(Annualized) 5Y']),
+      r10y: findColumnIndex(masterHeaders, ['Return(Annualized) 10Y']),
+    };
+    const masterGet = (row, idx) => idx >= 0 ? String(row[idx] ?? '').trim() : '';
+    const masterAnnualizedByIsin = new Map();
+    masterAnnualizedRows.slice(1).forEach(row => {
+      const isin = masterGet(row, MASTER_CI.isin);
+      if (isin && !masterAnnualizedByIsin.has(isin)) {
+        masterAnnualizedByIsin.set(isin, row);
+      }
+    });
+    const masterNameByIsin = new Map();
+    const masterCurrencyByIsin = new Map();
+    masterAnnualizedRows.slice(1).forEach(row => {
+      const isin = masterGet(row, MASTER_CI.isin);
+      if (!isin) return;
+      if (!masterNameByIsin.has(isin)) masterNameByIsin.set(isin, masterGet(row, MASTER_CI.name));
+      if (!masterCurrencyByIsin.has(isin)) masterCurrencyByIsin.set(isin, masterGet(row, MASTER_CI.currency));
+    });
+    const masterPerf = (masterId) => {
+      const row = masterAnnualizedByIsin.get(String(masterId || '').trim());
+      if (!row) return null;
+      return {
+        currency: masterGet(row, MASTER_CI.currency),
+        r3m: masterGet(row, MASTER_CI.r3m),
+        r6m: masterGet(row, MASTER_CI.r6m),
+        rytd: masterGet(row, MASTER_CI.rytd),
+        r1y: masterGet(row, MASTER_CI.r1y),
+        r3y: masterGet(row, MASTER_CI.r3y),
+        r5y: masterGet(row, MASTER_CI.r5y),
+        r10y: masterGet(row, MASTER_CI.r10y),
+      };
+    };
+    const masterOptions = [...new Map(catalog
+      .filter(f => f.masterId || f.masterName)
+      .map(f => [
+        `${f.masterId || ''}__${f.masterName || ''}`,
+        {
+          masterId: f.masterId || '',
+          masterName: f.masterName || '',
+          label: `${f.masterId || '-'} · ${f.masterName || f.code}`,
+        },
+      ])).values()]
+      .sort((a, b) => String(a.label).localeCompare(String(b.label), 'th'));
+    masterAnnualizedByIsin.forEach((row, isin) => {
+      if (masterOptions.some(option => option.masterId === isin)) return;
+      masterOptions.push({
+        masterId: isin,
+        masterName: masterGet(row, MASTER_CI.name),
+        label: `${isin} · ${masterGet(row, MASTER_CI.name)}`,
+      });
+    });
+    masterOptions.sort((a, b) => String(a.label).localeCompare(String(b.label), 'th'));
+    const opt = (val, label, cur) => `<option value="${esc(val)}" ${cur === val ? 'selected' : ''}>${esc(label)}</option>`;
+
+    const findSelectedFund = () => {
+      return catalog.find(f => f.key === State.fundDataManager.selectedKey) || null;
+    };
+
+    const getMapping = (fund) => {
+      const draft = State.fundDataManager.draftMapping;
+      if (draft?.key && draft.key === fund?.key) return draft;
+      const saved = State.masterAllocations?.items?.[fund?.key || ''];
+      if (saved?.allocations?.length) return saved;
+      return {
+        key: fund?.key || '',
+        thaiFundCode: fund?.code || '',
+        thaiFundName: fund?.name || '',
+        allocations: [{
+          masterId: fund?.masterId || '',
+          masterName: fund?.masterName || '',
+          weight: 100,
+        }],
+        note: '',
+        sourceDate: '',
+        status: 'Active',
+      };
+    };
+
+    const renderImpactRows = () => {
+      const impacts = [
+        ['ค่าธรรมเนียม', 'สามารถนำ weight ไปคำนวณ Ongoing Cost / TER แบบถ่วงน้ำหนักได้'],
+        ['Master Fund Report', 'ใช้แสดงว่ากองทุนไทย 1 กองอ้างอิง Master Fund มากกว่า 1 กอง'],
+        ['Presentation / Export', 'ควรแสดง mapping และสัดส่วนเมื่อกองทุนมีหลาย Master'],
+        ['Top 10 Holding', 'ไม่ใช้ mapping ชุดนี้ตาม scope ปัจจุบัน'],
+      ];
+      return impacts.map(([page, detail]) => `
+        <tr>
+          <td class="td-code">${esc(page)}</td>
+          <td>${esc(detail)}</td>
+          <td>${page === 'Top 10 Holding' ? '<span class="badge badge-primary">ไม่กระทบ</span>' : '<span class="badge badge-warning">ใช้เมื่อรองรับสูตร</span>'}</td>
+        </tr>
+      `).join('');
+    };
+
+    const fundSearchMatches = (searchValue = '') => {
+      const searchQuery = String(searchValue || '').trim().toLowerCase();
+      return catalog.filter(f => {
+        const mapping = State.masterAllocations?.items?.[f.key];
+        if (State.fundDataManager.showOnlyMapped && !mapping) return false;
+        if (!searchQuery) return true;
+        return [
+          f.code,
+          f.name,
+          f.category,
+          f.masterId,
+          f.masterName,
+        ].some(value => String(value || '').toLowerCase().includes(searchQuery));
+      }).sort((a, b) => {
+        const aMapped = !!State.masterAllocations?.items?.[a.key];
+        const bMapped = !!State.masterAllocations?.items?.[b.key];
+        if (aMapped !== bMapped) return aMapped ? -1 : 1;
+        return String(a.code).localeCompare(String(b.code), 'th');
+      });
+    };
+
+    const render = () => {
+      let visible = fundSearchMatches(State.fundDataManager.query);
+
+      if (!State.fundDataManager.selectedKey && visible[0]) {
+        State.fundDataManager.selectedKey = visible[0].key;
+      }
+      const selected = findSelectedFund() || visible[0] || catalog[0] || null;
+      if (selected?.key && State.fundDataManager.selectedKey !== selected.key) {
+        State.fundDataManager.selectedKey = selected.key;
+      }
+
+      const mapping = selected ? getMapping(selected) : null;
+      const allocationCount = Object.keys(State.masterAllocations?.items || {}).length;
+      const totalWeight = (mapping?.allocations || []).reduce((sum, item) => sum + (parseFloat(item.weight) || 0), 0);
+      const isBalanced = Math.abs(totalWeight - 100) <= 0.01;
+      const weightedKeys = ['r3m','r6m','rytd','r1y','r3y','r5y','r10y'];
+      const buildWeightedSummary = (allocations = []) => {
+        const currencies = new Set();
+        const values = {};
+        weightedKeys.forEach(key => { values[key] = 0; });
+
+        allocations.forEach(item => {
+          const weight = parseFloat(item.weight) || 0;
+          const perf = masterPerf(item.masterId);
+          const currency = masterCurrencyByIsin.get(item.masterId) || item.baseCurrency || '';
+          if (currency) currencies.add(currency);
+          weightedKeys.forEach(key => {
+            const value = parseNum(perf?.[key] ?? item.returns?.[key]);
+            if (!Number.isNaN(value)) values[key] += value * weight / 100;
+          });
+        });
+
+        return {
+          masterId: allocations.map(item => item.masterId).filter(Boolean).join(', ') || '-',
+          masterName: allocations.map(item => {
+            const name = item.masterName || masterNameByIsin.get(item.masterId) || item.masterId || '-';
+            const weight = parseFloat(item.weight) || 0;
+            return `${name} (${weight.toFixed(2)}%)`;
+          }).join(' + ') || '-',
+          baseCurrency: currencies.size > 1 ? 'Mixed' : ([...currencies][0] || '-'),
+          weight: allocations.reduce((sum, item) => sum + (parseFloat(item.weight) || 0), 0),
+          values,
+        };
+      };
+      const weightedSummary = buildWeightedSummary(mapping?.allocations || []);
+      const allocationRows = (mapping?.allocations || []).map((item, idx) => {
+        const perf = masterPerf(item.masterId);
+        const hasSystemMaster = !!perf;
+        const masterName = hasSystemMaster
+          ? (masterNameByIsin.get(item.masterId) || item.masterName || '')
+          : (item.masterName || '');
+        const baseCurrency = hasSystemMaster
+          ? (masterCurrencyByIsin.get(item.masterId) || item.baseCurrency || '')
+          : (item.baseCurrency || '');
+        return `
+          <tr data-alloc-index="${idx}" class="${hasSystemMaster ? '' : 'is-manual-master'}">
+            <td class="td-check">
+              <button class="btn btn-danger btn-xs alloc-remove" type="button" ${mapping.allocations.length <= 1 ? 'disabled' : ''}>ลบ</button>
+            </td>
+            <td>
+              <input class="fund-input fund-input-editable alloc-master-id" list="fdm-master-id-list" value="${esc(item.masterId || '')}" placeholder="ISIN / Master ID">
+            </td>
+            <td>
+              <input class="fund-input ${hasSystemMaster ? '' : 'fund-input-editable'} alloc-master-name" value="${esc(masterName)}" placeholder="Master Fund name" ${hasSystemMaster ? 'readonly' : ''}>
+            </td>
+            <td>
+              <input class="fund-input ${hasSystemMaster ? '' : 'fund-input-editable'} alloc-currency" value="${esc(baseCurrency)}" placeholder="Base Currency" ${hasSystemMaster ? 'readonly' : ''}>
+            </td>
+            <td class="td-num">
+              <input class="fund-input fund-input-editable alloc-weight" type="number" min="0" max="100" step="0.01" value="${esc(item.weight)}">
+            </td>
+            ${weightedKeys.map(key => {
+              const value = perf?.[key] ?? item.returns?.[key] ?? '';
+              return hasSystemMaster
+                ? `<td class="td-num alloc-return-${key}">${esc(formatReturnDisplay(value) || '-')}</td>`
+                : `<td class="td-num"><input class="fund-input fund-input-editable alloc-return-input alloc-return-${key}" data-return-key="${key}" type="number" step="0.01" value="${esc(value)}" placeholder="-"></td>`;
+            }).join('')}
+          </tr>`;
+      }).join('');
+      const originalPerf = selected ? masterPerf(selected.masterId) : null;
+      const originalSourceRow = selected ? `
+        <tr>
+          <td class="td-check"><span class="badge badge-primary">ข้อมูลเดิม</span></td>
+          <td class="td-isin">${esc(selected.masterId || '-')}</td>
+          <td>${esc(selected.masterName || '-')}</td>
+          <td>${esc(originalPerf?.currency || '-')}</td>
+          <td class="td-num">100.00</td>
+          ${['r3m','r6m','rytd','r1y','r3y','r5y','r10y'].map(key => `<td class="td-num">${esc(formatReturnDisplay(originalPerf?.[key]) || '-')}</td>`).join('')}
+        </tr>
+      ` : '';
+      const weightedSummaryRow = `
+        <tr>
+          <td class="td-check"><span class="badge badge-success">หลังแก้ไข</span></td>
+          <td class="td-isin after-edit-master-id">${esc(weightedSummary.masterId)}</td>
+          <td class="after-edit-master-name">${esc(weightedSummary.masterName)}</td>
+          <td class="after-edit-currency">${esc(weightedSummary.baseCurrency)}</td>
+          <td class="td-num after-edit-weight">${weightedSummary.weight.toFixed(2)}</td>
+          ${weightedKeys.map(key => `<td class="td-num after-edit-${key}">${esc(formatReturnDisplay(weightedSummary.values[key]) || '-')}</td>`).join('')}
+        </tr>
+      `;
+      const masterMappingColgroup = `
+        <col class="mm-col-action">
+        <col class="mm-col-id">
+        <col class="mm-col-name">
+        <col class="mm-col-currency">
+        <col class="mm-col-weight">
+        <col class="mm-col-return">
+        <col class="mm-col-return">
+        <col class="mm-col-return">
+        <col class="mm-col-return">
+        <col class="mm-col-return">
+        <col class="mm-col-return">
+        <col class="mm-col-return">
+      `;
+
+      area.innerHTML = `
+        <div class="fund-manager-grid">
+          <div class="card fund-manager-picker-card">
+            <div class="sf-filterbar">
+              <div class="sf-search fund-manager-search">
+                <span class="s-icon">${searchIcon()}</span>
+                <input class="search-input" id="fdm-q" type="text" placeholder="ค้นหากองทุนไทย / Fund Code / Master ID..." value="${esc(State.fundDataManager.query)}" autocomplete="off" aria-autocomplete="list" aria-controls="fdm-search-menu">
+                <div class="fund-search-menu" id="fdm-search-menu" role="listbox"></div>
+              </div>
+              <label class="fund-manager-check">
+                <input type="checkbox" id="fdm-only-mapped" ${State.fundDataManager.showOnlyMapped ? 'checked' : ''}>
+                แสดงเฉพาะที่มี mapping
+              </label>
+              <span class="row-count-badge">${visible.length.toLocaleString()} รายการ</span>
+              <span class="row-count-badge is-info">${allocationCount.toLocaleString()} mapping</span>
+              <span class="badge badge-data-origin">Data/fund_master_allocations.json</span>
+              ${State.masterAllocationsLoadError ? `<span class="badge badge-warning">ยังไม่ได้เชื่อมต่อ local server</span>` : ''}
+            </div>
+          </div>
+
+          <div class="card fund-manager-editor-card">
+            <div class="card-header">
+              <span class="card-title">${selected ? `Master Mapping · ${esc(selected.code)}` : 'Master Mapping'}</span>
+              <div class="page-tools-meta">
+                <span class="badge ${isBalanced ? 'badge-success' : 'badge-danger'}">Weight รวม ${totalWeight.toFixed(2)}%</span>
+                ${State.masterAllocations?.items?.[selected?.key] ? '<span class="badge badge-accent">Custom Mapping</span>' : '<span class="badge badge-primary">Default 100%</span>'}
+              </div>
+            </div>
+            <div class="card-body">
+              ${selected ? `
+              <div class="fund-manager-summary">
+                <div><span>กองทุนไทย</span><strong>${esc(selected.name || selected.code)}</strong></div>
+                <div><span>Fund Code</span><strong>${esc(selected.code)}</strong></div>
+                <div><span>Default Master</span><strong>${esc(selected.masterId || '-')}</strong></div>
+              </div>
+              <div class="fund-readonly-block">
+                <div class="fund-subsection-head">
+                  <span>ข้อมูลเดิมจากต้นทาง</span>
+                  ${masterAnnualizedError ? '<span class="badge badge-warning">ยังโหลด Master Annualized ไม่ได้</span>' : '<span class="badge badge-data-origin">Master Fund Annualized Return</span>'}
+                </div>
+                <div class="table-wrapper fund-original-table">
+                  <table class="annualized-report master-mapping-report">
+                    <colgroup>${masterMappingColgroup}</colgroup>
+                    <thead>
+                      <tr class="report-group-row">
+                        <th colspan="5" class="group-blank"></th>
+                        <th colspan="7" class="group-blue">ผลตอบแทน (%)</th>
+                      </tr>
+                      <tr>
+                        <th></th>
+                        <th>Master ID / ISIN</th>
+                        <th>Master Fund</th>
+                        <th>Base Currency</th>
+                        <th>Weight %</th>
+                        <th>3M</th>
+                        <th>6M</th>
+                        <th>YTD</th>
+                        <th>1Y</th>
+                        <th>3Y</th>
+                        <th>5Y</th>
+                        <th>10Y</th>
+                      </tr>
+                    </thead>
+                    <tbody>${originalSourceRow || '<tr><td colspan="12" class="text-muted">ไม่พบข้อมูลต้นทาง</td></tr>'}</tbody>
+                  </table>
+                </div>
+              </div>
+              <form id="fdm-form">
+                <datalist id="fdm-master-id-list">${masterOptions.map(m => `<option value="${esc(m.masterId)}">${esc(m.label)}</option>`).join('')}</datalist>
+                <div class="fund-edit-block">
+                  <div class="fund-subsection-head">
+                    <span>แก้ไข Master Mapping</span>
+                    <div class="fund-subsection-actions">
+                      <button class="btn btn-primary btn-sm" type="button" id="fdm-add-row">เพิ่ม Master Fund</button>
+                      <span class="badge ${isBalanced ? 'badge-success' : 'badge-danger'}">Weight รวม ${totalWeight.toFixed(2)}%</span>
+                    </div>
+                  </div>
+                  <div class="table-wrapper fund-allocation-table">
+                    <table class="annualized-report master-mapping-report">
+                      <colgroup>${masterMappingColgroup}</colgroup>
+                      <thead>
+                        <tr class="report-group-row">
+                          <th colspan="5" class="group-blank"></th>
+                          <th colspan="7" class="group-blue">ผลตอบแทน (%)</th>
+                        </tr>
+                        <tr>
+                          <th></th>
+                          <th>Master ID / ISIN</th>
+                          <th>Master Fund</th>
+                          <th>Base Currency</th>
+                          <th>Weight %</th>
+                          <th>3M</th>
+                          <th>6M</th>
+                          <th>YTD</th>
+                          <th>1Y</th>
+                          <th>3Y</th>
+                          <th>5Y</th>
+                          <th>10Y</th>
+                        </tr>
+                      </thead>
+                      <tbody>${allocationRows}</tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="fund-after-edit-block">
+                  <div class="fund-subsection-head">
+                    <span>ข้อมูลหลังการแก้ไข</span>
+                    <span class="badge badge-data-origin">คำนวณแบบถ่วงน้ำหนักตาม Weight %</span>
+                  </div>
+                  <div class="table-wrapper fund-after-edit-table">
+                    <table class="annualized-report master-mapping-report">
+                      <colgroup>${masterMappingColgroup}</colgroup>
+                      <thead>
+                        <tr class="report-group-row">
+                          <th colspan="5" class="group-blank"></th>
+                          <th colspan="7" class="group-blue">ผลตอบแทน (%)</th>
+                        </tr>
+                        <tr>
+                          <th></th>
+                          <th>Master ID / ISIN</th>
+                          <th>Master Fund</th>
+                          <th>Base Currency</th>
+                          <th>Weight %</th>
+                          <th>3M</th>
+                          <th>6M</th>
+                          <th>YTD</th>
+                          <th>1Y</th>
+                          <th>3Y</th>
+                          <th>5Y</th>
+                          <th>10Y</th>
+                        </tr>
+                      </thead>
+                      <tbody>${weightedSummaryRow}</tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="fund-form-actions">
+                  <button class="btn btn-primary" type="submit">บันทึก Mapping</button>
+                  <button class="btn btn-danger" type="button" id="fdm-delete" ${State.masterAllocations?.items?.[selected.key] ? '' : 'disabled'}>ลบ mapping</button>
+                </div>
+              </form>` : '<div class="state-box">ไม่พบกองทุนให้จัดการ</div>'}
+            </div>
+          </div>
+
+          <div class="card fund-manager-impact-card">
+            <div class="card-header">
+              <span class="card-title">ผลกระทบของข้อมูลที่แก้</span>
+            </div>
+            <div class="table-wrapper fund-impact-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ส่วนของระบบ</th>
+                    <th>ผลกระทบ</th>
+                    <th>ระดับตรวจสอบ</th>
+                  </tr>
+                </thead>
+                <tbody>${renderImpactRows()}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>`;
+
+      const qEl = $('#fdm-q', area);
+      const menuEl = $('#fdm-search-menu', area);
+      let activeSearchIndex = -1;
+      const applyFundSelection = (fund) => {
+        if (!fund) return;
+        State.fundDataManager.draftMapping = null;
+        State.fundDataManager.selectedKey = fund.key;
+        State.fundDataManager.query = fund.code;
+        render();
+      };
+      const setActiveSearchOption = (index) => {
+        if (!menuEl) return;
+        const options = $$('.fund-search-option', menuEl);
+        activeSearchIndex = options.length ? Math.max(0, Math.min(index, options.length - 1)) : -1;
+        options.forEach((option, idx) => {
+          const isActive = idx === activeSearchIndex;
+          option.classList.toggle('is-active', isActive);
+          option.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+      };
+      const renderFundSearchMenu = (forceOpen = false) => {
+        if (!menuEl || !qEl) return [];
+        const matches = fundSearchMatches(qEl.value).slice(0, 8);
+        activeSearchIndex = -1;
+        if (!forceOpen && document.activeElement !== qEl) {
+          menuEl.classList.remove('is-open');
+          return matches;
+        }
+        menuEl.innerHTML = matches.length ? matches.map((f, idx) => {
+          const mapped = !!State.masterAllocations?.items?.[f.key];
+          return `
+            <button class="fund-search-option" type="button" role="option" data-index="${idx}" aria-selected="false">
+              <span class="fund-search-code">${esc(f.code || '-')}</span>
+              <span class="fund-search-name">${esc(f.name || f.masterName || '-')}</span>
+              <span class="fund-search-meta">${esc(f.masterId || '-')} ${mapped ? '· mapping' : ''}</span>
+            </button>
+          `;
+        }).join('') : '<div class="fund-search-empty">ไม่พบกองทุนที่ตรงกับคำค้น</div>';
+        menuEl.classList.add('is-open');
+        $$('.fund-search-option', menuEl).forEach(option => {
+          option.addEventListener('mousedown', e => e.preventDefault());
+          option.addEventListener('click', () => {
+            const idx = parseInt(option.dataset.index || '-1', 10);
+            applyFundSelection(matches[idx]);
+          });
+        });
+        return matches;
+      };
+      const selectFundFromSearch = () => {
+        State.fundDataManager.query = qEl?.value.trim() || '';
+        const normalizedQuery = normalizeFundKey(State.fundDataManager.query);
+        const exact = catalog.find(f => normalizeFundKey(f.code) === normalizedQuery);
+        const currentMatches = fundSearchMatches(State.fundDataManager.query);
+        const fallback = exact || currentMatches[0] || catalog.find(f => [
+          f.code,
+          f.name,
+          f.category,
+          f.masterId,
+          f.masterName,
+        ].some(value => String(value || '').toLowerCase().includes(State.fundDataManager.query.toLowerCase())));
+        applyFundSelection(fallback);
+      };
+      qEl?.addEventListener('input', () => {
+        State.fundDataManager.query = qEl.value.trim();
+        renderFundSearchMenu(true);
+      });
+      qEl?.addEventListener('focus', () => {
+        renderFundSearchMenu(true);
+      });
+      qEl?.addEventListener('blur', () => {
+        window.setTimeout(() => menuEl?.classList.remove('is-open'), 120);
+      });
+      qEl?.addEventListener('keydown', e => {
+        if (['ArrowDown', 'ArrowUp'].includes(e.key)) {
+          e.preventDefault();
+          const matches = fundSearchMatches(qEl.value).slice(0, 8);
+          if (!menuEl?.classList.contains('is-open')) renderFundSearchMenu(true);
+          if (matches.length) setActiveSearchOption(activeSearchIndex + (e.key === 'ArrowDown' ? 1 : -1));
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          const matches = fundSearchMatches(qEl.value).slice(0, 8);
+          if (activeSearchIndex >= 0 && matches[activeSearchIndex]) {
+            applyFundSelection(matches[activeSearchIndex]);
+          } else {
+            selectFundFromSearch();
+          }
+        } else if (e.key === 'Escape') {
+          menuEl?.classList.remove('is-open');
+        }
+      });
+      qEl?.addEventListener('change', selectFundFromSearch);
+      $('#fdm-only-mapped', area)?.addEventListener('change', e => {
+        State.fundDataManager.showOnlyMapped = e.target.checked;
+        State.fundDataManager.selectedKey = '';
+        render();
+      });
+      const readAllocationsFromForm = () => $$('.fund-allocation-table tbody tr', area)
+        .map(row => {
+          const masterId = $('.alloc-master-id', row)?.value.trim() || '';
+          const returns = {};
+          $$('.alloc-return-input', row).forEach(input => {
+            const key = input.dataset.returnKey;
+            if (key) returns[key] = input.value.trim();
+          });
+          return {
+            masterId,
+            masterName: masterNameByIsin.get(masterId) || $('.alloc-master-name', row)?.value.trim() || '',
+            baseCurrency: masterCurrencyByIsin.get(masterId) || $('.alloc-currency', row)?.value.trim() || '',
+            weight: parseFloat($('.alloc-weight', row)?.value || '0') || 0,
+            returns,
+          };
+        })
+        .filter(item => item.masterId || item.masterName || item.weight);
+      const updateWeightedSummary = () => {
+        const summary = buildWeightedSummary(readAllocationsFromForm());
+        const setText = (selector, value) => {
+          const el = $(selector, area);
+          if (el) el.textContent = value;
+        };
+        setText('.after-edit-master-id', summary.masterId);
+        setText('.after-edit-master-name', summary.masterName);
+        setText('.after-edit-currency', summary.baseCurrency);
+        setText('.after-edit-weight', summary.weight.toFixed(2));
+        weightedKeys.forEach(key => {
+          setText(`.after-edit-${key}`, formatReturnDisplay(summary.values[key]) || '-');
+        });
+      };
+      const updateLocalMapping = (allocations) => {
+        if (!selected) return;
+        State.fundDataManager.draftMapping = {
+          ...(State.masterAllocations?.items?.[selected.key] || {}),
+          key: selected.key,
+          thaiFundCode: selected.code,
+          thaiFundName: selected.name || '',
+          allocations,
+          note: mapping.note || '',
+          sourceDate: mapping.sourceDate || '',
+          status: mapping.status || 'Active',
+        };
+      };
+      $('#fdm-add-row', area)?.addEventListener('click', () => {
+        const allocations = readAllocationsFromForm();
+        allocations.push({ masterId: '', masterName: '', weight: Math.max(0, 100 - allocations.reduce((sum, item) => sum + item.weight, 0)) });
+        updateLocalMapping(allocations);
+        render();
+      });
+      $$('.alloc-remove', area).forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.closest('tr')?.dataset.allocIndex || '-1', 10);
+          const allocations = readAllocationsFromForm().filter((_, i) => i !== idx);
+          updateLocalMapping(allocations.length ? allocations : [{ masterId: '', masterName: '', weight: 100 }]);
+          render();
+        });
+      });
+      $$('.alloc-master-id', area).forEach(input => {
+        input.addEventListener('change', () => {
+          updateLocalMapping(readAllocationsFromForm());
+          render();
+        });
+      });
+      $$('.alloc-weight, .alloc-return-input, .alloc-master-name, .alloc-currency', area).forEach(input => {
+        input.addEventListener('input', updateWeightedSummary);
+      });
+      $('#fdm-delete', area)?.addEventListener('click', async () => {
+        if (!selected.key) return;
+        try {
+          await deleteMasterAllocation(selected.key);
+          State.fundDataManager.draftMapping = null;
+          State.fundDataManager.selectedKey = selected.key;
+          toast('ลบ mapping แล้ว', 'success');
+          render();
+        } catch (err) {
+          toast(err.message || 'ลบไม่สำเร็จ', 'error');
+        }
+      });
+      $('#fdm-form', area)?.addEventListener('submit', async e => {
+        e.preventDefault();
+        if (!selected) return;
+        const payload = {
+          thaiFundCode: selected.code,
+          thaiFundName: selected.name || '',
+          allocations: readAllocationsFromForm(),
+          sourceDate: mapping.sourceDate || '',
+          status: mapping.status || 'Active',
+          note: mapping.note || '',
+        };
+        try {
+          const saved = await saveMasterAllocation(payload);
+          State.fundDataManager.draftMapping = null;
+          State.fundDataManager.selectedKey = saved.key || selected.key;
+          toast('บันทึก Master Mapping แล้ว', 'success');
+          render();
+        } catch (err) {
+          toast(err.message || 'บันทึกไม่สำเร็จ', 'error');
+        }
+      });
+    };
+
+    render();
+    App._currentExport = null;
+  },
+
   /* ── SELECT FUND ── */
   async selectFund(area) {
     const cfg = CONFIG.PAGES['select-fund'];
@@ -4033,6 +6556,7 @@ const Pages = {
     let rawRows;
     try {
       rawRows = await fetchCached('select-fund');
+      await loadFundOverrides();
     } catch (e) {
       setError(area, e.message, 'select-fund');
       return;
@@ -4042,7 +6566,7 @@ const Pages = {
     const CI = {
       CATEGORY: findColumnIndex(headers, ['AVP® Category', 'AVP®  Category', 'AVP Category']),
     };
-    const allFunds = buildSelectedFundsCatalog(rawRows);
+    const allFunds = applyFundOverrides(buildSelectedFundsCatalog(rawRows));
 
     State.selectedFunds = Object.fromEntries(allFunds.map(f => [f.key, f]));
 
@@ -4101,7 +6625,7 @@ const Pages = {
             <td>${esc(f.dividend)}</td>
             <td>${esc(f.style)}</td>
             <td class="td-isin">${esc(f.masterId)}</td>
-            <td>${esc(f.masterName)}</td>
+            <td>${esc(f.masterName)}${f.isOverride ? ' <span class="badge badge-accent fund-override-mini">แก้ไขแล้ว</span>' : ''}</td>
           </tr>`;
       }).join('');
 
@@ -4147,6 +6671,9 @@ const Pages = {
             ${getPageDataSourceBadge('select-fund') ? `<span class="badge badge-data-origin">${esc(getPageDataSourceBadge('select-fund'))}</span>` : ''}
             ${Object.keys(State.highlights).length > 0
               ? `<span class="badge badge-accent">ตั้งค่าสีไว้ ${Object.keys(State.highlights).length} กองทุน</span>`
+              : ''}
+            ${Object.keys(State.fundOverrides?.items || {}).length > 0
+              ? `<span class="badge badge-success">ข้อมูลแก้ไข ${Object.keys(State.fundOverrides.items).length} รายการ</span>`
               : ''}
             ${CI.CATEGORY === -1
               ? `<span class="badge badge-warning">ยังไม่พบคอลัมน์ AVP® Category</span>`
@@ -6034,23 +8561,23 @@ const Pages = {
         .of-topbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:10px 16px;border-bottom:1px solid #e2e8f0;background:#f8fafc}
         .of-topbar-left,.of-topbar-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
         .of-period-group{display:flex;gap:3px;flex-wrap:wrap}
-        .of-period-btn{padding:4px 13px;border:1px solid #d0d9e8;border-radius:20px;background:#fff;color:#334155;font-size:0.82rem;cursor:pointer;font-family:inherit;transition:all .15s}
+        .of-period-btn{padding:4px 13px;border:1px solid #d0d9e8;border-radius:20px;background:#fff;color:#334155;font-size:0.88rem;cursor:pointer;font-family:inherit;transition:all .15s}
         .of-period-btn.is-active{background:#1a2744;color:#fff;border-color:#1a2744;font-weight:700}
         .of-period-btn:hover:not(.is-active){background:#eef2f7}
-        .of-axis-label{font-size:0.8rem;color:#64748b;font-weight:600;white-space:nowrap}
-        .of-axis-select{padding:4px 8px;border:1px solid #d0d9e8;border-radius:6px;background:#fff;color:#1e293b;font-size:0.8rem;font-family:inherit;cursor:pointer;max-width:200px}
-        .of-count{font-size:0.79rem;color:#475569;padding:4px 12px;background:#e8edf5;border-radius:20px;white-space:nowrap}
-        .of-reset-label-btn{padding:6px 12px;font-size:0.8rem}
+        .of-axis-label{font-size:0.88rem;color:#64748b;font-weight:600;white-space:nowrap}
+        .of-axis-select{padding:4px 8px;border:1px solid #d0d9e8;border-radius:6px;background:#fff;color:#1e293b;font-size:0.88rem;font-family:inherit;cursor:pointer;max-width:200px}
+        .of-count{font-size:0.88rem;color:#475569;padding:4px 12px;background:#e8edf5;border-radius:20px;white-space:nowrap}
+        .of-reset-label-btn{padding:6px 12px;font-size:0.88rem}
         .of-scatter-title{padding:12px 16px;font-size:1.375rem;font-weight:700;color:#1a2744;background:#eef2fa;border-bottom:1px solid #dbe4f0;letter-spacing:.01em;line-height:1.25}
         .of-scatter-section{display:flex;align-items:flex-start;gap:24px;padding:0 16px 0 0;border-bottom:2px solid #e2e8f0;background:#fff}
         .of-scatter-left{flex:4;min-width:0;padding:12px 0 12px 12px}
         .of-scatter-right{flex:3;min-width:260px;overflow-y:auto;max-height:530px;padding-left:4px}
         .of-svg{width:100%;display:block}
         .of-no-data{padding:60px 20px;text-align:center;color:#94a3b8;font-size:0.9rem}
-        .of-side-table{width:100%;border-collapse:collapse;font-size:0.8rem;font-family:'Sarabun','THSarabunNew',sans-serif;table-layout:fixed}
+        .of-side-table{width:100%;border-collapse:collapse;font-size:0.88rem;font-family:'Sarabun','THSarabunNew',sans-serif;table-layout:fixed}
         .of-side-col-fund{width:52%}
         .of-side-col-metric{width:24%}
-        .of-side-th{padding:8px 10px;background:#1a2744;color:#fff;font-weight:600;font-size:0.75rem;white-space:nowrap;position:sticky;top:0;z-index:1}
+        .of-side-th{padding:8px 10px;background:#1a2744;color:#fff;font-weight:600;font-size:0.88rem;white-space:nowrap;position:sticky;top:0;z-index:1}
         .of-side-th-sort{cursor:pointer;user-select:none}
         .of-side-th-sort:hover{background:#223257}
         .of-side-val{text-align:right}
@@ -6059,12 +8586,12 @@ const Pages = {
         .of-side-table tbody tr:nth-child(even){background:#f8fafc}
         .of-side-table tbody tr:hover td{background:#e8f0fb!important}
         .of-side-fund-td{padding:5px 10px;vertical-align:middle}
-        .of-side-fund-inner{display:flex;align-items:center;gap:6px;font-size:0.78rem;font-weight:600;color:#1e293b}
-        .of-side-table td.of-side-val{padding:5px 10px;text-align:right;color:#334155;font-weight:500;font-size:0.8rem}
+        .of-side-fund-inner{display:flex;align-items:center;gap:6px;font-size:0.88rem;font-weight:600;color:#1e293b}
+        .of-side-table td.of-side-val{padding:5px 10px;text-align:right;color:#334155;font-weight:500;font-size:0.88rem}
         #of-table-container{margin-top:18px}
         .of-table-wrap{overflow-x:auto}
-        .of-table{width:100%;border-collapse:collapse;font-size:0.79rem;font-family:'Sarabun','THSarabunNew',sans-serif}
-        .of-th{padding:8px 10px;background:#1a2744;color:#fff;font-weight:600;font-size:0.73rem;white-space:nowrap;text-align:center;border-right:1px solid #2d3f6b}
+        .of-table{width:100%;border-collapse:collapse;font-size:0.88rem;font-family:'Sarabun','THSarabunNew',sans-serif}
+        .of-th{padding:8px 10px;background:#1a2744;color:#fff;font-weight:600;font-size:0.88rem;white-space:nowrap;text-align:center;border-right:1px solid #2d3f6b}
         .of-th-cb{width:36px;text-align:center;background:#0f1f3d}
         .of-th-hl{width:72px;background:#0f1f3d}
         .of-th-name{text-align:left;min-width:180px;background:#0f1f3d}
@@ -6073,7 +8600,7 @@ const Pages = {
         .of-td-cb{text-align:center;background:#f8fafc;width:36px}
         .of-td-hl{text-align:center;background:#f8fafc;position:relative;overflow:visible}
         .of-td-name{text-align:left;background:#f8fafc;display:flex;align-items:center;gap:6px}
-        .of-td-thai{text-align:left;color:#475569;font-size:0.76rem}
+        .of-td-thai{text-align:left;color:#475569;font-size:0.88rem}
         .of-row-hidden td{opacity:.35}
         .of-table tbody tr:hover td{background:#f1f5fb!important}
         .of-dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex-shrink:0}
@@ -6089,8 +8616,8 @@ const Pages = {
         .of-color-palette[hidden]{display:none!important}
         .of-palette-swatch{width:18px;height:18px;border-radius:999px;border:2px solid #fff;box-shadow:0 0 0 1px rgba(15,23,42,0.14);cursor:pointer;padding:0}
         .of-palette-swatch.is-active{box-shadow:0 0 0 2px #1a2744}
-        .of-palette-swatch.is-clear{width:18px;height:18px;border-radius:999px;background:#f8fafc;color:#64748b;border:1px solid #cbd5e1;font-size:12px;line-height:1}
-        .of-pos{color:#16a34a;font-weight:600}.of-neg{color:#dc2626;font-weight:600}.of-zero{color:#64748b}.of-na{color:#94a3b8;font-size:0.75rem}
+        .of-palette-swatch.is-clear{width:18px;height:18px;border-radius:999px;background:#f8fafc;color:#64748b;border:1px solid #cbd5e1;font-size:14px;line-height:1}
+        .of-pos{color:#16a34a;font-weight:600}.of-neg{color:#dc2626;font-weight:600}.of-zero{color:#64748b}.of-na{color:#94a3b8;font-size:0.88rem}
         .of-cb{cursor:pointer;width:14px;height:14px}
         .of-no-data-row{padding:12px;text-align:center;color:#94a3b8}
         @media(max-width:900px){.of-scatter-section{flex-direction:column;gap:12px;padding:0}.of-scatter-left{padding:12px}.of-scatter-right{flex:none;width:100%;max-height:240px;padding-left:0;border-top:1px solid #e2e8f0}}
@@ -6283,23 +8810,79 @@ const Pages = {
     let storageMode = 'local';
     let draftCategoryFilter = '';
     let draftTypeFilter = '';
-    let draftQuarterFilter = '';
-    let draftAuthorFilter = '';
-    let overwriteDraftId = '';
+	    let draftQuarterFilter = '';
+	    let draftAuthorFilter = '';
+	    let overwriteDraftId = '';
+	    let draftApiStatus = '';
 
     function loadLocalDrafts() {
       try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '[]'); }
       catch { return []; }
     }
 
-    function saveLocalDrafts(arr) {
-      localStorage.setItem(DRAFTS_KEY, JSON.stringify(arr));
-    }
+	    function saveLocalDrafts(arr) {
+	      localStorage.setItem(DRAFTS_KEY, JSON.stringify(arr));
+	    }
 
-    async function loadDrafts() {
-      try {
-        const res = await fetch('/api/drafts', { cache: 'no-store' });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+	    function hasDraftApi() {
+	      return Boolean(String(DRAFT_API_WEB_APP_URL || '').trim());
+	    }
+
+	    async function draftApiRequest(action, payload = {}) {
+	      let res;
+	      if (action === 'list') {
+	        const quarter = payload?.quarter ? `?quarter=${encodeURIComponent(payload.quarter)}` : '';
+	        res = await fetch(`/api/draft-drive${quarter}`, { cache: 'no-store' });
+	      } else if (action === 'delete') {
+	        const quarter = payload?.quarter ? `?quarter=${encodeURIComponent(payload.quarter)}` : '';
+	        res = await fetch(`/api/draft-drive/${encodeURIComponent(payload.id || '')}${quarter}`, { method: 'DELETE' });
+	      } else {
+	        res = await fetch('/api/draft-drive', {
+	          method: 'POST',
+	          headers: { 'Content-Type': 'application/json' },
+	          body: JSON.stringify(payload?.draft || payload || {}),
+	        });
+	      }
+	      const data = await res.json().catch(() => ({}));
+	      if (!res.ok || data.ok === false) {
+	        throw new Error(data.error || `Draft API ${action} failed (${res.status})`);
+	      }
+	      return data;
+	    }
+	
+	    async function loadDrafts() {
+	      try {
+	        if (hasDraftApi()) {
+	          const data = await draftApiRequest('list');
+	          storageMode = 'drive';
+	          draftApiStatus = '';
+	          const driveDrafts = Array.isArray(data.drafts) ? data.drafts : [];
+	          const localDrafts = loadLocalDrafts();
+	          const driveIds = new Set(driveDrafts.map(d => String(d.id || '')));
+	          const draftsToMigrate = localDrafts.filter(d => d?.id && !driveIds.has(String(d.id)));
+	          for (const draft of draftsToMigrate) {
+	            try {
+	              await draftApiRequest('save', {
+	                draft: {
+	                  ...draft,
+	                  highlights: draft.highlights || {},
+	                  filters: draft.filters || {},
+	                  migratedFromLocalStorage: true,
+	                },
+	              });
+	            } catch {
+	              /* keep local copy if migration fails */
+	            }
+	          }
+	          if (draftsToMigrate.length) {
+	            localStorage.removeItem(DRAFTS_KEY);
+	            const migratedData = await draftApiRequest('list');
+	            return Array.isArray(migratedData.drafts) ? migratedData.drafts : driveDrafts;
+	          }
+	          return driveDrafts;
+	        }
+	        const res = await fetch('/api/drafts', { cache: 'no-store' });
+	        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         storageMode = 'file';
         const fileDrafts = Array.isArray(data.drafts) ? data.drafts : [];
@@ -6331,14 +8914,18 @@ const Pages = {
           }
         }
         return fileDrafts;
-      } catch {
-        storageMode = 'local';
-        return loadLocalDrafts();
-      }
-    }
+	      } catch (err) {
+	        draftApiStatus = hasDraftApi() ? `Draft API ใช้งานไม่ได้: ${err.message || err}` : '';
+	        storageMode = 'local';
+	        return loadLocalDrafts();
+	      }
+	    }
 
-    async function saveDraft(draft) {
-      if (storageMode === 'file') {
+	    async function saveDraft(draft) {
+	      if (storageMode === 'drive') {
+	        return await draftApiRequest('save', { draft });
+	      }
+	      if (storageMode === 'file') {
         const res = await fetch('/api/drafts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -6354,14 +8941,21 @@ const Pages = {
       return { ok: true, draft };
     }
 
-    async function deleteDraft(draft, idx) {
-      if (storageMode === 'file' && draft?.id) {
+	    async function deleteDraft(draft, idx) {
+	      if (storageMode === 'drive' && draft?.id) {
+	        return await draftApiRequest('delete', {
+	          id: draft.id,
+	          quarter: draftQuarterOf(draft),
+	        });
+	      }
+	      if (storageMode === 'file' && draft?.id) {
         const res = await fetch(`/api/drafts/${encodeURIComponent(draft.id)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error(`ลบไฟล์ไม่สำเร็จ (${res.status})`);
-        return;
+        return res.json();
       }
       currentDrafts.splice(idx, 1);
       saveLocalDrafts(currentDrafts);
+      return { ok: true };
     }
 
     function restoreDraft(d) {
@@ -6465,9 +9059,14 @@ const Pages = {
         if (draftAuthorFilter && author !== draftAuthorFilter) return false;
         return true;
       });
-      const storageText = storageMode === 'file'
-        ? 'บันทึกเป็นไฟล์กลางใน Drafts/'
-        : 'บันทึกใน Browser นี้ชั่วคราว';
+	      const storageText = storageMode === 'file'
+	        ? 'บันทึกเป็นไฟล์กลางใน Drafts/ และ sync ไป Google Drive'
+	        : storageMode === 'drive'
+	          ? 'บันทึกเป็น JSON บน Google Drive ผ่าน Apps Script'
+	        : 'บันทึกใน Browser นี้ชั่วคราว';
+	      const storageWarning = draftApiStatus
+	        ? `<div class="notes-storage-mode notes-storage-warning">${esc(draftApiStatus)}</div>`
+	        : '';
 
       const draftCards = shownDrafts.length === 0
         ? `<div class="notes-empty"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg><p>ยังไม่มีบันทึกที่บันทึกไว้</p></div>`
@@ -6520,9 +9119,10 @@ const Pages = {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
               <span>บันทึกดราฟใหม่</span>
               ${selectedCount > 0 ? `<span class="notes-fund-badge">${selectedCount} กองที่เลือกไว้</span>` : '<span class="notes-fund-badge notes-fund-badge-warn">ยังไม่ได้เลือกกองทุน</span>'}
-            </div>
-            <div class="notes-storage-mode">${esc(storageText)}${highlightedCount ? ` · มีไฮไลท์ ${highlightedCount} กอง` : ''}</div>
-            <div class="notes-form-grid">
+	            </div>
+	            <div class="notes-storage-mode">${esc(storageText)}${highlightedCount ? ` · มีไฮไลท์ ${highlightedCount} กอง` : ''}</div>
+	            ${storageWarning}
+	            <div class="notes-form-grid">
               <div class="notes-field">
                 <label class="notes-label">หมวดหมู่ AVP ที่เลือกอยู่</label>
                 <input class="notes-input notes-readonly" id="notes-category" type="text" value="${esc(currentCategory)}" readonly>
@@ -6590,7 +9190,8 @@ const Pages = {
         <style>
           .notes-form-wrap{padding:20px 20px 16px;border-bottom:2px solid #e2e8f0}
           .notes-form-head{display:flex;align-items:center;gap:8px;font-size:1.05rem;font-weight:700;color:#1a2744;margin-bottom:14px}
-          .notes-storage-mode{font-size:0.92rem;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 11px;margin:-4px 0 14px}
+	          .notes-storage-mode{font-size:0.92rem;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 11px;margin:-4px 0 14px}
+	          .notes-storage-warning{color:#b45309;background:#fffbeb;border-color:#fcd34d;margin-top:-8px}
           .notes-fund-badge{margin-left:auto;padding:4px 11px;border-radius:20px;font-size:0.9rem;font-weight:600;background:#d1fae5;color:#065f46}
           .notes-fund-badge-warn{background:#fef3c7;color:#92400e}
           .notes-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -6638,7 +9239,14 @@ const Pages = {
       area.querySelector('#notes-save-btn')?.addEventListener('click', async () => {
         const draft = buildDraftPayload();
         try {
-          await saveDraft(draft);
+          const result = await saveDraft(draft);
+          if (result?.driveUploaded) {
+            toast('บันทึกดราฟและ sync ไป Google Drive แล้ว', 'success', 5000);
+          } else if (result?.warning) {
+            toast(result.warning, 'warning', 7000);
+          } else {
+            toast('บันทึกดราฟแล้ว', 'success', 4000);
+          }
           overwriteDraftId = '';
           currentDrafts = await loadDrafts();
           renderPage();
@@ -6685,10 +9293,16 @@ const Pages = {
           if (!confirm(`บันทึกทับ "${existingDraft.name || 'ดราฟนี้'}" ?`)) return;
           try {
             overwriteDraftId = existingDraft.id || '';
-            await saveDraft(buildDraftPayload(existingDraft));
+            const result = await saveDraft(buildDraftPayload(existingDraft));
             currentDrafts = await loadDrafts();
             renderPage();
-            toast('บันทึกทับดราฟเรียบร้อยแล้ว', 'success');
+            if (result?.driveUploaded) {
+              toast('บันทึกทับดราฟและ sync ไป Google Drive แล้ว', 'success', 5000);
+            } else if (result?.warning) {
+              toast(result.warning, 'warning', 7000);
+            } else {
+              toast('บันทึกทับดราฟเรียบร้อยแล้ว', 'success');
+            }
           } catch (err) {
             toast(`บันทึกทับไม่สำเร็จ: ${err.message || err}`, 'error', 5000);
           }
@@ -6696,11 +9310,17 @@ const Pages = {
         if (delBtn) {
           if (!confirm('ลบบันทึกนี้?')) return;
           const idx = parseInt(delBtn.dataset.idx);
+          const deletingDraft = currentDrafts[idx];
           try {
-            await deleteDraft(currentDrafts[idx], idx);
-            if (String(overwriteDraftId) === String(currentDrafts[idx]?.id || '')) overwriteDraftId = '';
+            const result = await deleteDraft(deletingDraft, idx);
+            if (String(overwriteDraftId) === String(deletingDraft?.id || '')) overwriteDraftId = '';
             currentDrafts = await loadDrafts();
             renderPage();
+            if (result?.warning) {
+              toast(result.warning, 'warning', 7000);
+            } else {
+              toast('ลบดราฟแล้ว', 'success', 4000);
+            }
           } catch (err) {
             toast(`ลบไม่สำเร็จ: ${err.message || err}`, 'error', 5000);
           }
@@ -7484,7 +10104,7 @@ const Pages = {
     // ── Selector Card HTML builder ──
     const selectorCard = (idx, color, label, inputHtml) => `
       <div style="background:#fff;border-radius:12px;border:1px solid var(--border);border-top:3px solid ${color};padding:12px 14px;display:flex;flex-direction:column;gap:6px;">
-        <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;">${label}</div>
+        <div style="font-size:0.88rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;">${label}</div>
         ${inputHtml}
         <div id="v3-card-info-${idx}" style="font-size:0.84rem;color:var(--text-muted);min-height:18px;"></div>
       </div>`;
@@ -7684,7 +10304,7 @@ const Pages = {
             const combinedText = wt ? `${name} ${wt}` : name;
             return `<td style="padding:8px 10px;font-size:0.86rem;color:var(--text);">
               <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;" title="${esc(combinedText)}">
-                ${esc(name)}${wt ? ` <span style="font-size:0.8rem;color:var(--text-muted);font-weight:500;">${esc(wt)}</span>` : ''}
+                ${esc(name)}${wt ? ` <span style="font-size:0.88rem;color:var(--text-muted);font-weight:500;">${esc(wt)}</span>` : ''}
               </div>
             </td>`;
           }).join('');
@@ -7777,7 +10397,7 @@ const Pages = {
 
       const top10Legend = document.getElementById('v3-top10-asset-legend');
       if (top10Legend) top10Legend.innerHTML = holdingsDatasets.map(ds => `
-        <div style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text-muted);max-width:320px;">
+        <div style="display:flex;align-items:center;gap:6px;font-size:0.88rem;color:var(--text-muted);max-width:320px;">
           <span style="width:12px;height:12px;border-radius:3px;background:${ds.backgroundColor};display:inline-block;flex-shrink:0;"></span>
           <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(ds.label)}</span>
         </div>`).join('');
@@ -8328,6 +10948,10 @@ const App = {
     const titles = {
       'dashboard':         { title: 'แดชบอร์ด', subtitle: '' },
       'select-fund':       { title: 'เลือกกองทุน', subtitle: '' },
+      'data-import':       { title: 'เตรียมข้อมูล', subtitle: 'นำข้อมูล Raw เข้า Google Sheets ปลายทางตาม Quarter' },
+      'sec-data-import':   { title: 'เตรียมข้อมูลจาก SEC', subtitle: 'เลือกชุดข้อมูล SEC API และออกแบบ data_preparation ก่อนเขียนลง Google Sheet' },
+      'fund-data-manager': { title: 'แก้ไขข้อมูลกองทุน', subtitle: 'กำหนด Master Fund หลายกองพร้อม weight สำหรับกองทุนไทย' },
+      'master-fund-data-manager': { title: 'แก้ไขข้อมูลกอง Master Fund', subtitle: 'เตรียมหน้าไว้สำหรับแก้ไขข้อมูล Master Fund' },
       'thai-annualized':   { title: 'กองทุนไทย Annualized Return', subtitle: '' },
       'thai-annualized-rank': { title: 'กองทุนไทย Annualized Rank', subtitle: '' },
       'thai-annualized-v2': { title: 'กองทุนไทย Annualized Return', subtitle: 'สลับมุมมอง Return และ Rank ได้' },
@@ -8344,6 +10968,8 @@ const App = {
       'master-placeholder-8': { title: 'Top 10 Holding', subtitle: 'วิเคราะห์เปรียบเทียบกองทุน 8 ช่องพร้อมกัน — iShare Index 1 กอง + กองทุนไทย 7 กอง' },
       'master-placeholder-5': { title: 'ปัจจัยประกอบอื่นๆ', subtitle: 'Sharpe, Sortino, Information, Treynor Ratio ทุก Period' },
       'master-placeholder-6': { title: 'Income Fund', subtitle: '' },
+      'income-fund-1': { title: 'Income Fund', subtitle: 'เตรียมหน้าไว้สำหรับต่อยอดเมนู Income Fund' },
+      'income-fund-2': { title: 'Income Fund 2', subtitle: 'เตรียมหน้าไว้สำหรับต่อยอดเมนู Income Fund' },
       'master-placeholder-9': { title: 'ปัจจัยประกอบอื่นๆ 2', subtitle: 'Sharpe vs Return' },
       'master-placeholder-10': { title: 'ปัจจัยประกอบอื่นๆ 3', subtitle: 'Sortino vs Return' },
       'master-placeholder-11': { title: 'ปัจจัยประกอบอื่นๆ 4', subtitle: 'Max DD vs Sortino' },
@@ -8366,6 +10992,10 @@ const App = {
     switch (page) {
       case 'dashboard':         Pages.dashboard(area);                      break;
       case 'select-fund':       Pages.selectFund(area);                     break;
+      case 'data-import':       Pages.dataImport(area);                     break;
+      case 'sec-data-import':   Pages.secDataImport(area);                  break;
+      case 'fund-data-manager': Pages.fundDataManager(area);                break;
+      case 'master-fund-data-manager': Pages.placeholder(area, 'แก้ไขข้อมูลกอง Master Fund'); break;
       case 'thai-annualized':   Pages.thaiAnnualized(area);                 break;
       case 'thai-annualized-rank': Pages.thaiAnnualizedRank(area);          break;
       case 'thai-annualized-v2': Pages.thaiAnnualizedV2(area);              break;
@@ -8382,6 +11012,8 @@ const App = {
       case 'master-placeholder-8': Pages.masterMenu02V3(area);              break;
       case 'master-placeholder-5': Pages.masterOtherFactors(area);             break;
       case 'master-placeholder-6': Pages.placeholder(area, 'Income Fund');           break;
+      case 'income-fund-1': Pages.placeholder(area, 'Income Fund');         break;
+      case 'income-fund-2': Pages.placeholder(area, 'Income Fund 2');       break;
       case 'master-placeholder-9':
       case 'master-placeholder-10':
       case 'master-placeholder-11': Pages.comingSoon(area);                 break;
