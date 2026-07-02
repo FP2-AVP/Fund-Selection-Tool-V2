@@ -34,7 +34,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-JSON_ROOT_NAME = "JSON Files"
+JSON_ROOT_NAME = "Fund List Tool JSON"
 
 
 @dataclass(frozen=True)
