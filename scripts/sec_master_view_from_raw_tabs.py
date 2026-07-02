@@ -282,17 +282,10 @@ def fee_type_matches(row: dict[str, Any], aliases: list[str]) -> bool:
 def format_fee_group(rows: list[dict[str, Any]], specs: list[tuple[str, list[str]]], value_field: str) -> str:
     parts: list[str] = []
     for label, aliases in specs:
-        row = latest_row([item for item in rows if fee_type_matches(item, aliases)])
+        row = latest_row([item for item in rows if fee_type_matches(item, [label, *aliases])])
         value = normalized_text(row.get(value_field))
         if value:
             parts.append(f"{label} : {value}")
-    fee_other_desc = join_parts([
-        normalized_text(item.get("fee_other_desc"))
-        for item in rows
-        if normalized_text(item.get("fee_other_desc"))
-    ])
-    if fee_other_desc:
-        parts.append(fee_other_desc)
     return join_parts(parts)
 
 
