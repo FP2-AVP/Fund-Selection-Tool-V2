@@ -31,6 +31,7 @@ DEFAULT_DRIVE_FOLDER_ID = "12ciJQq-dpBr-DpdnzXCOXqtW_ijctJN6"
 HEADERS = [
     "quarter",
     "item_order",
+    "item_id",
     "asset_class",
     "fund_type",
     "category",
@@ -44,6 +45,8 @@ HEADERS = [
     "updated_by",
     "updated_at",
     "mention_id",
+    "row_revision",
+    "deleted",
 ]
 
 ROLE_MAP = {
@@ -212,6 +215,8 @@ def build_payload(quarter: str, records: list[dict[str, str]], drive_folder_id: 
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     for index, record in enumerate(records, start=1):
+        if clean(record.get("deleted")).lower() == "true":
+            continue
         row_quarter = clean(record.get("quarter")) or quarter
         if row_quarter.upper() != quarter:
             continue
@@ -224,7 +229,7 @@ def build_payload(quarter: str, records: list[dict[str, str]], drive_folder_id: 
 
         key = (asset_class, fund_type, category)
         if key not in grouped:
-            item_id = f"{quarter}-{slug(asset_class or f'section-{index}', 'section')}-{slug(fund_type or 'general', 'general')}"
+            item_id = clean(record.get("item_id")) or f"{quarter}-{slug(asset_class or f'section-{index}', 'section')}-{slug(fund_type or 'general', 'general')}"
             grouped[key] = {
                 "id": item_id,
                 "assetClass": asset_class,
@@ -244,6 +249,7 @@ def build_payload(quarter: str, records: list[dict[str, str]], drive_folder_id: 
             continue
 
         mention_id = clean(record.get("mention_id")) or f"mention-{index}"
+        row_revision = clean(record.get("row_revision")) or "1"
         grouped[key]["mentions"].append(
             {
                 "id": mention_id,
@@ -255,6 +261,7 @@ def build_payload(quarter: str, records: list[dict[str, str]], drive_folder_id: 
                 "tags": tags,
                 "updatedAt": clean(record.get("updated_at")) or generated_at,
                 "updatedBy": clean(record.get("updated_by")),
+                "rowRevision": int(float(row_revision)),
             }
         )
 
