@@ -42,6 +42,7 @@ const State = {
     'master-annualized': { key: 'r5y', dir: 'desc' },
     'master-annualized-v2': { key: 'r5y', dir: 'desc' },
     'master-calendar': { key: 'ret-2025', dir: 'desc' },
+    'master-placeholder-9': { key: '', dir: 'asc' },
   },
   reportOptions: {
     'thai-annualized-v2-view': 'return',
@@ -63,37 +64,60 @@ const State = {
   availableQuarters: [],     // ← list of detected quarter tabs
   currentUser: { name: '', email: '' },
   fundOverrides: { items: {}, updatedAt: null },
+  fixedIncomeFactorsOverrides: { items: {}, updatedAt: null },
+  fixedIncomeFactorsEditMode: false,
   fundDataManager: {
     query: '',
     selectedKey: '',
     showOnlyMapped: false,
     draftMapping: null,
   },
-  dataImport: {
-    selectedJobKey: 'percentrank',
-    rawTab: '',
-    targetTab: '',
+  fundSelectionLogs: {
+    selectedItemId: '',
+    query: '',
+    roleFilter: '',
+    baseRevision: null,
+  },
+	  dataImport: {
+	    selectedJobKey: 'percentrank',
+	    rawTab: '',
+	    targetTab: '',
     preview: null,
     columnTypes: {},
     rawFiles: [],
     rawFilesError: '',
     isImporting: false,
-    jsonReadiness: null,
-    isCheckingJson: false,
-  },
-  masterAllocations: { items: {}, updatedAt: null },
-};
+	    jsonReadiness: null,
+	    isCheckingJson: false,
+	    isExportingJson: false,
+	    previewScrollLeft: 0,
+	  },
+	  secDataImport: {
+	    preview: null,
+	    columnTypes: {},
+	    targetTab: 'data_preparation',
+	    targetExists: false,
+	    isImporting: false,
+	    isLoadingPreview: false,
+	    jsonStatus: null,
+	    isExportingJson: false,
+	  },
+	  masterAllocations: { items: {}, updatedAt: null },
+	};
 
 const RAW_FILES_FOLDER_ID = '1_9lmPWFmack0DqaKuen5kbY57RJCFtmM';
 const RAW_FILES_FOLDER_URL = 'https://drive.google.com/drive/u/2/folders/1_9lmPWFmack0DqaKuen5kbY57RJCFtmM';
+const JSON_DRIVE_ROOT_FOLDER_ID = '1vUWAU5qP0qiIHPa5C4TZUybVmEwqfl6W';
+const JSON_DRIVE_ROOT_FOLDER_URL = 'https://drive.google.com/drive/u/2/folders/1vUWAU5qP0qiIHPa5C4TZUybVmEwqfl6W';
 const JSON_EXPORT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwV-OUqOXxv1GAkdXJP5ICbXAa4gzEAxWjU6Yd9Z_KKkO2y1dhm4aWrjHik7_4gJNHx/exec';
 const JSON_EXPORT_SECRET_KEY = 'sheets-to-drive-json';
 const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyX3plEd-uz34i6th4_tOdJNRP-NiJJeyB9q3NdStzKKH1eucATrVX8yfm9FR3Mi9VCFA/exec';
 const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
 
 const JSON_STORE = {
-  rootName: 'Fund List Tool JSON',
+  rootName: 'JSON Files',
   baseFiles: {
+    secApi: 'Data For SEC API.json',
     percentrank: 'Fund Key Performance AVP.json',
     thaiQuality: 'AVP Thai Fund for Quality.json',
     masterFund: 'AVP Master Fund ID.json',
@@ -101,8 +125,250 @@ const JSON_STORE = {
   overrideFiles: {
     fundOverrides: 'fund_overrides.json',
     masterAllocations: 'fund_master_allocations.json',
+    fixedIncomeFactorsOverrides: 'fixed_income_factors_overrides.json',
   },
 };
+
+const DATASET_REGISTRY = {
+  secApi: {
+    key: 'secApi',
+    label: 'Data For SEC API',
+    sheetId: '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
+    jsonFileName: JSON_STORE.baseFiles.secApi,
+    localFile: 'Data/Data For SEC API - 2026-Q1.json',
+  },
+  fundKeyPerformance: {
+    key: 'fundKeyPerformance',
+    label: 'Fund Key Performance AVP',
+    sheetId: '1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4',
+    jsonFileName: JSON_STORE.baseFiles.percentrank,
+    localFile: 'Data/Fund Key Performance AVP - 2026-Q1.json',
+  },
+  thaiQuality: {
+    key: 'thaiQuality',
+    label: 'AVP Thai Fund for Quality',
+    sheetId: '1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM',
+    jsonFileName: JSON_STORE.baseFiles.thaiQuality,
+    localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+  },
+  masterFund: {
+    key: 'masterFund',
+    label: 'AVP Master Fund ID',
+    sheetId: '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
+    jsonFileName: JSON_STORE.baseFiles.masterFund,
+    localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+  },
+};
+
+const REQUIRED_QUARTER_DATASET_KEYS = ['secApi', 'fundKeyPerformance', 'thaiQuality', 'masterFund'];
+
+const PAGE_DATASET_KEYS = {
+  'select-fund': 'fundKeyPerformance',
+  'thai-annualized': 'thaiQuality',
+  'thai-annualized-v2': 'thaiQuality',
+  'thai-calendar': 'thaiQuality',
+  'master-annualized': 'masterFund',
+  'master-annualized-v2': 'masterFund',
+  'master-calendar': 'masterFund',
+  'master-placeholder-1': 'secApi',
+  'master-placeholder-2': 'masterFund',
+  'master-placeholder-3': 'masterFund',
+  'master-placeholder-4': 'secApi',
+  'master-placeholder-5': 'masterFund',
+  'master-placeholder-7': 'masterFund',
+  'master-placeholder-9': 'masterFund',
+  'master-placeholder-10': 'masterFund',
+  'master-placeholder-11': 'masterFund',
+  'master-placeholder-12': 'secApi',
+};
+
+const FUND_LIST_UPDATE_SAMPLE_ROWS = [
+  {
+    id: 'FLU-2026Q1-001',
+    list_from: '2025-Q3',
+    list_to: '2026-Q1',
+    type: 'Core - General',
+    asset_class: 'Money Market',
+    fund_list_old: '',
+    fund_list_current: 'KTSV-A',
+    change_type: 'เพิ่มเข้ามาใหม่',
+    note: 'เพิ่มเข้ามาใหม่',
+  },
+  {
+    id: 'FLU-2026Q1-002',
+    list_from: '2025-Q3',
+    list_to: '2026-Q1',
+    type: 'Core - General',
+    asset_class: 'Global Bond (Income)',
+    fund_list_old: 'SCBPINA',
+    fund_list_current: 'B-IR-FOF',
+    change_type: 'สลับตำแหน่ง',
+    note: 'สลับตำแหน่ง',
+  },
+  {
+    id: 'FLU-2026Q1-003',
+    list_from: '2025-Q3',
+    list_to: '2026-Q1',
+    type: 'Core - General',
+    asset_class: 'Global EQ',
+    fund_list_old: 'KT-GESG-A',
+    fund_list_current: '',
+    change_type: 'นำออก',
+    note: 'นำ KT-GESG-A ออก',
+  },
+  {
+    id: 'FLU-2026Q1-004',
+    list_from: '2025-Q3',
+    list_to: '2026-Q1',
+    type: 'Core - RMF',
+    asset_class: 'Global Technology EQ',
+    fund_list_old: 'K-GTECHRMF',
+    fund_list_current: 'ES-TECHRMF',
+    change_type: 'สลับตำแหน่ง',
+    note: 'สลับตำแหน่ง',
+  },
+  {
+    id: 'FLU-2026Q1-005',
+    list_from: '2025-Q3',
+    list_to: '2026-Q1',
+    type: 'Core - SSF',
+    asset_class: 'Thai Bond',
+    fund_list_old: '',
+    fund_list_current: 'K-FIXEDPLUS-SSF',
+    change_type: 'เพิ่มเข้ามาใหม่',
+    note: 'เพิ่มเข้ามาใหม่',
+  },
+];
+
+const FUND_LIST_UPDATE_COLUMNS = [
+  'id',
+  'list_from',
+  'list_to',
+  'type',
+  'asset_class',
+  'fund_list_old',
+  'fund_list_current',
+  'change_type',
+  'note',
+  'updated_at',
+  'updated_by',
+];
+
+const FUND_LIST_UPDATE_STATUS_OPTIONS = [
+  'เหมือนเดิม',
+  'เพิ่มเข้ามาใหม่',
+  'นำออก',
+  'สลับตำแหน่ง',
+  'เปลี่ยนแปลง',
+];
+
+const FUND_LIST_UPDATE_ASSET_OPTIONS = [
+  'Money Market',
+  'Short-term Bond',
+  'Mid-Term Bond',
+  'Thai Bond',
+  'Foreign Income Bond',
+  'Global Bond (Income)',
+  'Thai Mid/Long-Term Bond',
+  'Thai Long-Term Bond',
+  'Thai Property (Mixed)',
+  'Mixed (EQ & Others)',
+  'Global Multi-Asset',
+  'Global EQ',
+  'Asia EQ',
+  'Vietnam EQ',
+  'China A-Shares EQ',
+  'China A-Share EQ',
+  'China All-shares EQ',
+  'India EQ',
+  'Japan EQ',
+  'US EQ',
+  'US EQ (Nasdaq)',
+  'Europe EQ',
+  'Thai EQ',
+  'Thai EQ (Passive)',
+  'Global Technology EQ',
+  'Tech EQ',
+  'Global Healthcare EQ',
+  'Global Healthcare',
+  'Global Infrastructure EQ',
+  'Global REITs',
+  'REITs (Thai & Foreign)',
+  'Gold',
+  'Gold (Hedged)',
+  'Gold (Unhedged)',
+  'Covered Call Strategy (Global)',
+];
+
+const FUND_LIST_UPDATE_DRAFT_KEY = 'fund-list-update-draft-v1';
+const FUND_LIST_UPDATE_SEED_FILE = 'Data/fund_list_update_q3_2025_seed.json';
+const FUND_SELECTION_LOGS_DRIVE_FOLDER_ID = '12ciJQq-dpBr-DpdnzXCOXqtW_ijctJN6';
+const FUND_SELECTION_LOGS_SHEET_ID = '1fOdq3JSKTjRZLE8sQ62jn3OmmuKGuhDo2tUCLjy1zIg';
+const FUND_SELECTION_LOGS_SHEET_HEADERS = [
+  'quarter',
+  'item_order',
+  'item_id',
+  'asset_class',
+  'fund_type',
+  'category',
+  'role',
+  'fund_code',
+  'status',
+  'reason',
+  'tags',
+  'data_as_of',
+  'item_revision',
+  'updated_by',
+  'updated_at',
+  'mention_id',
+  'row_revision',
+  'deleted',
+];
+const FUND_SELECTION_LOG_ROLES = [
+  { value: 'mainChoice', label: 'ตัวเลือกหลัก' },
+  { value: 'secondaryChoice', label: 'ตัวเลือกรอง' },
+  { value: 'additionalNote', label: 'ความเห็นเพิ่มเติม' },
+  { value: 'notSelected', label: 'ไม่ถูกคัดเลือก' },
+];
+const FUND_SELECTION_LOG_SENTIMENTS = [
+  { value: 'positive', label: 'บวก' },
+  { value: 'neutral', label: 'กลาง' },
+  { value: 'negative', label: 'ลบ/ข้อควรระวัง' },
+];
+const FUND_SELECTION_LOG_STATUS_OPTIONS = [
+  'กองทุนเดิม',
+  'กองทุนเดิม (สลับตำแหน่ง)',
+  'กองทุนเดิม (Passive)',
+  'กองทุนเดิม (Active)',
+  'กองทุนใหม่',
+];
+const FUND_SELECTION_TAG_RULES = [
+  { tag: 'fee-low', keywords: ['ค่าธรรมเนียมต่ำ', 'fee ต่ำ', 'fee low', 'ter ต่ำ', 'ค่าธรรมเนียมถูก', 'ไม่แพง'] },
+  { tag: 'fee-lowest', keywords: ['ค่าธรรมเนียมต่ำที่สุด', 'fee ต่ำที่สุด', 'ถูกที่สุด'] },
+  { tag: 'fee-high', keywords: ['ค่าธรรมเนียมสูง', 'fee สูง', 'ter สูง', 'แพงกว่า'] },
+  { tag: 'large-size', keywords: ['ขนาดกองใหญ่', 'กองใหญ่', 'fund size ใหญ่', 'ขนาดกองทุนใหญ่'] },
+  { tag: 'small-size', keywords: ['ขนาดกองเล็ก', 'กองเล็ก', 'ขนาดกองทุนเล็ก', 'ขนาดกองทุนน้อย'] },
+  { tag: 'performance', keywords: ['ผลตอบแทนดี', 'ผลตอบแทนโดดเด่น', 'ผลการดำเนินงานโดดเด่น', 'performance ดี'] },
+  { tag: 'consistent', keywords: ['สม่ำเสมอ', 'สม่ําเสมอ', 'consistent'] },
+  { tag: 'underperform', keywords: ['underperform', 'ผลตอบแทนต่ำกว่า', 'แย่กว่ากลุ่ม', 'ทำได้ไม่ดี'] },
+  { tag: 'volatility-low', keywords: ['ผันผวนต่ำ', 'ความผันผวนต่ำ', 'volatility ต่ำ', 'sd ต่ำ'] },
+  { tag: 'volatility-high', keywords: ['ผันผวนสูง', 'ความผันผวนสูง', 'volatility สูง', 'ขึ้นลงแรง'] },
+  { tag: 'duration-low', keywords: ['duration ต่ำ', 'duration สั้น'] },
+  { tag: 'duration-long', keywords: ['duration สูง', 'duration ยาว'] },
+  { tag: 'diversified', keywords: ['กระจายตัวดี', 'กระจายการลงทุนดี', 'กระจายลงทุนดี', 'diversified'] },
+  { tag: 'concentrated', keywords: ['กระจุก', 'กระจุกตัว', 'concentration', 'top 10'] },
+  { tag: 'passive', keywords: ['passive', 'กองดัชนี', 'ดัชนี'] },
+  { tag: 'active', keywords: ['active', 'ผู้จัดการกองทุน', 'เลือกหุ้นเอง'] },
+  { tag: 'hedged', keywords: ['hedged', 'ป้องกันความเสี่ยงค่าเงิน', 'ป้องกันค่าเงิน'] },
+  { tag: 'unhedged', keywords: ['unhedged', 'ไม่ป้องกันความเสี่ยงค่าเงิน', 'ไม่ป้องกันค่าเงิน', 'uh'] },
+  { tag: 'new', keywords: ['กองใหม่', 'ใหม่', 'new'] },
+  { tag: 'not-selected', keywords: ['ไม่ถูกคัดเลือก', 'ตัดออก', 'ไม่นำมาพิจารณา', 'ไม่แนะนำ', 'not selected'] },
+  { tag: 'credit-risk', keywords: ['ความเสี่ยงเครดิต', 'credit risk', 'หุ้นกู้เอกชน', 'เครดิต'] },
+  { tag: 'derivatives', keywords: ['derivatives', 'สัญญาซื้อขายล่วงหน้า'] },
+  { tag: 'foreign-investment', keywords: ['ต่างประเทศ', 'ลงทุนต่างประเทศ', 'foreign'] },
+  { tag: 'trading', keywords: ['trade', 'trading', 'ลงทุนระยะสั้น', 'ซื้อขายระยะสั้น'] },
+  { tag: 'monitor', keywords: ['เฝ้าติดตาม', 'ติดตาม', 'track record สั้น', 'กองออกใหม่'] },
+];
 
 const DATA_IMPORT_JOBS = {
   percentrank: {
@@ -110,8 +376,8 @@ const DATA_IMPORT_JOBS = {
     sourceLabel: 'Fund Key Performance AVP _ Morningstar (Use)',
     sourceType: 'google-sheet',
     sourceFileName: 'Fund Key Performance AVP _ Morningstar (Use)',
-    targetLabel: 'Percentrank Freestyle',
-    label: 'Percentrank Freestyle',
+    targetLabel: 'Fund Key Performance AVP',
+    label: 'Fund Key Performance AVP',
     rawSheetId: '1B8xjgXN9D1-hYR7uVn61y-LyBKbdy9eLX3kFZdAFCAU',
     rawGid: 1255878181,
     rawFolderId: RAW_FILES_FOLDER_ID,
@@ -160,8 +426,8 @@ const SEC_DATA_PREPARATION_TARGETS = [
   {
     key: 'data_preparation',
     label: 'data_preparation',
-    spreadsheetId: '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
-    url: 'https://docs.google.com/spreadsheets/d/16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w/edit#gid=0',
+    spreadsheetId: '1SsL8fXFmKsAfnakrIBTtglZqhErrYz8SfiiZb4wKGDs',
+    url: 'https://docs.google.com/spreadsheets/d/1SsL8fXFmKsAfnakrIBTtglZqhErrYz8SfiiZb4wKGDs/edit?gid=1854000650#gid=1854000650',
   },
 ];
 
@@ -524,7 +790,7 @@ function buildHighlightDotPicker(code, currentValue, fallbackColor) {
     </div>`;
 }
 
-function pageToolActions(pageKey, sourceLabel = '', extraActions = '') {
+function pageToolActions(pageKey, sourceLabel = '', extraActions = '', extraButtons = '') {
   const sourceBadge = getPageDataSourceBadge(pageKey);
   return `
     <div class="page-tools">
@@ -534,6 +800,7 @@ function pageToolActions(pageKey, sourceLabel = '', extraActions = '') {
         ${extraActions}
       </div>
       <div class="page-tools-actions">
+        ${extraButtons}
         <button class="btn btn-ghost" id="btn-copy-table" title="คัดลอกข้อมูลแบบคงรูปแบบ">
           คัดลอกแบบมีฟอร์แมต
         </button>
@@ -1647,16 +1914,90 @@ function isLocalMode() {
   return CONFIG.DATA_SOURCE === 'local_first' || CONFIG.DATA_SOURCE === 'local_only';
 }
 
+function applyDatasetConfig(pageKey, pageConfig) {
+  const datasetKey = pageConfig.datasetKey || PAGE_DATASET_KEYS[pageKey];
+  const dataset = DATASET_REGISTRY[datasetKey];
+  if (!dataset) return pageConfig;
+  return {
+    ...pageConfig,
+    datasetKey,
+    sheetId: pageConfig.sheetId || dataset.sheetId,
+    source: pageConfig.source || dataset.label,
+    localFile: pageConfig.localFile || dataset.localFile,
+    preferDriveJson: pageConfig.preferDriveJson !== false,
+    driveJsonRootFolderId: pageConfig.driveJsonRootFolderId || JSON_DRIVE_ROOT_FOLDER_ID,
+    driveJsonFileName: pageConfig.driveJsonFileName || dataset.jsonFileName,
+    driveJsonFolderSegments: pageConfig.driveJsonFolderSegments || ['{year}', '{quarter}', 'base'],
+  };
+}
+
 function ensureExtendedPageConfigs() {
   if (!CONFIG.PAGES) CONFIG.PAGES = {};
 
   const defaults = {
+    'select-fund': {
+      sheetId: CONFIG.SHEETS?.FUND_KEY_PERFORMANCE || CONFIG.SHEETS?.PERCENTRANK_FREESTYLE || '',
+      tabName: '2026-Q1',
+      title: 'เลือกกองทุน',
+      source: 'Fund Key Performance AVP',
+      localFile: 'Data/Fund Key Performance AVP - 2026-Q1.json',
+      datasetKey: 'fundKeyPerformance',
+    },
+    'thai-annualized': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'กองทุนไทย Annualized Return',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
+    },
+    'thai-annualized-v2': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'กองทุนไทย Annualized Return',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
+    },
+    'thai-calendar': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'กองทุนไทย Calendar Year',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
+    },
+    'master-annualized': {
+      sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
+      tabName: '2026-Q1',
+      title: 'Master Fund Annualized Return',
+      source: 'AVP Master Fund ID',
+      localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
+    },
+    'master-annualized-v2': {
+      sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
+      tabName: '2026-Q1',
+      title: 'Master Fund Annualized Return',
+      source: 'AVP Master Fund ID',
+      localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
+    },
+    'master-calendar': {
+      sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
+      tabName: '2026-Q1',
+      title: 'Master Fund Calendar Year',
+      source: 'AVP Master Fund ID',
+      localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
+    },
     'master-placeholder-1': {
       sheetId: CONFIG.SHEETS?.RAW_FOR_SEC || '',
       tabName: '2026-Q1',
       title: 'ค่าธรรมเนียม',
-      source: 'Raw For Sec + AVP Master Fund ID',
-      localFile: 'Data/Raw For Sec - 2026-Q1.json',
+      source: 'Data For SEC API + AVP Master Fund ID',
+      localFile: 'Data/Data For SEC API - 2026-Q1.json',
+      datasetKey: 'secApi',
     },
     'master-placeholder-2': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
@@ -1664,6 +2005,7 @@ function ensureExtendedPageConfigs() {
       title: 'Top 10 Holding',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
     },
     'master-placeholder-3': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
@@ -1671,13 +2013,15 @@ function ensureExtendedPageConfigs() {
       title: 'Cost Efficiency Master Fund 5Y',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
     },
     'master-placeholder-4': {
       sheetId: CONFIG.SHEETS?.RAW_FOR_SEC || '',
       tabName: '2026-Q1',
       title: 'ค่าธรรมเนียม',
-      source: 'Raw For Sec + AVP Master Fund ID',
-      localFile: 'Data/Raw For Sec - 2026-Q1.json',
+      source: 'Data For SEC API + AVP Master Fund ID',
+      localFile: 'Data/Data For SEC API - 2026-Q1.json',
+      datasetKey: 'secApi',
     },
     'master-placeholder-5': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
@@ -1685,20 +2029,23 @@ function ensureExtendedPageConfigs() {
       title: 'ปัจจัยประกอบอื่นๆ',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
     },
     'master-placeholder-9': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
       tabName: '2026-Q1',
-      title: 'ปัจจัยประกอบอื่นๆ 2',
+      title: 'ปัจจัยประกอบ กองทุนตราสารหนี้',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
     },
     'master-placeholder-10': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
       tabName: '2026-Q1',
-      title: 'ปัจจัยประกอบอื่นๆ 3',
+      title: 'ปัจจัยประกอบ กองทุนตราสารหนี้',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
     },
     'master-placeholder-11': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
@@ -1706,13 +2053,15 @@ function ensureExtendedPageConfigs() {
       title: 'ปัจจัยประกอบอื่นๆ 4',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
     },
     'master-placeholder-12': {
       sheetId: CONFIG.SHEETS?.RAW_FOR_SEC || '',
       tabName: '2026-Q1',
       title: 'เปรียบเทียบค่าธรรมเนียม',
-      source: 'Raw For Sec + AVP Master Fund ID',
-      localFile: 'Data/Raw For Sec - 2026-Q1.json',
+      source: 'Data For SEC API + AVP Master Fund ID',
+      localFile: 'Data/Data For SEC API - 2026-Q1.json',
+      datasetKey: 'secApi',
     },
     'master-placeholder-7': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
@@ -1720,22 +2069,34 @@ function ensureExtendedPageConfigs() {
       title: 'Top 10 Holding V2',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
+      datasetKey: 'masterFund',
     },
     'income-fund-1': {
       title: 'Income Fund',
-      source: 'Income Fund',
+      source: 'Data For SEC API + Fund Key Performance AVP',
     },
     'income-fund-2': {
       title: 'Income Fund 2',
-      source: 'Income Fund',
+      source: 'Data For SEC API + Fund Key Performance AVP',
+    },
+    'fund-list-update': {
+      sheetId: CONFIG.SHEETS?.FUND_LIST_UPDATE || '',
+      tabName: 'fund_list_changes',
+      title: 'Fund List Update',
+      source: 'Google Sheet: fund_list_changes',
+    },
+    'fund-selection-logs': {
+      tabName: '2026-Q1',
+      title: 'Fund Selection Logs',
+      source: 'Google Drive JSON: Fund Selection Logs',
     },
   };
 
   Object.entries(defaults).forEach(([pageKey, fallback]) => {
-    CONFIG.PAGES[pageKey] = {
+    CONFIG.PAGES[pageKey] = applyDatasetConfig(pageKey, {
       ...fallback,
       ...(CONFIG.PAGES[pageKey] || {}),
-    };
+    });
   });
 }
 
@@ -1755,6 +2116,73 @@ async function fetchLocalRows(localFile) {
     throw new Error(`Invalid local data format in ${localFile}`);
   }
 
+  return rows;
+}
+
+async function fetchIncomeFundSourceRows(pageKey, fallbackPageKey) {
+  ensureExtendedPageConfigs();
+  const cfg = CONFIG.PAGES[fallbackPageKey];
+  const quarter = State.currentQuarter || cfg?.tabName || '2026-Q1';
+  const localFile = resolveQuarterLocalFile(cfg?.localFile, cfg?.tabName, quarter);
+  const rows = await fetchLocalRows(localFile);
+  const sourceName = DATASET_REGISTRY[cfg?.datasetKey]?.label || cfg?.source || fallbackPageKey;
+  const sourceBadge = `Local JSON: ${sourceName} (${quarter})`;
+  const current = State._pageDataSource[pageKey]
+    ? State._pageDataSource[pageKey].split(' + ')
+    : [];
+  if (!current.includes(sourceBadge)) current.push(sourceBadge);
+  State._pageDataSource[pageKey] = current.join(' + ');
+  return rows;
+}
+
+async function fetchIncomeFundListRows(pageKey) {
+  ensureExtendedPageConfigs();
+  const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+  const localFile = `Data/Income Fund - ${quarter}.json`;
+  const resp = await fetch(localFile, { cache: 'no-store' });
+  if (!resp.ok) {
+    throw new Error(`Local income fund list not found (${resp.status})`);
+  }
+  const payload = await resp.json();
+  const items = Array.isArray(payload?.items) ? payload.items : [];
+  if (!items.length) {
+    throw new Error(`Invalid income fund list in ${localFile}`);
+  }
+  State._pageDataSource[pageKey] = `Local JSON: Income Fund (${payload.quarter || quarter})`;
+  return items.map(item => ({
+    name: String(item.name || '').trim(),
+    policy: String(item.policy || '').trim(),
+    source: String(item.source || '').trim(),
+  })).filter(item => item.name && item.policy);
+}
+
+function driveJsonYearFromQuarter(tabName) {
+  const match = String(tabName || '').trim().match(/^(\d{4})-Q[1-4]$/i);
+  return match?.[1] || '';
+}
+
+function buildDriveJsonFolderSegments(cfg) {
+  const quarter = String(cfg.tabName || '').trim().toUpperCase();
+  const year = driveJsonYearFromQuarter(quarter);
+  return (cfg.driveJsonFolderSegments || ['{year}', '{quarter}', 'base']).map(segment => (
+    String(segment)
+      .replace(/\{year\}/g, year)
+      .replace(/\{quarter\}/g, quarter)
+  ));
+}
+
+async function fetchDriveJsonRows(cfg) {
+  if (!cfg.driveJsonRootFolderId || !cfg.driveJsonFileName) {
+    throw new Error('Drive JSON source is not configured');
+  }
+  const rows = await SheetsAPI.fetchDriveJsonRows(
+    cfg.driveJsonRootFolderId,
+    buildDriveJsonFolderSegments(cfg),
+    cfg.driveJsonFileName
+  );
+  if (!Array.isArray(rows)) {
+    throw new Error(`Invalid Drive JSON format in ${cfg.driveJsonFileName}`);
+  }
   return rows;
 }
 
@@ -1781,6 +2209,15 @@ async function fetchPageData(pageKey) {
       State._pageDataSource[pageKey] = 'Source: Local JSON';
       return rememberPageDataMeta(pageKey, rows, cfgWithTab);
     } catch (err) {
+      if (cfgWithTab.preferDriveJson) {
+        try {
+          const rows = await fetchDriveJsonRows(cfgWithTab);
+          State._pageDataSource[pageKey] = `Source: Google Drive JSON (${cfgWithTab.tabName})`;
+          return rememberPageDataMeta(pageKey, rows, cfgWithTab);
+        } catch {
+          /* fall through to Google Sheets */
+        }
+      }
       const rows = await SheetsAPI.fetchSheetData(cfgWithTab.sheetId, cfgWithTab.tabName);
       State._pageDataSource[pageKey] = 'Source: Google Sheets fallback';
       return rememberPageDataMeta(pageKey, rows, cfgWithTab);
@@ -1789,10 +2226,24 @@ async function fetchPageData(pageKey) {
 
   if (mode === 'google_first') {
     try {
+      if (cfgWithTab.preferDriveJson) {
+        const rows = await fetchDriveJsonRows(cfgWithTab);
+        State._pageDataSource[pageKey] = `Source: Google Drive JSON (${cfgWithTab.tabName})`;
+        return rememberPageDataMeta(pageKey, rows, cfgWithTab);
+      }
       const rows = await SheetsAPI.fetchSheetData(cfgWithTab.sheetId, cfgWithTab.tabName);
       State._pageDataSource[pageKey] = `Source: Google Sheets (${cfgWithTab.tabName})`;
       return rememberPageDataMeta(pageKey, rows, cfgWithTab);
     } catch (err) {
+      if (cfgWithTab.preferDriveJson && cfgWithTab.sheetId) {
+        try {
+          const rows = await SheetsAPI.fetchSheetData(cfgWithTab.sheetId, cfgWithTab.tabName);
+          State._pageDataSource[pageKey] = `Source: Google Sheets fallback (${cfgWithTab.tabName})`;
+          return rememberPageDataMeta(pageKey, rows, cfgWithTab);
+        } catch {
+          /* fall through to Local JSON */
+        }
+      }
       if (!cfgWithTab.localFile) throw err;
       const rows = await fetchLocalRows(cfgWithTab.localFile);
       State._pageDataSource[pageKey] = 'Source: Local JSON fallback';
@@ -1814,6 +2265,64 @@ function quarterSortValue(label) {
   const match = String(label || '').trim().match(/^(\d{4})-Q([1-4])$/i);
   if (!match) return Number.NEGATIVE_INFINITY;
   return (Number(match[1]) * 10) + Number(match[2]);
+}
+
+function isQuarterLabel(value) {
+  return /^\d{4}-Q[1-4]$/i.test(String(value || '').trim());
+}
+
+function sortQuartersDesc(quarters) {
+  return [...new Set((quarters || []).filter(isQuarterLabel))]
+    .sort((a, b) => quarterSortValue(b) - quarterSortValue(a));
+}
+
+function intersectQuarterLists(lists) {
+  const normalized = (lists || []).map(list => new Set(sortQuartersDesc(list)));
+  if (!normalized.length) return [];
+  const [first, ...rest] = normalized;
+  return sortQuartersDesc([...first].filter(q => rest.every(set => set.has(q))));
+}
+
+async function detectSheetReadyQuarters() {
+  const metas = await Promise.all(REQUIRED_QUARTER_DATASET_KEYS.map(async key => {
+    const dataset = DATASET_REGISTRY[key];
+    const meta = await SheetsAPI.getSheetTabs(dataset.sheetId);
+    return (meta.tabs || []).filter(isQuarterLabel);
+  }));
+  return intersectQuarterLists(metas);
+}
+
+async function detectDriveJsonReadyQuarters() {
+  const requiredFiles = REQUIRED_QUARTER_DATASET_KEYS
+    .map(key => DATASET_REGISTRY[key]?.jsonFileName)
+    .filter(Boolean);
+  const yearFolders = (await SheetsAPI.listDriveFolderFiles(JSON_DRIVE_ROOT_FOLDER_ID))
+    .filter(file => file.mimeType === 'application/vnd.google-apps.folder' && /^\d{4}$/.test(String(file.name || '')));
+
+  const ready = [];
+  for (const yearFolder of yearFolders) {
+    const quarterFolders = (await SheetsAPI.listDriveFolderFiles(yearFolder.id))
+      .filter(file => file.mimeType === 'application/vnd.google-apps.folder' && isQuarterLabel(file.name));
+    for (const quarterFolder of quarterFolders) {
+      const baseFolder = (await SheetsAPI.listDriveFolderFiles(quarterFolder.id))
+        .find(file => file.mimeType === 'application/vnd.google-apps.folder' && String(file.name || '').trim() === 'base');
+      if (!baseFolder) continue;
+      const baseFiles = await SheetsAPI.listDriveFolderFiles(baseFolder.id);
+      const fileNames = new Set(baseFiles.map(file => String(file.name || '').trim()));
+      if (requiredFiles.every(name => fileNames.has(name))) {
+        ready.push(String(quarterFolder.name || '').trim().toUpperCase());
+      }
+    }
+  }
+  return sortQuartersDesc(ready);
+}
+
+async function detectReadyQuarters() {
+  const [sheetQuarters, driveQuarters] = await Promise.all([
+    detectSheetReadyQuarters(),
+    detectDriveJsonReadyQuarters(),
+  ]);
+  return intersectQuarterLists([sheetQuarters, driveQuarters]);
 }
 
 function getFeeComparisonQuarterPair() {
@@ -1865,14 +2374,31 @@ async function fetchPageDataForTab(pageKey, tabName) {
     try {
       return await fetchLocalRows(cfgWithTab.localFile);
     } catch (err) {
+      if (cfgWithTab.preferDriveJson) {
+        try {
+          return await fetchDriveJsonRows(cfgWithTab);
+        } catch {
+          /* fall through to Google Sheets */
+        }
+      }
       return await SheetsAPI.fetchSheetData(cfgWithTab.sheetId, cfgWithTab.tabName);
     }
   }
 
   if (mode === 'google_first') {
     try {
+      if (cfgWithTab.preferDriveJson) {
+        return await fetchDriveJsonRows(cfgWithTab);
+      }
       return await SheetsAPI.fetchSheetData(cfgWithTab.sheetId, cfgWithTab.tabName);
     } catch (err) {
+      if (cfgWithTab.preferDriveJson && cfgWithTab.sheetId) {
+        try {
+          return await SheetsAPI.fetchSheetData(cfgWithTab.sheetId, cfgWithTab.tabName);
+        } catch {
+          /* fall through to Local JSON */
+        }
+      }
       if (!cfgWithTab.localFile) throw err;
       return await fetchLocalRows(cfgWithTab.localFile);
     }
@@ -2008,6 +2534,70 @@ function buildSelectedFundsCatalog(rows) {
       assetHouse: (CI.ASSET_HOUSE >= 0 ? r[CI.ASSET_HOUSE] : '') || '',
     };
   }).filter(f => f.code);
+}
+
+function rowValue(row, index) {
+  return index >= 0 ? String(row?.[index] ?? '').trim() : '';
+}
+
+function buildIncomeFundRows(secRows = [], keyPerformanceRows = []) {
+  const secHeaders = secRows[0] || [];
+  const secIdx = {
+    nameTh: findColumnIndex(secHeaders, ['proj_name_th']),
+    nameEn: findColumnIndex(secHeaders, ['proj_name_en']),
+    className: findColumnIndex(secHeaders, ['fund_class_name']),
+    abbr: findColumnIndex(secHeaders, ['proj_abbr_name']),
+    policy: findColumnIndex(secHeaders, ['dividend_policy']),
+  };
+
+  const keyHeaders = keyPerformanceRows[0] || [];
+  const keyIdx = {
+    name: findColumnIndex(keyHeaders, ['Name', 'Fund Name', 'FundName']),
+    code: findColumnIndex(keyHeaders, ['Fund Code', 'Code']),
+    policy: findColumnIndex(keyHeaders, ['Dividend', 'Div']),
+  };
+
+  const items = [];
+  secRows.slice(1).forEach(row => {
+    if (rowValue(row, secIdx.policy).toUpperCase() !== 'Y') return;
+    const baseName = rowValue(row, secIdx.nameTh)
+      || rowValue(row, secIdx.nameEn)
+      || rowValue(row, secIdx.abbr)
+      || rowValue(row, secIdx.className);
+    if (!baseName) return;
+    const className = rowValue(row, secIdx.className);
+    const abbr = rowValue(row, secIdx.abbr);
+    const classSuffix = className && className.toLowerCase() !== 'main' && className !== abbr
+      ? ` (${className})`
+      : '';
+    items.push({
+      name: `${baseName}${classSuffix}`,
+      policy: 'Dividend',
+      source: 'Data For SEC API',
+    });
+  });
+
+  keyPerformanceRows.slice(1).forEach(row => {
+    const policy = rowValue(row, keyIdx.policy);
+    if (policy !== 'Dividend' && policy !== 'Redemption') return;
+    const name = rowValue(row, keyIdx.name) || rowValue(row, keyIdx.code);
+    if (!name) return;
+    items.push({
+      name,
+      policy,
+      source: 'Fund Key Performance AVP',
+    });
+  });
+
+  const seen = new Set();
+  return items
+    .sort((a, b) => a.name.localeCompare(b.name, 'th') || a.policy.localeCompare(b.policy, 'en'))
+    .filter(item => {
+      const key = `${normalizeFundKey(item.name)}::${item.policy}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 function normalizeFundOverrideItem(item) {
@@ -2148,6 +2738,41 @@ async function deleteMasterAllocation(key) {
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
   return data;
+}
+
+async function loadFixedIncomeFactorsOverrides(force = false) {
+  if (!force && State.fixedIncomeFactorsOverridesLoaded) return State.fixedIncomeFactorsOverrides;
+  try {
+    const resp = await fetch('/api/fixed-income-factors-overrides', { cache: 'no-store' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    State.fixedIncomeFactorsOverrides = {
+      items: data.items || {},
+      updatedAt: data.updatedAt || null,
+      source: data.source || 'Data/fixed_income_factors_overrides.json',
+    };
+    State.fixedIncomeFactorsOverridesLoaded = true;
+    State.fixedIncomeFactorsOverridesLoadError = '';
+  } catch (err) {
+    State.fixedIncomeFactorsOverrides = State.fixedIncomeFactorsOverrides || { items: {}, updatedAt: null };
+    State.fixedIncomeFactorsOverridesLoadError = err.message || String(err);
+  }
+  return State.fixedIncomeFactorsOverrides;
+}
+
+async function saveFixedIncomeFactorsOverrides(items) {
+  const resp = await fetch('/api/fixed-income-factors-overrides', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, replace: true }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || `บันทึก override ไม่สำเร็จ (${resp.status})`);
+  }
+  State.fixedIncomeFactorsOverridesLoaded = false;
+  await loadFixedIncomeFactorsOverrides(true);
+  return data.items;
 }
 
 async function ensureSelectedFundsCatalog() {
@@ -2431,7 +3056,7 @@ function buildThaiAnnualizedExportPayload(pageKey, sorted, metricKeys, leftCfg, 
   return buildPresentationTablePayload({
     presetKey: 'thaiAnnualizedV2',
     title: CONFIG.PAGES[pageKey]?.title || 'Thai Annualized Report',
-    source: CONFIG.PAGES['select-fund']?.source || 'Percentrank Freestyle',
+    source: CONFIG.PAGES['select-fund']?.source || 'Fund Key Performance AVP',
     headerGroups: [
       { label: '', span: 3, bg: '#dbe4f0', color: '#334155' },
       { label: leftCfg.groupTitle, span: 6, ...leftTheme },
@@ -2962,7 +3587,7 @@ function buildThaiAnnualizedTablePayload(pageKey, view, viewCfg, sorted, metricK
     rowsPerSlide: 18,
     title: CONFIG.PAGES[pageKey]?.title || 'Thai Annualized Report',
     subtitle: viewCfg.groupTitle,
-    source: CONFIG.PAGES['select-fund']?.source || 'Percentrank Freestyle',
+    source: CONFIG.PAGES['select-fund']?.source || 'Fund Key Performance AVP',
     headerGroups: [
       { label: '', span: 3, bg: '#dbe4f0', color: '#334155' },
       { label: 'ผลตอบแทน (%)', span: 6, bg: '#6198cb', color: '#ffffff' },
@@ -3190,7 +3815,7 @@ async function renderThaiAnnualizedReport(area, pageKey, view = 'return', showTo
   }).join('');
 
   area.innerHTML = `
-    ${pageToolActions(pageKey, CONFIG.PAGES['select-fund']?.source || 'Percentrank Freestyle', toggleActions)}
+    ${pageToolActions(pageKey, CONFIG.PAGES['select-fund']?.source || 'Fund Key Performance AVP', toggleActions)}
     <div class="card report-card report-card-annualized" id="report-card">
       <table class="annualized-report">
         <thead>
@@ -3395,7 +4020,7 @@ function buildThaiCalendarExportPayload(sorted, visibleYears, leftCfg, rightCfg,
   return buildPresentationTablePayload({
     presetKey: 'thaiCalendar',
     title: CONFIG.PAGES['thai-calendar']?.title || 'Thai Calendar Year',
-    source: CONFIG.PAGES['select-fund']?.source || 'Percentrank Freestyle',
+    source: CONFIG.PAGES['select-fund']?.source || 'Fund Key Performance AVP',
     headerGroups: [
       { label: leftCfg.groupTitle, span: visibleYears.length, ...leftTheme },
       { label: '', span: 1, bg: '#dbe4f0', color: '#334155' },
@@ -3724,6 +4349,17 @@ function pickBestMasterRecord(records) {
   })[0] || null;
 }
 
+function extractSecFeeValue(text, labels = []) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  const parts = raw.split('|').map(part => part.trim()).filter(Boolean);
+  const matched = parts.find(part => labels.some(label => part.toLowerCase().includes(String(label).toLowerCase())));
+  const source = matched || raw;
+  const afterColon = source.includes(':') ? source.split(':').slice(1).join(':') : source;
+  const value = String(afterColon).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+  return value ? value[0] : '';
+}
+
 function buildRawSecLookup(rows) {
   const headers = rows[0] || [];
   const ci = {
@@ -3739,25 +4375,48 @@ function buildRawSecLookup(rows) {
     fxHedging: findColumnIndex(headers, ['fx_hedging']),
     pdfFactsheet: findColumnIndex(headers, ['pdf_factsheet']),
     asOfDate: findColumnIndex(headers, ['as_of_date']),
+    navFeesActual: findColumnIndex(headers, ['actual_value_fee_type_desc_nav']),
+    buyFeesActual: findColumnIndex(headers, ['actual_value_fee_type_desc_buy']),
+    feesLastUpdated: findColumnIndex(headers, ['fees_last_upd_date']),
+    minimumSubIpo: findColumnIndex(headers, ['minimum_sub_ipo']),
+    minimumSub: findColumnIndex(headers, ['minimum_sub']),
+    recoveringPeriod: findColumnIndex(headers, ['recovering_period']),
+    portfolioTurnoverRatio: findColumnIndex(headers, ['portfolio_turnover_ratio']),
+    portfolioDurationPeriod: findColumnIndex(headers, ['portfolio_duration_period']),
+    yieldToMaturity: findColumnIndex(headers, ['yield_to_maturity']),
   };
   const get = (row, index) => index >= 0 ? String(row[index] ?? '').trim() : '';
   const map = new Map();
   rows.slice(1).forEach(row => {
-    const ter = get(row, ci.ter);
-    if (ter === '') return;
+    const ter = get(row, ci.ter) || extractSecFeeValue(get(row, ci.navFeesActual), [
+      'Total Fee and Expense',
+      'ค่าใช้จ่ายรวมทั้งหมด',
+    ]);
+    const front = get(row, ci.front) || extractSecFeeValue(get(row, ci.buyFeesActual), [
+      'Front-end Fee',
+      'ค่าธรรมเนียมการขายหน่วยลงทุน',
+    ]);
+    const back = get(row, ci.back) || extractSecFeeValue(get(row, ci.buyFeesActual), [
+      'Back-end Fee',
+      'ค่าธรรมเนียมการรับซื้อคืนหน่วยลงทุน',
+    ]);
     const record = {
       projName: get(row, ci.projName),
       className: get(row, ci.className),
       fundName: get(row, ci.fundName),
       ter,
-      front: get(row, ci.front),
-      back: get(row, ci.back),
-      date: get(row, ci.date),
-      initial: get(row, ci.initial),
-      subsequent: get(row, ci.subsequent),
+      front,
+      back,
+      date: get(row, ci.date) || get(row, ci.feesLastUpdated),
+      initial: get(row, ci.initial) || get(row, ci.minimumSubIpo),
+      subsequent: get(row, ci.subsequent) || get(row, ci.minimumSub),
       fxHedging: get(row, ci.fxHedging),
       pdfFactsheet: get(row, ci.pdfFactsheet),
-      asOfDate: get(row, ci.asOfDate),
+      asOfDate: get(row, ci.asOfDate) || get(row, ci.feesLastUpdated),
+      recoveringPeriod: get(row, ci.recoveringPeriod),
+      portfolioTurnoverRatio: get(row, ci.portfolioTurnoverRatio),
+      portfolioDurationPeriod: get(row, ci.portfolioDurationPeriod),
+      yieldToMaturity: get(row, ci.yieldToMaturity),
     };
     const score = parseDmyDate(record.asOfDate) || parseDmyDate(record.date);
     [record.className, record.fundName, record.projName]
@@ -3825,23 +4484,63 @@ async function buildSelectedMasterUniverseForQuarter(tabName, selectRows = null)
   return buildSelectedMasterUniverseFromRows(resolvedSelectRows, masterRows);
 }
 
-function buildFeeComparisonRows(universe, rawLookup) {
+async function buildSelectedFeeUniverse() {
+  const selectRows = await fetchCached('select-fund');
+  await loadFundOverrides();
+  const masterRows = buildMasterRecords(await fetchCached('master-placeholder-2'));
+  return buildSelectedFeeUniverseFromRows(selectRows, masterRows);
+}
+
+function buildSelectedFeeUniverseFromRows(selectRows, masterRows) {
+  const allFunds = applyFundOverrides(buildSelectedFundsCatalog(selectRows))
+    .filter(f => f.code)
+    .sort((a, b) => String(a.code).localeCompare(String(b.code), 'th'));
+
+  if (!Object.keys(State.selectedFunds || {}).length) {
+    State.selectedFunds = Object.fromEntries(allFunds.map(f => [f.key, f]));
+  }
+
+  const scopedFunds = State.selectedKeys.size > 0
+    ? allFunds.filter(f => State.selectedKeys.has(f.key))
+    : allFunds.slice(0, 18);
+
+  const byIsin = {};
+  masterRows.forEach(record => {
+    const key = String(record.isin || '').trim();
+    if (!key) return;
+    if (!byIsin[key]) byIsin[key] = [];
+    byIsin[key].push(record);
+  });
+
+  return scopedFunds.map(fund => {
+    const exact = byIsin[String(fund.masterId || '').trim()] || [];
+    const master = exact.length ? pickBestMasterRecord(exact) : null;
+    return { fund, master };
+  });
+}
+
+function buildFeeComparisonRows(universe, rawLookup, options = {}) {
+  const includeThaiOnly = !!options.includeThaiOnly;
   const rows = universe.map(({ fund, master }) => {
     const raw = rawLookup.get(String(fund.code || '').trim().toUpperCase()) || null;
-    const masterTer = parseNum(master.ongoingCost);
+    const masterTer = parseNum(master?.ongoingCost);
     const thaiTer = parseNum(raw?.ter);
-    const combined = !Number.isNaN(masterTer) && !Number.isNaN(thaiTer) ? masterTer + thaiTer : NaN;
+    const hasMasterTer = !Number.isNaN(masterTer);
+    const hasThaiTer = !Number.isNaN(thaiTer);
+    const combined = hasMasterTer && hasThaiTer
+      ? masterTer + thaiTer
+      : (includeThaiOnly && hasThaiTer ? thaiTer : NaN);
     const front = toFixedSafe(raw?.front, 4);
     const back = toFixedSafe(raw?.back, 4);
     const fxHedging = toFixedSafe(raw?.fxHedging, 2);
     return {
       thaiCode: fund.code,
-      masterName: master.name,
+      masterName: master?.name || fund.masterName || '-',
       masterTer,
       thaiTer,
       combined,
-      feeDate: raw?.date || master.ongoingCostDate || '',
-      masterTerText: toFixedSafe(master.ongoingCost),
+      feeDate: raw?.date || master?.ongoingCostDate || '',
+      masterTerText: master ? toFixedSafe(master.ongoingCost) : '',
       thaiTerText: raw?.ter || '',
       combinedText: Number.isNaN(combined) ? '' : combined.toFixed(2),
       frontText: front || '',
@@ -3852,7 +4551,7 @@ function buildFeeComparisonRows(universe, rawLookup) {
       depositCurrencyText: master?.currency || '',
       sourceLink: raw?.pdfFactsheet || '',
     };
-  }).filter(item => !Number.isNaN(item.masterTer) && !Number.isNaN(item.thaiTer));
+  }).filter(item => !Number.isNaN(item.thaiTer) && (includeThaiOnly || !Number.isNaN(item.masterTer)));
   return annotateFeeComparisonNameDiffs(rows);
 }
 
@@ -4089,6 +4788,1703 @@ const Pages = {
     App._currentExport = null;
   },
 
+  async fundListUpdate(area) {
+    const pageKey = 'fund-list-update';
+    const cfg = CONFIG.PAGES?.[pageKey] || {};
+    setLoading(area, 'กำลังโหลด Fund List Update...');
+
+    const normalizeRows = (rows) => {
+      if (!Array.isArray(rows) || !rows.length) return [];
+      if (Array.isArray(rows[0])) {
+        const headers = rows[0].map(value => String(value || '').trim());
+        return rows.slice(1).filter(row => row.some(cell => String(cell || '').trim())).map((row, idx) => {
+          const item = {};
+          headers.forEach((header, colIdx) => {
+            if (header) item[header] = row[colIdx] ?? '';
+          });
+          if (!item.id) item.id = `FLU-${idx + 1}`;
+          return item;
+        });
+      }
+      return rows;
+    };
+
+    const cleanRows = (items) => (Array.isArray(items) ? items : [])
+      .map((row, idx) => ({
+        id: String(row.id || `FLU-${Date.now()}-${idx + 1}`).trim(),
+        list_from: String(row.list_from || row.quarter_from || '').trim(),
+        list_to: String(row.list_to || row.quarter_to || '').trim(),
+        type: String(row.type || '').trim(),
+        asset_class: String(row.asset_class || '').trim(),
+        fund_list_old: String(row.fund_list_old || row.old_fund || '').trim(),
+        fund_list_current: String(row.fund_list_current || row.new_fund || '').trim(),
+        change_type: String(row.change_type || '').trim(),
+        note: String(row.note || '').trim(),
+        updated_at: String(row.updated_at || '').trim(),
+        updated_by: String(row.updated_by || State.currentUser?.email || '').trim(),
+      }));
+
+    const readDraftRows = () => {
+      try {
+        const payload = JSON.parse(localStorage.getItem(FUND_LIST_UPDATE_DRAFT_KEY) || 'null');
+        return cleanRows(payload?.rows || []);
+      } catch {
+        return [];
+      }
+    };
+
+    const writeDraftRows = () => {
+      const now = new Date().toISOString();
+      rows = cleanRows(rows).map(row => ({
+        ...row,
+        updated_at: row.updated_at || now,
+        updated_by: row.updated_by || State.currentUser?.email || '',
+      }));
+      localStorage.setItem(FUND_LIST_UPDATE_DRAFT_KEY, JSON.stringify({
+        updatedAt: now,
+        rows,
+      }));
+      return now;
+    };
+
+    const rowsToSheetValues = () => [
+      FUND_LIST_UPDATE_COLUMNS,
+      ...cleanRows(rows).map(row => FUND_LIST_UPDATE_COLUMNS.map(column => row[column] || '')),
+    ];
+
+    const fetchSeedRows = async () => {
+      const resp = await fetch(FUND_LIST_UPDATE_SEED_FILE, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`Seed file not found (${resp.status})`);
+      const payload = await resp.json();
+      return cleanRows(payload?.rows || payload?.values || []);
+    };
+
+    let fundSuggestions = [];
+    try {
+      const selectRows = await fetchCached('select-fund');
+      const seenCodes = new Set();
+      fundSuggestions = buildSelectedFundsCatalog(selectRows)
+        .filter(fund => {
+          const key = normalizeFundKey(fund.code);
+          if (!key || seenCodes.has(key)) return false;
+          seenCodes.add(key);
+          return true;
+        })
+        .sort((a, b) => String(a.code || '').localeCompare(String(b.code || ''), 'en'));
+    } catch {
+      fundSuggestions = [];
+    }
+    const fundMatches = (value = '') => {
+      const q = String(value || '').trim().toLowerCase();
+      if (!q) return fundSuggestions.slice(0, 10);
+      const nq = normalizeFundKey(q);
+      return fundSuggestions
+        .filter(fund => (
+          normalizeFundKey(fund.code).includes(nq)
+          || String(fund.name || '').toLowerCase().includes(q)
+          || String(fund.assetHouse || '').toLowerCase().includes(q)
+        ))
+        .slice(0, 10);
+    };
+
+    let rows = [];
+    let sourceNote = 'Draft ใน Browser';
+    let loadError = '';
+    const draftRows = readDraftRows();
+    let listFrom = '';
+    let listTo = '';
+
+    if (cfg.sheetId && window.SheetsAPI?.fetchSheetData) {
+      try {
+        rows = cleanRows(normalizeRows(await SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName || 'fund_list_changes')));
+        sourceNote = `${cfg.source || 'Google Sheet'} · ${cfg.tabName || 'fund_list_changes'}`;
+        State._pageDataSource[pageKey] = 'Google Sheet';
+      } catch (err) {
+        loadError = err.message || String(err);
+      }
+    } else if (draftRows.length) {
+      rows = draftRows;
+      State._pageDataSource[pageKey] = 'Local draft';
+    }
+
+    if (!rows.length && draftRows.length) {
+      rows = draftRows;
+      sourceNote = 'Draft ใน Browser';
+      State._pageDataSource[pageKey] = 'Local draft';
+    }
+
+    if (!rows.length) {
+      try {
+        rows = await fetchSeedRows();
+        sourceNote = 'Seed จาก PDF: Fund List Q3-2025';
+        State._pageDataSource[pageKey] = 'PDF seed';
+      } catch { /* fallback to sample below */ }
+    }
+
+    if (!rows.length) {
+      rows = cleanRows(FUND_LIST_UPDATE_SAMPLE_ROWS);
+      sourceNote = 'ข้อมูลตัวอย่าง - กดบันทึก Draft เพื่อเริ่มใช้งาน';
+      State._pageDataSource[pageKey] = cfg.sheetId ? 'Sample fallback' : 'Sample data';
+    }
+    listFrom = rows.find(row => row.list_from)?.list_from || '2025-Q3';
+    listTo = rows.find(row => row.list_to)?.list_to || State.currentQuarter || '2026-Q1';
+
+    const syncListMetaToRows = () => {
+      listFrom = ($('#flu-list-from', area)?.value || listFrom || '').trim();
+      listTo = ($('#flu-list-to', area)?.value || listTo || '').trim();
+      rows = rows.map(row => ({
+        ...row,
+        list_from: listFrom,
+        list_to: listTo,
+      }));
+    };
+
+    const entryStatusOptions = () => [...new Set([
+      ...FUND_LIST_UPDATE_STATUS_OPTIONS,
+      ...rows.map(row => String(row.change_type || '').trim()).filter(Boolean),
+    ])];
+    const statusOptions = () => ['ทั้งหมด', ...entryStatusOptions()];
+    const entryAssetOptions = () => [...new Set([
+      ...FUND_LIST_UPDATE_ASSET_OPTIONS,
+      ...rows.map(row => String(row.asset_class || '').trim()).filter(Boolean),
+    ])].sort((a, b) => a.localeCompare(b, 'en'));
+
+    const changeToneClass = (value = '') => {
+      const text = String(value || '').trim();
+      if (!text) return '';
+      if (text.includes('เหมือนเดิม')) return 'flu-change-same';
+      if (text.includes('เพิ่ม')) return 'flu-change-add';
+      if (text.includes('สลับ')) return 'flu-change-swap';
+      if (text.includes('นำ') && text.includes('ออก')) return 'flu-change-remove';
+      if (text.includes('นํา') && text.includes('ออก')) return 'flu-change-remove';
+      if (text.includes('ตัด') && text.includes('ออก')) return 'flu-change-remove';
+      return '';
+    };
+
+    const statusCounts = () => rows.reduce((acc, row) => {
+      const key = String(row.change_type || 'ไม่ระบุ').trim() || 'ไม่ระบุ';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+
+    const createBlankRow = () => {
+      const now = new Date().toISOString();
+      return {
+        id: `FLU-${Date.now()}`,
+        list_from: listFrom,
+        list_to: listTo,
+        type: '',
+        asset_class: '',
+        fund_list_old: '',
+        fund_list_current: '',
+        change_type: '',
+        note: '',
+        updated_at: now,
+        updated_by: State.currentUser?.email || '',
+      };
+    };
+
+    const appendBlankRow = () => {
+      syncListMetaToRows();
+      rows.push(createBlankRow());
+      render();
+    };
+
+    const insertBlankRowAfter = (rowId) => {
+      syncListMetaToRows();
+      const index = rows.findIndex(row => row.id === rowId);
+      if (index < 0) {
+        rows.push(createBlankRow());
+      } else {
+        rows.splice(index + 1, 0, createBlankRow());
+      }
+      render();
+    };
+
+    const filteredRows = () => {
+      const query = ($('#flu-search', area)?.value || '').trim().toLowerCase();
+      const status = $('#flu-status', area)?.value || 'ทั้งหมด';
+      return rows.filter(row => {
+        const statusOk = status === 'ทั้งหมด' || String(row.change_type || '') === status;
+        const queryOk = !query || FUND_LIST_UPDATE_COLUMNS.some(key => String(row[key] || '').toLowerCase().includes(query));
+        return statusOk && queryOk;
+      });
+    };
+
+    const renderA4Preview = (items) => {
+      const pageSize = 42;
+      const minLastPageRows = 6;
+      const chunks = [];
+      let currentType = null;
+      let typeRows = [];
+      const buildTypeChunks = (rowsForType, type) => {
+        const typeChunks = [];
+        for (let i = 0; i < rowsForType.length; i += pageSize) {
+          typeChunks.push(rowsForType.slice(i, i + pageSize));
+        }
+        const last = typeChunks[typeChunks.length - 1];
+        const prev = typeChunks[typeChunks.length - 2];
+        if (typeChunks.length > 1 && last.length > 0 && last.length < minLastPageRows && prev.length > minLastPageRows) {
+          const needed = Math.min(minLastPageRows - last.length, prev.length - minLastPageRows);
+          last.unshift(...prev.splice(prev.length - needed, needed));
+        }
+        typeChunks.forEach(chunkRows => {
+          chunks.push({
+            type: type || '',
+            rows: chunkRows,
+          });
+        });
+      };
+      const flushTypeRows = () => {
+        if (!typeRows.length) return;
+        buildTypeChunks(typeRows, currentType);
+        typeRows = [];
+      };
+      items.forEach(row => {
+        const rowType = String(row.type || '').trim();
+        if (currentType !== null && rowType !== currentType) {
+          flushTypeRows();
+        }
+        currentType = rowType;
+        typeRows.push(row);
+      });
+      flushTypeRows();
+      if (!chunks.length) {
+        chunks.push({ type: '', rows: [] });
+      }
+      return chunks.map((pageChunk, pageIndex) => `
+        <section class="flu-a4-page">
+          <div class="flu-a4-head">
+            <div>
+              <h3>Fund List Update</h3>
+              <p>${esc(listFrom || 'เดิม')} → ${esc(listTo || 'ปัจจุบัน')}${pageChunk.type ? ` · ${esc(pageChunk.type)}` : ''}</p>
+            </div>
+            <span>หน้า ${pageIndex + 1} / ${chunks.length}</span>
+          </div>
+          <table class="flu-a4-table">
+            <thead>
+              <tr>
+                <th>Type</th>
+                <th>สินทรัพย์</th>
+                <th>Fund List ${esc(listFrom || 'เดิม')}</th>
+                <th>Fund List ${esc(listTo || 'ปัจจุบัน')}</th>
+                <th>สถานะ</th>
+                <th>หมายเหตุ</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${pageChunk.rows.map(row => `
+                <tr>
+                  <td>${esc(row.type || '')}</td>
+                  <td>${esc(row.asset_class || '')}</td>
+                  <td>${esc(row.fund_list_old || '')}</td>
+                  <td>${esc(row.fund_list_current || '')}</td>
+                  <td class="${changeToneClass(row.change_type)}">${esc(row.change_type || '')}</td>
+                  <td class="${changeToneClass(row.note)}">${esc(row.note || '')}</td>
+                </tr>
+              `).join('') || '<tr><td colspan="6">ไม่มีข้อมูล</td></tr>'}
+            </tbody>
+          </table>
+        </section>
+      `).join('');
+    };
+
+    const render = () => {
+      const filtered = filteredRows();
+      const counts = statusCounts();
+      const groupToneMap = new Map();
+      let groupToneSeq = 0;
+      const groupMeta = (row, prevRow) => {
+        const key = `${row.type || ''}::${row.asset_class || ''}`;
+        const prevKey = prevRow ? `${prevRow.type || ''}::${prevRow.asset_class || ''}` : '';
+        if (!groupToneMap.has(key)) {
+          groupToneSeq += 1;
+          groupToneMap.set(key, ((groupToneSeq - 1) % 6) + 1);
+        }
+        return {
+          key,
+          tone: groupToneMap.get(key),
+          isStart: key !== prevKey,
+        };
+      };
+
+      const tbody = $('#flu-body', area);
+      const count = $('#flu-count', area);
+      const summary = $('#flu-summary', area);
+      const a4Preview = $('#flu-a4-preview', area);
+      const oldHeader = $('#flu-old-list-header', area);
+      const currentHeader = $('#flu-current-list-header', area);
+      if (count) count.textContent = `${filtered.length.toLocaleString()} / ${rows.length.toLocaleString()} รายการ`;
+      if (oldHeader) oldHeader.textContent = `Fund List ${listFrom || 'เดิม'}`;
+      if (currentHeader) currentHeader.textContent = `Fund List ${listTo || 'ปัจจุบัน'}`;
+      if (a4Preview) a4Preview.innerHTML = renderA4Preview(filtered);
+      if (summary) {
+        summary.innerHTML = `
+          <div class="flu-metric">
+            <span>รายการทั้งหมด</span>
+            <strong>${rows.length.toLocaleString()}</strong>
+          </div>
+          ${Object.entries(counts).map(([label, value]) => `
+            <div class="flu-metric">
+              <span>${esc(label)}</span>
+              <strong>${Number(value).toLocaleString()}</strong>
+            </div>
+          `).join('')}`;
+      }
+      if (!tbody) return;
+      const editableRowsHtml = filtered.length ? filtered.map((row, rowIndex) => {
+        const meta = groupMeta(row, filtered[rowIndex - 1]);
+        return `
+          <tr data-id="${esc(row.id)}" class="flu-group-row flu-group-tone-${meta.tone}${meta.isStart ? ' is-group-start' : ''}">
+            <td class="flu-drag-cell"><button class="flu-drag-handle" type="button" title="ลากเพื่อย้ายแถว" aria-label="ลากเพื่อย้ายแถว">↕</button></td>
+            <td><input class="flu-cell-input" data-field="type" value="${esc(row.type || '')}" placeholder="Core - General"></td>
+            <td>
+              <select class="flu-cell-input" data-field="asset_class">
+                <option value=""></option>
+                ${entryAssetOptions().map(option => `<option value="${esc(option)}" ${row.asset_class === option ? 'selected' : ''}>${esc(option)}</option>`).join('')}
+              </select>
+            </td>
+            <td><input class="flu-cell-input flu-code-input flu-fund-autocomplete" data-field="fund_list_old" value="${esc(row.fund_list_old || '')}" placeholder="พิมพ์รหัส เช่น KKP" autocomplete="off"></td>
+            <td><input class="flu-cell-input flu-code-input flu-fund-autocomplete" data-field="fund_list_current" value="${esc(row.fund_list_current || '')}" placeholder="พิมพ์รหัส เช่น KKP" autocomplete="off"></td>
+            <td>
+              <select class="flu-cell-input flu-change-select ${changeToneClass(row.change_type)}" data-field="change_type">
+                <option value=""></option>
+                ${entryStatusOptions().map(option => `<option value="${esc(option)}" ${row.change_type === option ? 'selected' : ''}>${esc(option)}</option>`).join('')}
+              </select>
+            </td>
+            <td><input class="flu-cell-input flu-note-input ${changeToneClass(row.note)}" data-field="note" value="${esc(row.note || '')}" placeholder="รายละเอียด"></td>
+            <td><button class="btn btn-xs btn-danger flu-delete-row" type="button" data-id="${esc(row.id)}">ลบ</button></td>
+          </tr>
+          <tr class="flu-inline-add-row flu-group-tone-${meta.tone}" data-after-id="${esc(row.id)}">
+            <td colspan="8"><button class="flu-inline-add" type="button" data-after-id="${esc(row.id)}">+ เพิ่มแถว</button></td>
+          </tr>`;
+      }).join('') : `
+        <tr>
+          <td colspan="8" class="flu-empty">ไม่พบรายการตามเงื่อนไขที่เลือก</td>
+        </tr>`;
+      tbody.innerHTML = `${editableRowsHtml}
+        <tr class="flu-add-row-tr">
+          <td colspan="8">
+            <button class="flu-add-bottom" id="flu-add-row-bottom" type="button">+ เพิ่มแถวด้านล่าง</button>
+          </td>
+        </tr>`;
+    };
+
+    area.innerHTML = `
+      <div class="flu-layout">
+        <div class="page-tools flu-entry-tools">
+          <div class="page-tools-meta">
+            ${sourceBadgeHtml(pageKey, sourceNote)}
+            <span class="badge badge-data-origin" id="flu-count">${rows.length.toLocaleString()} รายการ</span>
+            ${loadError ? `<span class="badge badge-warning">โหลด Sheet ไม่สำเร็จ: ${esc(loadError)}</span>` : ''}
+          </div>
+          <div class="page-tools-actions">
+            <button class="btn btn-ghost" id="flu-load-seed" type="button">โหลด Q3-2025 จาก PDF</button>
+            <button class="btn btn-primary" id="flu-save-draft" type="button">บันทึก Draft</button>
+            <button class="btn btn-success" id="flu-save-sheet" type="button" ${cfg.sheetId ? '' : 'disabled'}>บันทึกลง Google Sheet</button>
+            <button class="btn btn-ghost" id="flu-export-csv" type="button">Export CSV</button>
+          </div>
+        </div>
+
+        <div class="flu-summary" id="flu-summary"></div>
+
+        <div class="card flu-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">รอบข้อมูล Fund List</div>
+              <div class="flu-subtitle">กำหนดครั้งเดียว แล้วระบบจะบันทึกไปกับทุกแถว</div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="flu-period-grid">
+              <label class="flu-period-field">
+                <span>Fund List เดิม</span>
+                <input class="flu-cell-input" id="flu-list-from" value="${esc(listFrom)}" placeholder="2025-Q3">
+              </label>
+              <label class="flu-period-field">
+                <span>Fund List ปัจจุบัน</span>
+                <input class="flu-cell-input" id="flu-list-to" value="${esc(listTo)}" placeholder="2026-Q1">
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="card flu-card" id="report-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Fund List Update Entry</div>
+              <div class="flu-subtitle">กรอกเป็น row-based data เพื่อบันทึกลง tab <code>fund_list_changes</code></div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="filter-bar flu-filter-bar">
+              <input class="search-input" id="flu-search" type="text" placeholder="ค้นหา fund code, asset class, note..." autocomplete="off">
+              <select class="filter-select" id="flu-status">
+                ${statusOptions().map(option => `<option value="${esc(option)}">${esc(option)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="table-wrapper flu-table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="flu-drag-head"></th>
+                    <th>Type</th>
+                    <th>สินทรัพย์</th>
+                    <th id="flu-old-list-header">Fund List ${esc(listFrom || 'เดิม')}</th>
+                    <th id="flu-current-list-header">Fund List ${esc(listTo || 'ปัจจุบัน')}</th>
+                    <th>สถานะ</th>
+                    <th>หมายเหตุ</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="flu-body"></tbody>
+              </table>
+            </div>
+            <div class="flu-suggest-menu" id="flu-suggest-menu" hidden></div>
+          </div>
+        </div>
+
+        <div class="card flu-card">
+          <div class="card-header">
+            <div class="card-title">Google Sheet Schema</div>
+          </div>
+          <div class="card-body">
+            <div class="flu-schema">
+              ${FUND_LIST_UPDATE_COLUMNS.map(column => `<code>${esc(column)}</code>`).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="card flu-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">รายชื่อกองที่เตรียมไว้</div>
+              <div class="flu-subtitle">Preview ขนาดประมาณ A4 แบ่งหน้าตามจำนวนรายการที่แสดงอยู่</div>
+            </div>
+          </div>
+          <div class="card-body flu-a4-stage" id="flu-a4-preview"></div>
+        </div>
+      </div>`;
+
+    $('#flu-search', area)?.addEventListener('input', render);
+    $('#flu-status', area)?.addEventListener('change', render);
+    $('#flu-list-from', area)?.addEventListener('input', () => {
+      syncListMetaToRows();
+      render();
+    });
+    $('#flu-list-to', area)?.addEventListener('input', () => {
+      syncListMetaToRows();
+      render();
+    });
+    $('#flu-load-seed', area)?.addEventListener('click', async () => {
+      try {
+        rows = await fetchSeedRows();
+        listFrom = rows.find(row => row.list_from)?.list_from || '2025-Q3';
+        listTo = rows.find(row => row.list_to)?.list_to || '2026-Q1';
+        const fromInput = $('#flu-list-from', area);
+        const toInput = $('#flu-list-to', area);
+        if (fromInput) fromInput.value = listFrom;
+        if (toInput) toInput.value = listTo;
+        sourceNote = 'Seed จาก PDF: Fund List Q3-2025';
+        State._pageDataSource[pageKey] = 'PDF seed';
+        render();
+        toast(`โหลด Q3-2025 จาก PDF แล้ว ${rows.length.toLocaleString()} รายการ`, 'success');
+      } catch (err) {
+        toast(`โหลด seed ไม่สำเร็จ: ${err.message || err}`, 'error');
+      }
+    });
+    $('#flu-save-draft', area)?.addEventListener('click', () => {
+      syncListMetaToRows();
+      const savedAt = writeDraftRows();
+      render();
+      toast(`บันทึก Draft แล้ว (${savedAt.slice(0, 19).replace('T', ' ')})`, 'success');
+    });
+    $('#flu-save-sheet', area)?.addEventListener('click', async () => {
+      if (!cfg.sheetId) {
+        toast('ยังไม่ได้ตั้งค่า Google Sheet ID สำหรับ Fund List Update', 'warning');
+        return;
+      }
+      try {
+        syncListMetaToRows();
+        writeDraftRows();
+        await SheetsAPI.updateSheetValues(cfg.sheetId, cfg.tabName || 'fund_list_changes', rowsToSheetValues());
+        State._pageDataSource[pageKey] = 'Google Sheet';
+        render();
+        toast('บันทึกลง Google Sheet แล้ว', 'success');
+      } catch (err) {
+        toast(`บันทึกลง Google Sheet ไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
+      }
+    });
+    $('#flu-export-csv', area)?.addEventListener('click', () => {
+      syncListMetaToRows();
+      const csv = rowsToSheetValues()
+        .map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+        .join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `fund-list-update-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+    const autoSetChangeType = (row) => {
+      const oldCode = normalizeFundKey(row.fund_list_old);
+      const currentCode = normalizeFundKey(row.fund_list_current);
+      if (!oldCode || !currentCode) return false;
+      const nextType = oldCode === currentCode ? 'เหมือนเดิม' : 'เปลี่ยนแปลง';
+      if (row.change_type === nextType) return false;
+      row.change_type = nextType;
+      return true;
+    };
+    $('#flu-body', area)?.addEventListener('input', (event) => {
+      const input = event.target.closest('[data-field]');
+      if (!input) return;
+      const rowEl = input.closest('tr[data-id]');
+      const row = rows.find(item => item.id === rowEl?.dataset.id);
+      if (!row) return;
+      row[input.dataset.field] = input.value;
+      if (input.dataset.field === 'fund_list_old' || input.dataset.field === 'fund_list_current') {
+        autoSetChangeType(row);
+      }
+      row.updated_at = new Date().toISOString();
+      row.updated_by = State.currentUser?.email || row.updated_by || '';
+      if (input.classList.contains('flu-fund-autocomplete')) {
+        renderFundSuggestMenu(input);
+      }
+    });
+    $('#flu-body', area)?.addEventListener('change', (event) => {
+      const input = event.target.closest('[data-field]');
+      if (!input) return;
+      const rowEl = input.closest('tr[data-id]');
+      const row = rows.find(item => item.id === rowEl?.dataset.id);
+      if (!row) return;
+      row[input.dataset.field] = input.value;
+      if (input.dataset.field === 'fund_list_old' || input.dataset.field === 'fund_list_current') {
+        autoSetChangeType(row);
+      }
+      row.updated_at = new Date().toISOString();
+      row.updated_by = State.currentUser?.email || row.updated_by || '';
+      render();
+    });
+    $('#flu-body', area)?.addEventListener('click', (event) => {
+      const inlineAddBtn = event.target.closest('.flu-inline-add');
+      if (inlineAddBtn) {
+        insertBlankRowAfter(inlineAddBtn.dataset.afterId || '');
+        return;
+      }
+      const addBtn = event.target.closest('.flu-add-bottom');
+      if (addBtn) {
+        appendBlankRow();
+        return;
+      }
+      const btn = event.target.closest('.flu-delete-row');
+      if (!btn) return;
+      rows = rows.filter(row => row.id !== btn.dataset.id);
+      render();
+    });
+
+    let dragRowId = '';
+    let pointerDragId = '';
+    let pointerOverId = '';
+    const reorderRows = (fromId, toId) => {
+      if (!fromId || !toId || fromId === toId) return false;
+      const visibleIds = filteredRows().map(row => row.id);
+      const fromVisibleIndex = visibleIds.indexOf(fromId);
+      const toVisibleIndex = visibleIds.indexOf(toId);
+      if (fromVisibleIndex < 0 || toVisibleIndex < 0) return false;
+      const reorderedVisible = [...visibleIds];
+      reorderedVisible.splice(fromVisibleIndex, 1);
+      reorderedVisible.splice(toVisibleIndex, 0, fromId);
+      const visibleSet = new Set(visibleIds);
+      let cursor = 0;
+      rows = rows.map(row => {
+        if (!visibleSet.has(row.id)) return row;
+        const nextId = reorderedVisible[cursor++];
+        return rows.find(item => item.id === nextId) || row;
+      });
+      return true;
+    };
+    const clearPointerDragState = () => {
+      pointerDragId = '';
+      pointerOverId = '';
+      document.body.classList.remove('flu-row-dragging');
+      $$('.is-dragging, .is-drag-over', area).forEach(el => el.classList.remove('is-dragging', 'is-drag-over'));
+    };
+    const pointerMoveRow = (clientX, clientY) => {
+      if (!pointerDragId) return;
+      const el = document.elementFromPoint(clientX, clientY);
+      const rowEl = el?.closest?.('#flu-body tr[data-id]');
+      $$('.is-drag-over', area).forEach(row => {
+        if (row !== rowEl) row.classList.remove('is-drag-over');
+      });
+      if (!rowEl || rowEl.dataset.id === pointerDragId) {
+        pointerOverId = '';
+        return;
+      }
+      pointerOverId = rowEl.dataset.id || '';
+      rowEl.classList.add('is-drag-over');
+    };
+    $('#flu-body', area)?.addEventListener('pointerdown', (event) => {
+      const handle = event.target.closest('.flu-drag-handle');
+      if (!handle) return;
+      const rowEl = handle.closest('tr[data-id]');
+      if (!rowEl) return;
+      event.preventDefault();
+      hideFundSuggestMenu();
+      pointerDragId = rowEl.dataset.id || '';
+      pointerOverId = '';
+      rowEl.classList.add('is-dragging');
+      document.body.classList.add('flu-row-dragging');
+      try { handle.setPointerCapture?.(event.pointerId); } catch { /* noop */ }
+    });
+    $('#flu-body', area)?.addEventListener('pointermove', (event) => {
+      if (!pointerDragId) return;
+      event.preventDefault();
+      pointerMoveRow(event.clientX, event.clientY);
+    });
+    $('#flu-body', area)?.addEventListener('pointerup', (event) => {
+      if (!pointerDragId) return;
+      event.preventDefault();
+      pointerMoveRow(event.clientX, event.clientY);
+      const fromId = pointerDragId;
+      const toId = pointerOverId;
+      const moved = reorderRows(fromId, toId);
+      clearPointerDragState();
+      if (moved) render();
+    });
+    $('#flu-body', area)?.addEventListener('pointercancel', clearPointerDragState);
+    $('#flu-body', area)?.addEventListener('dragstart', (event) => {
+      const rowEl = event.target.closest('tr[data-id]');
+      if (!rowEl || !event.target.closest('.flu-drag-handle')) {
+        event.preventDefault();
+        return;
+      }
+      dragRowId = rowEl.dataset.id || '';
+      rowEl.classList.add('is-dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', dragRowId);
+      hideFundSuggestMenu();
+    });
+    $('#flu-body', area)?.addEventListener('dragover', (event) => {
+      const rowEl = event.target.closest('tr[data-id]');
+      if (!dragRowId || !rowEl || rowEl.dataset.id === dragRowId) return;
+      event.preventDefault();
+      rowEl.classList.add('is-drag-over');
+      event.dataTransfer.dropEffect = 'move';
+    });
+    $('#flu-body', area)?.addEventListener('dragleave', (event) => {
+      const rowEl = event.target.closest('tr[data-id]');
+      rowEl?.classList.remove('is-drag-over');
+    });
+    $('#flu-body', area)?.addEventListener('drop', (event) => {
+      const rowEl = event.target.closest('tr[data-id]');
+      if (!dragRowId || !rowEl) return;
+      event.preventDefault();
+      const moved = reorderRows(dragRowId, rowEl.dataset.id || '');
+      dragRowId = '';
+      $$('.is-dragging, .is-drag-over', area).forEach(el => el.classList.remove('is-dragging', 'is-drag-over'));
+      if (moved) render();
+    });
+    $('#flu-body', area)?.addEventListener('dragend', () => {
+      dragRowId = '';
+      $$('.is-dragging, .is-drag-over', area).forEach(el => el.classList.remove('is-dragging', 'is-drag-over'));
+    });
+
+    const suggestMenu = $('#flu-suggest-menu', area);
+    const hideFundSuggestMenu = () => {
+      if (!suggestMenu) return;
+      suggestMenu.hidden = true;
+      suggestMenu.innerHTML = '';
+    };
+    const applyFundSuggestion = (input, fund) => {
+      const rowEl = input?.closest('tr[data-id]');
+      const row = rows.find(item => item.id === rowEl?.dataset.id);
+      if (!row) return;
+      input.value = fund.code || '';
+      row[input.dataset.field] = fund.code || '';
+      if (input.dataset.field === 'fund_list_old' || input.dataset.field === 'fund_list_current') {
+        autoSetChangeType(row);
+      }
+      row.updated_at = new Date().toISOString();
+      row.updated_by = State.currentUser?.email || row.updated_by || '';
+      hideFundSuggestMenu();
+      render();
+    };
+    const renderFundSuggestMenu = (input) => {
+      if (!suggestMenu || !input) return;
+      const matches = fundMatches(input.value);
+      if (!matches.length) {
+        hideFundSuggestMenu();
+        return;
+      }
+      const rect = input.getBoundingClientRect();
+      const layoutEl = $('.flu-layout', area) || area;
+      const layoutRect = layoutEl.getBoundingClientRect();
+      suggestMenu.style.left = `${Math.max(8, rect.left - layoutRect.left + layoutEl.scrollLeft)}px`;
+      suggestMenu.style.top = `${rect.bottom - layoutRect.top + layoutEl.scrollTop + 4}px`;
+      suggestMenu.style.width = `${Math.max(260, rect.width)}px`;
+      suggestMenu.innerHTML = matches.map(fund => `
+        <button class="flu-suggest-option" type="button" data-code="${esc(fund.code)}">
+          <strong>${esc(fund.code || '-')}</strong>
+        </button>
+      `).join('');
+      suggestMenu.hidden = false;
+      suggestMenu.dataset.targetRowId = input.closest('tr[data-id]')?.dataset.id || '';
+      suggestMenu.dataset.targetField = input.dataset.field || '';
+    };
+    $('#flu-body', area)?.addEventListener('focusin', (event) => {
+      const input = event.target.closest('.flu-fund-autocomplete');
+      if (!input) return;
+      renderFundSuggestMenu(input);
+    });
+    $('#flu-body', area)?.addEventListener('keydown', (event) => {
+      const input = event.target.closest('.flu-fund-autocomplete');
+      if (!input) return;
+      if (event.key === 'Escape') hideFundSuggestMenu();
+      if (event.key !== 'Enter' || suggestMenu?.hidden) return;
+      const firstOption = suggestMenu.querySelector('.flu-suggest-option');
+      if (!firstOption) return;
+      const fund = fundSuggestions.find(item => item.code === firstOption.dataset.code);
+      if (fund) {
+        event.preventDefault();
+        applyFundSuggestion(input, fund);
+      }
+    });
+    suggestMenu?.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      const option = event.target.closest('.flu-suggest-option');
+      if (!option) return;
+      const input = $(`#flu-body tr[data-id="${CSS.escape(suggestMenu.dataset.targetRowId || '')}"] [data-field="${CSS.escape(suggestMenu.dataset.targetField || '')}"]`, area);
+      const fund = fundSuggestions.find(item => item.code === option.dataset.code);
+      if (input && fund) applyFundSuggestion(input, fund);
+    });
+    area.addEventListener('click', (event) => {
+      if (event.target.closest('.flu-fund-autocomplete') || event.target.closest('#flu-suggest-menu')) return;
+      hideFundSuggestMenu();
+    });
+    render();
+    App._currentExport = null;
+    App._currentTableExport = () => buildSimpleTablePayload(
+      'Fund List Update',
+      sourceNote,
+      ['Fund List เดิม', 'Fund List ปัจจุบัน', 'Type', 'สินทรัพย์', `Fund List ${listFrom || 'เดิม'}`, `Fund List ${listTo || 'ปัจจุบัน'}`, 'สถานะ', 'หมายเหตุ'],
+      filteredRows().map(row => [
+        row.list_from || '',
+        row.list_to || '',
+        row.type || '',
+        row.asset_class || '',
+        row.fund_list_old || '',
+        row.fund_list_current || '',
+        row.change_type || '',
+        row.note || '',
+      ]),
+    );
+    App._currentClipboardExport = null;
+    App._currentImageExport = null;
+    bindPageImageActions(area, 'report-card', 'fund-list-update');
+  },
+
+  async fundSelectionLogs(area) {
+    const pageKey = 'fund-selection-logs';
+    const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+    setLoading(area, 'กำลังโหลด Fund Selection Logs...');
+
+    const roleLabel = (value) => FUND_SELECTION_LOG_ROLES.find(item => item.value === value)?.label || value || 'ไม่ระบุ';
+    const nowIso = () => new Date().toISOString();
+    const statusLabel = (value) => ({
+      existing: 'กองทุนเดิม',
+      switched: 'กองทุนเดิม (สลับตำแหน่ง)',
+      passive: 'กองทุนเดิม (Passive)',
+      active: 'กองทุนเดิม (Active)',
+      new: 'กองทุนใหม่',
+    }[String(value || '').trim()] || String(value || '').trim());
+    const statusOptionsFor = (value) => {
+      const current = statusLabel(value);
+      return [...new Set(['', ...FUND_SELECTION_LOG_STATUS_OPTIONS, current].filter(option => option !== undefined))];
+    };
+    const itemTitleValue = (item = {}) => [item.assetClass, item.fundType]
+      .map(value => String(value || '').trim())
+      .filter(Boolean)
+      .join(' / ');
+    const applyItemTitle = (item, value) => {
+      const parts = String(value || '').split('/').map(part => part.trim());
+      item.assetClass = parts.shift() || '';
+      item.fundType = parts.join(' / ');
+    };
+    const suggestedTagsFor = (mention = {}) => {
+      const haystack = [
+        mention.reason,
+        mention.fundCode,
+        mention.status,
+      ].join(' ').toLowerCase();
+      const existing = new Set(mention.tags || []);
+      return FUND_SELECTION_TAG_RULES
+        .filter(rule => !existing.has(rule.tag))
+        .filter(rule => rule.keywords.some(keyword => haystack.includes(String(keyword || '').toLowerCase())))
+        .map(rule => rule.tag);
+    };
+    const addMentionTag = (mention, tag) => {
+      const cleanTag = String(tag || '').trim().replace(/,$/, '');
+      if (!mention || !cleanTag) return false;
+      const tags = new Set(mention.tags || []);
+      const before = tags.size;
+      tags.add(cleanTag);
+      mention.tags = [...tags];
+      mention.updatedAt = nowIso();
+      mention.updatedBy = State.currentUser?.email || mention.updatedBy || '';
+      return tags.size !== before;
+    };
+    const slug = (value, fallback = 'item') => String(value || fallback)
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9ก-๙._-]+/g, '')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || fallback;
+    const newId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    const defaultLog = () => ({
+      schemaVersion: 1,
+      quarter,
+      title: `Fund Selection Logs ${quarter}`,
+      revision: 0,
+      dataAsOf: '',
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+      updatedBy: State.currentUser?.email || '',
+      driveFolderId: FUND_SELECTION_LOGS_DRIVE_FOLDER_ID,
+      items: [],
+    });
+
+    const normalizeMention = (mention = {}, idx = 0) => ({
+      id: String(mention.id || newId(`mention-${idx + 1}`)),
+      fundCode: String(mention.fundCode || mention.code || '').trim().toUpperCase(),
+      role: String(mention.role || 'mainChoice').trim(),
+      status: statusLabel(mention.status),
+      sentiment: String(mention.sentiment || 'neutral').trim(),
+      reason: String(mention.reason || mention.note || '').trim(),
+      tags: Array.isArray(mention.tags)
+        ? mention.tags.map(tag => String(tag || '').trim()).filter(Boolean)
+        : String(mention.tags || '').split(',').map(tag => tag.trim()).filter(Boolean),
+      updatedAt: String(mention.updatedAt || '').trim(),
+      updatedBy: String(mention.updatedBy || '').trim(),
+      rowRevision: Number(mention.rowRevision || mention.row_revision || 1),
+    });
+
+    const normalizeItem = (item = {}, idx = 0) => {
+      const assetClass = String(item.assetClass || item.asset_class || '').trim();
+      const fundType = String(item.fundType || item.fund_type || '').trim();
+      const id = String(item.id || `${quarter}-${slug(assetClass || `section-${idx + 1}`)}-${slug(fundType || 'general')}`);
+      return {
+        id,
+        assetClass,
+        fundType,
+        category: String(item.category || '').trim(),
+        itemRevision: Number(item.itemRevision || 1),
+        updatedAt: String(item.updatedAt || '').trim(),
+        updatedBy: String(item.updatedBy || '').trim(),
+        mentions: (Array.isArray(item.mentions) ? item.mentions : [])
+          .map(normalizeMention),
+      };
+    };
+
+    const normalizeLog = (payload) => {
+      const base = { ...defaultLog(), ...(payload && typeof payload === 'object' ? payload : {}) };
+      base.quarter = String(base.quarter || quarter).trim().toUpperCase();
+      base.revision = Number(base.revision || 0);
+      base.items = (Array.isArray(base.items) ? base.items : []).map(normalizeItem);
+      base.driveFolderId = base.driveFolderId || FUND_SELECTION_LOGS_DRIVE_FOLDER_ID;
+      return base;
+    };
+
+    const cleanForSave = () => ({
+      ...log,
+      quarter,
+      title: ($('#fsl-title', area)?.value || log.title || `Fund Selection Logs ${quarter}`).trim(),
+      dataAsOf: ($('#fsl-data-as-of', area)?.value || '').trim(),
+      updatedBy: State.currentUser?.email || log.updatedBy || '',
+      items: log.items.map(item => ({
+        ...item,
+        mentions: item.mentions
+          .map(mention => ({
+            ...mention,
+            fundCode: String(mention.fundCode || '').trim().toUpperCase(),
+            tags: Array.isArray(mention.tags) ? mention.tags.map(tag => String(tag || '').trim()).filter(Boolean) : [],
+          }))
+          .filter(mention => mention.fundCode || mention.reason || mention.tags.length),
+      })),
+    });
+    const sheetColumnName = (index) => {
+      let name = '';
+      let value = Number(index || 0);
+      while (value > 0) {
+        const rem = (value - 1) % 26;
+        name = String.fromCharCode(65 + rem) + name;
+        value = Math.floor((value - 1) / 26);
+      }
+      return name || 'A';
+    };
+    const fslHeaderIndex = (headers = FUND_SELECTION_LOGS_SHEET_HEADERS) => Object.fromEntries(
+      headers.map((header, index) => [String(header || '').trim().toLowerCase(), index]),
+    );
+    const fslSheetRecordFromRow = (headers, row = [], rowNumber = 1) => {
+      const index = fslHeaderIndex(headers);
+      const get = (key) => String(row[index[key]] ?? '').trim();
+      return {
+        rowNumber,
+        mentionId: get('mention_id'),
+        itemId: get('item_id'),
+        quarter: get('quarter'),
+        rowRevision: Number(get('row_revision') || 1),
+        deleted: /^true$/i.test(get('deleted')),
+        row,
+      };
+    };
+    const alignFslRowToHeaders = (canonicalRow, headers) => {
+      const canonicalIndex = fslHeaderIndex(FUND_SELECTION_LOGS_SHEET_HEADERS);
+      return headers.map(header => canonicalRow[canonicalIndex[String(header || '').trim().toLowerCase()]] ?? '');
+    };
+    const fslMentionRecordsForSave = (sheetLog) => {
+      const dataAsOf = String(sheetLog.dataAsOf || '').trim();
+      const fallbackUpdatedBy = State.currentUser?.email || sheetLog.updatedBy || '';
+      const fallbackUpdatedAt = nowIso();
+      const records = [];
+      (sheetLog.items || []).forEach((item, itemIndex) => {
+        const mentions = Array.isArray(item.mentions) ? item.mentions : [];
+        mentions.forEach(mention => {
+          if (!mention.id) mention.id = newId('mention');
+          records.push({
+            item,
+            mention,
+            row: [
+            quarter,
+            String(itemIndex + 1),
+            item.id || '',
+            item.assetClass || '',
+            item.fundType || '',
+            item.category || '',
+            mention.role || '',
+            String(mention.fundCode || '').trim().toUpperCase(),
+            mention.status || '',
+            mention.reason || '',
+            Array.isArray(mention.tags) ? mention.tags.join(', ') : '',
+            dataAsOf,
+            String(item.itemRevision || 1),
+            mention.updatedBy || item.updatedBy || fallbackUpdatedBy,
+            mention.updatedAt || item.updatedAt || fallbackUpdatedAt,
+            mention.id || '',
+            String(Number(mention.rowRevision || 1)),
+            'FALSE',
+          ],
+          });
+        });
+      });
+      return records;
+    };
+    const ensureFslSheetTabAndHeaders = async () => {
+      const meta = await SheetsAPI.getSheetTabs(FUND_SELECTION_LOGS_SHEET_ID);
+      const createdTab = !meta.tabs.includes(quarter);
+      if (createdTab) await SheetsAPI.addSheetTab(FUND_SELECTION_LOGS_SHEET_ID, quarter);
+      let rows = createdTab ? [] : await SheetsAPI.fetchSheetData(FUND_SELECTION_LOGS_SHEET_ID, quarter);
+      const currentHeaders = (rows[0] || []).map(value => String(value || '').trim()).filter(Boolean);
+      const mergedHeaders = currentHeaders.length
+        ? [...currentHeaders, ...FUND_SELECTION_LOGS_SHEET_HEADERS.filter(header => !currentHeaders.includes(header))]
+        : [...FUND_SELECTION_LOGS_SHEET_HEADERS];
+      if (!currentHeaders.length || mergedHeaders.length !== currentHeaders.length) {
+        await SheetsAPI.updateSheetRange(
+          FUND_SELECTION_LOGS_SHEET_ID,
+          `${SheetsAPI._quoteSheetName(quarter)}!A1:${sheetColumnName(mergedHeaders.length)}1`,
+          [mergedHeaders],
+        );
+        rows = await SheetsAPI.fetchSheetData(FUND_SELECTION_LOGS_SHEET_ID, quarter);
+      }
+      return {
+        createdTab,
+        headers: mergedHeaders,
+        rows,
+      };
+    };
+    const saveFundSelectionRowsToSheet = async (sheetLog) => {
+      if (!SheetsAPI.accessToken) await SheetsAPI.requestToken(false);
+      const { createdTab, headers, rows: latestRows } = await ensureFslSheetTabAndHeaders();
+      const headerCount = headers.length;
+      const endColumn = sheetColumnName(headerCount);
+      const existingRecords = latestRows
+        .slice(1)
+        .map((row, index) => fslSheetRecordFromRow(headers, row, index + 2))
+        .filter(record => record.quarter.toUpperCase() === quarter && record.mentionId);
+      const existingByMentionId = new Map(existingRecords.map(record => [record.mentionId, record]));
+      const activeRecords = fslMentionRecordsForSave(sheetLog);
+      const activeMentionIds = new Set(activeRecords.map(record => record.mention.id));
+      const updates = [];
+      const appends = [];
+      const conflicts = [];
+      let updatedCount = 0;
+      let appendedCount = 0;
+      let deletedCount = 0;
+
+      activeRecords.forEach(record => {
+        const existing = existingByMentionId.get(record.mention.id);
+        if (existing && !existing.deleted) {
+          const localRevision = Number(record.mention.rowRevision || 1);
+          const latestRevision = Number(existing.rowRevision || 1);
+          if (latestRevision !== localRevision) {
+            conflicts.push({
+              mentionId: record.mention.id,
+              fundCode: record.mention.fundCode || '',
+              latestRevision,
+              localRevision,
+            });
+            return;
+          }
+          record.mention.rowRevision = latestRevision + 1;
+          record.row[FUND_SELECTION_LOGS_SHEET_HEADERS.indexOf('row_revision')] = String(record.mention.rowRevision);
+          const alignedRow = alignFslRowToHeaders(record.row, headers);
+          updates.push({
+            range: `${SheetsAPI._quoteSheetName(quarter)}!A${existing.rowNumber}:${endColumn}${existing.rowNumber}`,
+            values: [alignedRow],
+          });
+          updatedCount += 1;
+        } else {
+          record.mention.rowRevision = 1;
+          record.row[FUND_SELECTION_LOGS_SHEET_HEADERS.indexOf('row_revision')] = '1';
+          appends.push(alignFslRowToHeaders(record.row, headers));
+          appendedCount += 1;
+        }
+      });
+
+      if (conflicts.length) {
+        const sample = conflicts.slice(0, 5).map(item => item.fundCode || item.mentionId).join(', ');
+        throw new Error(`ข้อมูลบางแถวถูกแก้โดยคนอื่นแล้ว (${sample}) กรุณาโหลดใหม่และ review ก่อนบันทึก`);
+      }
+
+      existingRecords.forEach(existing => {
+        if (existing.deleted || activeMentionIds.has(existing.mentionId)) return;
+        const row = [...existing.row];
+        while (row.length < headerCount) row.push('');
+        row[fslHeaderIndex(headers).deleted] = 'TRUE';
+        row[fslHeaderIndex(headers).row_revision] = String(Number(existing.rowRevision || 1) + 1);
+        row[fslHeaderIndex(headers).updated_at] = nowIso();
+        row[fslHeaderIndex(headers).updated_by] = State.currentUser?.email || sheetLog.updatedBy || '';
+        updates.push({
+          range: `${SheetsAPI._quoteSheetName(quarter)}!A${existing.rowNumber}:${endColumn}${existing.rowNumber}`,
+          values: [row],
+        });
+        deletedCount += 1;
+      });
+
+      if (updates.length) {
+        await SheetsAPI.batchUpdateSheetRanges(FUND_SELECTION_LOGS_SHEET_ID, updates);
+      }
+      if (appends.length) {
+        await SheetsAPI.appendSheetValues(FUND_SELECTION_LOGS_SHEET_ID, quarter, appends);
+      }
+
+      return {
+        createdTab,
+        updatedCount,
+        appendedCount,
+        deletedCount,
+      };
+    };
+    const rowsToFundSelectionSheetValues = (sheetLog) => {
+      const rows = [FUND_SELECTION_LOGS_SHEET_HEADERS];
+      fslMentionRecordsForSave(sheetLog).forEach(record => rows.push(record.row));
+      return rows;
+    };
+
+    const loadLog = async () => {
+      try {
+        const resp = await fetch(`/api/fund-selection-logs?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.ok === false) throw new Error(data.error || `API ${resp.status}`);
+        return {
+          log: normalizeLog(data.log || null),
+          sourceNote: data.source || 'New file',
+          warning: data.warning || '',
+        };
+      } catch (err) {
+        try {
+          const localFile = `Data/Fund Selection Logs - ${quarter}.json`;
+          const resp = await fetch(localFile, { cache: 'no-store' });
+          if (!resp.ok) throw new Error(`Local ${resp.status}`);
+          const payload = await resp.json();
+          return {
+            log: normalizeLog(payload),
+            sourceNote: `Local JSON fallback: ${localFile}`,
+            warning: `API ใช้งานไม่ได้: ${err.message || err}`,
+          };
+        } catch {
+          return {
+            log: normalizeLog(null),
+            sourceNote: 'New file',
+            warning: `ยังไม่พบไฟล์ของ ${quarter}`,
+          };
+        }
+      }
+    };
+    const driveWarningMessage = (message = '') => {
+      const text = String(message || '');
+      if (!text) return '';
+      if (text.includes('GOOGLE_SERVICE_ACCOUNT_JSON') || text.includes('GOOGLE_APPLICATION_CREDENTIALS')) {
+        return 'บันทึกลงไฟล์ในเครื่องแล้ว แต่ยัง sync เข้า Google Drive ไม่ได้: ต้องตั้งค่า GOOGLE_APPLICATION_CREDENTIALS หรือ GOOGLE_SERVICE_ACCOUNT_JSON ให้ server ก่อน';
+      }
+      return text;
+    };
+
+    let fundSuggestions = [];
+    try {
+      const selectRows = await fetchCached('select-fund');
+      const seen = new Set();
+      fundSuggestions = buildSelectedFundsCatalog(selectRows)
+        .filter(fund => {
+          const key = normalizeFundKey(fund.code);
+          if (!key || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .sort((a, b) => String(a.code || '').localeCompare(String(b.code || ''), 'en'));
+    } catch {
+      fundSuggestions = [];
+    }
+    const fslFundMatches = (value = '') => {
+      const q = String(value || '').trim().toLowerCase();
+      if (!q) return fundSuggestions.slice(0, 10);
+      const nq = normalizeFundKey(q);
+      return fundSuggestions
+        .filter(fund => (
+          normalizeFundKey(fund.code).includes(nq)
+          || String(fund.name || '').toLowerCase().includes(q)
+          || String(fund.assetHouse || '').toLowerCase().includes(q)
+        ))
+        .slice(0, 10);
+    };
+
+    let { log, sourceNote, warning } = await loadLog();
+    let tagSuggestionTimer = null;
+    State.fundSelectionLogs.baseRevision = log.revision;
+    if (!State.fundSelectionLogs.selectedItemId || !log.items.some(item => item.id === State.fundSelectionLogs.selectedItemId)) {
+      State.fundSelectionLogs.selectedItemId = log.items[0]?.id || '';
+    }
+
+    const filteredItems = () => {
+      const q = String(State.fundSelectionLogs.query || '').trim().toLowerCase();
+      const role = State.fundSelectionLogs.roleFilter || '';
+      return log.items.filter(item => {
+        const mentions = item.mentions || [];
+        const roleOk = !role || mentions.some(mention => mention.role === role);
+        const qOk = !q || [
+          item.assetClass,
+          item.fundType,
+          item.category,
+          ...mentions.flatMap(mention => [mention.fundCode, mention.reason, ...(mention.tags || [])]),
+        ].some(value => String(value || '').toLowerCase().includes(q));
+        return roleOk && qOk;
+      });
+    };
+
+    const currentItem = () => log.items.find(item => item.id === State.fundSelectionLogs.selectedItemId) || log.items[0] || null;
+
+    const groupedMentions = (item) => FUND_SELECTION_LOG_ROLES.map(role => ({
+      ...role,
+      mentions: (item?.mentions || []).filter(mention => mention.role === role.value),
+    }));
+
+    const updateSummary = () => {
+      const mentionCount = log.items.reduce((sum, item) => sum + (item.mentions || []).length, 0);
+      const fundCount = new Set(log.items.flatMap(item => (item.mentions || []).map(m => m.fundCode).filter(Boolean))).size;
+      const summary = $('#fsl-summary', area);
+      if (!summary) return;
+      summary.innerHTML = `
+        <div class="fsl-metric"><span>Quarter</span><strong>${esc(quarter)}</strong></div>
+        <div class="fsl-metric"><span>หมวด</span><strong>${log.items.length.toLocaleString()}</strong></div>
+        <div class="fsl-metric"><span>Mentions</span><strong>${mentionCount.toLocaleString()}</strong></div>
+        <div class="fsl-metric"><span>กองทุนที่พูดถึง</span><strong>${fundCount.toLocaleString()}</strong></div>
+        <div class="fsl-metric"><span>Revision</span><strong>${Number(log.revision || 0).toLocaleString()}</strong></div>`;
+    };
+
+    const renderItemList = () => {
+      const items = filteredItems();
+      const list = $('#fsl-item-list', area);
+      if (!list) return;
+      list.innerHTML = items.length ? items.map(item => {
+        const active = item.id === currentItem()?.id ? ' is-active' : '';
+        const mentions = item.mentions || [];
+        const codes = mentions.map(mention => mention.fundCode).filter(Boolean).slice(0, 4);
+        return `
+          <button class="fsl-item${active}" type="button" data-id="${esc(item.id)}">
+            <span class="fsl-item-title">${esc(item.assetClass || 'ยังไม่ระบุหมวด')}</span>
+            <span class="fsl-item-meta">${esc(item.fundType || 'กองทั่วไป')} · ${mentions.length.toLocaleString()} mentions</span>
+            <span class="fsl-item-codes">${codes.map(code => `<code>${esc(code)}</code>`).join('')}</span>
+          </button>`;
+      }).join('') : `<div class="fsl-empty">ไม่พบหมวดตามเงื่อนไข</div>`;
+    };
+
+    const renderMention = (mention) => `
+      <div class="fsl-mention" data-mention-id="${esc(mention.id)}">
+        <div class="fsl-mention-grid">
+          <label>
+            <span>Fund Code</span>
+            <input class="fsl-input fsl-code-input fsl-fund-autocomplete" data-mention-field="fundCode" value="${esc(mention.fundCode || '')}" placeholder="เช่น KKP MP" autocomplete="off">
+          </label>
+          <label>
+            <span>Status</span>
+            <select class="fsl-input" data-mention-field="status">
+              ${statusOptionsFor(mention.status).map(option => `<option value="${esc(option)}" ${String(mention.status || '') === option ? 'selected' : ''}>${option ? esc(option) : 'ไม่ระบุ'}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <label class="fsl-field-full">
+          <span>เหตุผล / ข้อความที่พูดถึง</span>
+          <textarea class="fsl-textarea" data-mention-field="reason" rows="1" placeholder="บันทึกเหตุผลเชิงคุณภาพ">${esc(mention.reason || '')}</textarea>
+        </label>
+        <div class="fsl-mention-foot">
+          <label class="fsl-tags-field">
+            <span>Tags</span>
+            <div class="fsl-tag-editor" data-mention-field="tags">
+              <div class="fsl-tag-list">
+                ${(mention.tags || []).map(tag => `
+                  <button class="fsl-tag-chip" type="button" data-tag="${esc(tag)}" title="ลบ tag ${esc(tag)}">
+                    <span>${esc(tag)}</span>
+                    <span class="fsl-tag-remove" aria-hidden="true">x</span>
+                  </button>
+                `).join('')}
+              </div>
+              <input class="fsl-tag-input" data-tag-input="1" value="" placeholder="พิมพ์ tag แล้วกด Enter">
+            </div>
+            ${suggestedTagsFor(mention).length ? `
+              <div class="fsl-tag-suggestions">
+                <span>Suggested</span>
+                ${suggestedTagsFor(mention).map(tag => `
+                  <button class="fsl-tag-suggestion" type="button" data-tag="${esc(tag)}">+ ${esc(tag)}</button>
+                `).join('')}
+              </div>
+            ` : ''}
+          </label>
+          <button class="btn btn-xs btn-danger fsl-delete-mention" type="button">ลบ</button>
+        </div>
+      </div>`;
+
+    const renderDetail = () => {
+      const item = currentItem();
+      const detail = $('#fsl-detail', area);
+      if (!detail) return;
+      if (!item) {
+        detail.innerHTML = `
+          <div class="fsl-slide">
+            <div class="fsl-empty">ยังไม่มีหมวด กด “เพิ่มหมวด” เพื่อเริ่มบันทึก</div>
+          </div>`;
+        return;
+      }
+      detail.innerHTML = `
+        <div class="fsl-slide" data-item-id="${esc(item.id)}">
+          <div class="fsl-slide-title-row">
+            <div>
+              <div class="fsl-slide-kicker">สรุปผลการคัดเลือก</div>
+              <input class="fsl-title-input" data-item-field="itemTitle" value="${esc(itemTitleValue(item))}" placeholder="Asset Class / ประเภทกอง เช่น China All Shares EQ / SSF">
+            </div>
+            <button class="btn btn-danger btn-sm" id="fsl-delete-item" type="button">ลบหมวด</button>
+          </div>
+          <div class="fsl-item-meta-grid">
+            <label>
+              <span>ประเภทกอง</span>
+              <input class="fsl-input" data-item-field="fundType" value="${esc(item.fundType || '')}" placeholder="กองทั่วไป / RMF / SSF">
+            </label>
+            <label>
+              <span>Category</span>
+              <input class="fsl-input" data-item-field="category" value="${esc(item.category || '')}" placeholder="Core / Satellite">
+            </label>
+            <label>
+              <span>Item Revision</span>
+              <input class="fsl-input" value="${esc(item.itemRevision || 1)}" disabled>
+            </label>
+          </div>
+          ${groupedMentions(item).map(group => `
+            <section class="fsl-section fsl-section-${esc(group.value)}">
+              <div class="fsl-section-label">${esc(group.label)}</div>
+              <div class="fsl-section-body">
+                ${group.mentions.length ? group.mentions.map(renderMention).join('') : `<div class="fsl-empty fsl-empty-inline">ยังไม่มีข้อมูล</div>`}
+                <button class="btn btn-ghost btn-sm fsl-add-mention" type="button" data-role="${esc(group.value)}">เพิ่ม ${esc(group.label)}</button>
+              </div>
+            </section>
+          `).join('')}
+        </div>`;
+    };
+
+    const renderAll = () => {
+      updateSummary();
+      renderItemList();
+      renderDetail();
+      const count = $('#fsl-count', area);
+      if (count) count.textContent = `${filteredItems().length.toLocaleString()} / ${log.items.length.toLocaleString()} หมวด`;
+    };
+
+    area.innerHTML = `
+      <div class="fsl-page">
+        <div class="page-tools">
+          <div class="page-tools-meta">
+            ${sourceBadgeHtml(pageKey, sourceNote)}
+            <span class="badge badge-data-origin" id="fsl-count">${log.items.length.toLocaleString()} หมวด</span>
+            ${warning ? `<span class="badge badge-warning">${esc(warning)}</span>` : ''}
+          </div>
+          <div class="page-tools-actions">
+            <button class="btn btn-ghost" id="fsl-add-item" type="button">เพิ่มหมวด</button>
+            <button class="btn btn-secondary" id="fsl-save-sheet" type="button">บันทึกลง Sheet</button>
+            <button class="btn btn-primary" id="fsl-save" type="button">บันทึก JSON</button>
+            <button class="btn btn-ghost" id="fsl-reload" type="button">โหลดใหม่</button>
+          </div>
+        </div>
+
+        <div class="fsl-summary" id="fsl-summary"></div>
+
+        <div class="card fsl-file-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">ไฟล์ข้อมูลประจำ Quarter</div>
+              <div class="flu-subtitle">บันทึกเป็นไฟล์เดียว: <code>Fund Selection Logs - ${esc(quarter)}.json</code></div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="fsl-file-grid">
+              <label>
+                <span>Title</span>
+                <input class="fsl-input" id="fsl-title" value="${esc(log.title || '')}">
+              </label>
+              <label>
+                <span>ข้อมูล ณ วันที่</span>
+                <input class="fsl-input" id="fsl-data-as-of" value="${esc(log.dataAsOf || '')}" placeholder="2026-03-24">
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="fsl-workspace">
+          <aside class="fsl-sidebar">
+            <div class="fsl-filter">
+              <input class="search-input" id="fsl-search" value="${esc(State.fundSelectionLogs.query || '')}" placeholder="ค้นหา fund code, เหตุผล, tag...">
+              <select class="filter-select" id="fsl-role-filter">
+                <option value="">ทุกหัวข้อ</option>
+                ${FUND_SELECTION_LOG_ROLES.map(role => `<option value="${esc(role.value)}" ${State.fundSelectionLogs.roleFilter === role.value ? 'selected' : ''}>${esc(role.label)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="fsl-item-list" id="fsl-item-list"></div>
+          </aside>
+          <section class="fsl-detail" id="fsl-detail"></section>
+        </div>
+
+        <div class="fsl-fund-suggest-menu" id="fsl-fund-suggest-menu" hidden></div>
+      </div>`;
+
+    $('#fsl-search', area)?.addEventListener('input', (event) => {
+      State.fundSelectionLogs.query = event.target.value;
+      renderItemList();
+      const count = $('#fsl-count', area);
+      if (count) count.textContent = `${filteredItems().length.toLocaleString()} / ${log.items.length.toLocaleString()} หมวด`;
+    });
+    $('#fsl-role-filter', area)?.addEventListener('change', (event) => {
+      State.fundSelectionLogs.roleFilter = event.target.value;
+      renderItemList();
+      const count = $('#fsl-count', area);
+      if (count) count.textContent = `${filteredItems().length.toLocaleString()} / ${log.items.length.toLocaleString()} หมวด`;
+    });
+    $('#fsl-add-item', area)?.addEventListener('click', () => {
+      const item = normalizeItem({
+        id: newId(`${quarter.toLowerCase()}-section`),
+        assetClass: '',
+        fundType: 'กองทั่วไป',
+        category: 'Core',
+        updatedAt: nowIso(),
+        updatedBy: State.currentUser?.email || '',
+        mentions: [],
+      }, log.items.length);
+      log.items.unshift(item);
+      State.fundSelectionLogs.selectedItemId = item.id;
+      renderAll();
+    });
+    $('#fsl-reload', area)?.addEventListener('click', () => App.navigate(pageKey));
+    $('#fsl-save-sheet', area)?.addEventListener('click', async () => {
+      const saveSheetBtn = $('#fsl-save-sheet', area);
+      try {
+        if (saveSheetBtn) saveSheetBtn.disabled = true;
+        log = cleanForSave();
+        const result = await saveFundSelectionRowsToSheet(log);
+        const createdTabText = result.createdTab ? ' สร้างแท็บใหม่แล้ว' : '';
+        toast(
+          `บันทึกลง Google Sheet แล้ว: update ${result.updatedCount.toLocaleString()}, append ${result.appendedCount.toLocaleString()}, deleted ${result.deletedCount.toLocaleString()}${createdTabText}`,
+          'success',
+          5200,
+        );
+      } catch (err) {
+        toast(`บันทึกลง Google Sheet ไม่สำเร็จ: ${err.message || err}`, 'error', 7500);
+      } finally {
+        if (saveSheetBtn) saveSheetBtn.disabled = false;
+      }
+    });
+    $('#fsl-save', area)?.addEventListener('click', async () => {
+      try {
+        const saveBtn = $('#fsl-save', area);
+        if (saveBtn) saveBtn.disabled = true;
+        log = cleanForSave();
+        const resp = await fetch('/api/fund-selection-logs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            quarter,
+            baseRevision: State.fundSelectionLogs.baseRevision,
+            updatedBy: State.currentUser?.email || '',
+            log,
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.status === 409) {
+          toast('มีคนแก้ไขไฟล์นี้ก่อนหน้าแล้ว กรุณาโหลดใหม่เพื่อตรวจข้อมูลล่าสุด', 'warning', 6500);
+          warning = `Revision conflict: ไฟล์ล่าสุดเป็น revision ${data.currentRevision}`;
+          renderAll();
+          return;
+        }
+        if (!resp.ok || data.ok === false) throw new Error(data.error || `API ${resp.status}`);
+        log = normalizeLog(data.log);
+        State.fundSelectionLogs.baseRevision = log.revision;
+        sourceNote = data.driveUploaded ? `Google Drive: ${data.drive?.fileName || `Fund Selection Logs - ${quarter}.json`}` : `Local JSON: Fund Selection Logs - ${quarter}.json`;
+        warning = driveWarningMessage(data.warning || '');
+        renderAll();
+        toast(warning || 'บันทึก Fund Selection Logs ลง Google Drive แล้ว', warning ? 'warning' : 'success', warning ? 7500 : 3200);
+      } catch (err) {
+        toast(`บันทึกไม่สำเร็จ: ${err.message || err}`, 'error', 6500);
+      } finally {
+        const saveBtn = $('#fsl-save', area);
+        if (saveBtn) saveBtn.disabled = false;
+      }
+    });
+    $('#fsl-item-list', area)?.addEventListener('click', (event) => {
+      const itemBtn = event.target.closest('.fsl-item');
+      if (!itemBtn) return;
+      State.fundSelectionLogs.selectedItemId = itemBtn.dataset.id || '';
+      renderAll();
+    });
+    $('#fsl-detail', area)?.addEventListener('input', (event) => {
+      const item = currentItem();
+      if (!item) return;
+      const itemField = event.target.closest('[data-item-field]');
+      if (itemField) {
+        if (itemField.dataset.itemField === 'itemTitle') {
+          applyItemTitle(item, itemField.value);
+          const fundTypeInput = $('#fsl-detail [data-item-field="fundType"]', area);
+          if (fundTypeInput) fundTypeInput.value = item.fundType || '';
+        } else {
+          item[itemField.dataset.itemField] = itemField.value;
+          if (itemField.dataset.itemField === 'fundType') {
+            const titleInput = $('#fsl-detail [data-item-field="itemTitle"]', area);
+            if (titleInput) titleInput.value = itemTitleValue(item);
+          }
+        }
+        item.updatedAt = nowIso();
+        item.updatedBy = State.currentUser?.email || item.updatedBy || '';
+        if (['assetClass', 'fundType', 'itemTitle'].includes(itemField.dataset.itemField)) renderItemList();
+        return;
+      }
+      const mentionField = event.target.closest('[data-mention-field]');
+      if (!mentionField) return;
+      const mentionEl = mentionField.closest('[data-mention-id]');
+      const mention = item.mentions.find(m => m.id === mentionEl?.dataset.mentionId);
+      if (!mention) return;
+      if (mentionField.dataset.mentionField === 'tags') {
+        return;
+      } else if (mentionField.dataset.mentionField === 'fundCode') {
+        mention.fundCode = mentionField.value.toUpperCase();
+        renderFslFundSuggestMenu(mentionField);
+      } else {
+        mention[mentionField.dataset.mentionField] = mentionField.value;
+      }
+      mention.updatedAt = nowIso();
+      mention.updatedBy = State.currentUser?.email || mention.updatedBy || '';
+      if (mentionField.dataset.mentionField === 'reason') {
+        clearTimeout(tagSuggestionTimer);
+        tagSuggestionTimer = setTimeout(() => {
+          if (State.page === pageKey) renderDetail();
+        }, 450);
+      }
+    });
+    $('#fsl-detail', area)?.addEventListener('change', (event) => {
+      const item = currentItem();
+      if (!item) return;
+      const mentionField = event.target.closest('[data-mention-field]');
+      if (!mentionField) return;
+      const mentionEl = mentionField.closest('[data-mention-id]');
+      const mention = item.mentions.find(m => m.id === mentionEl?.dataset.mentionId);
+      if (!mention) return;
+      if (mentionField.dataset.mentionField === 'tags') {
+        return;
+      } else if (mentionField.dataset.mentionField === 'fundCode') {
+        mention.fundCode = mentionField.value.toUpperCase();
+      } else {
+        mention[mentionField.dataset.mentionField] = mentionField.value;
+      }
+      mention.updatedAt = nowIso();
+      mention.updatedBy = State.currentUser?.email || mention.updatedBy || '';
+    });
+    $('#fsl-detail', area)?.addEventListener('click', (event) => {
+      const item = currentItem();
+      if (!item) return;
+      const addBtn = event.target.closest('.fsl-add-mention');
+      if (addBtn) {
+        item.mentions.push(normalizeMention({
+          id: newId('mention'),
+          role: addBtn.dataset.role || 'mainChoice',
+          sentiment: addBtn.dataset.role === 'notSelected' ? 'negative' : 'neutral',
+          updatedAt: nowIso(),
+          updatedBy: State.currentUser?.email || '',
+        }));
+        item.itemRevision = Number(item.itemRevision || 0) + 1;
+        renderAll();
+        return;
+      }
+      if (event.target.closest('.fsl-delete-mention')) {
+        const mentionEl = event.target.closest('[data-mention-id]');
+        item.mentions = item.mentions.filter(mention => mention.id !== mentionEl?.dataset.mentionId);
+        item.itemRevision = Number(item.itemRevision || 0) + 1;
+        renderAll();
+        return;
+      }
+      const tagChip = event.target.closest('.fsl-tag-chip');
+      if (tagChip) {
+        const mentionEl = tagChip.closest('[data-mention-id]');
+        const mention = item.mentions.find(m => m.id === mentionEl?.dataset.mentionId);
+        if (!mention) return;
+        const tag = tagChip.dataset.tag || '';
+        mention.tags = (mention.tags || []).filter(value => value !== tag);
+        mention.updatedAt = nowIso();
+        mention.updatedBy = State.currentUser?.email || mention.updatedBy || '';
+        renderAll();
+        return;
+      }
+      const tagSuggestion = event.target.closest('.fsl-tag-suggestion');
+      if (tagSuggestion) {
+        const mentionEl = tagSuggestion.closest('[data-mention-id]');
+        const mention = item.mentions.find(m => m.id === mentionEl?.dataset.mentionId);
+        if (!mention) return;
+        addMentionTag(mention, tagSuggestion.dataset.tag || '');
+        renderAll();
+        return;
+      }
+      if (event.target.closest('#fsl-delete-item')) {
+        log.items = log.items.filter(row => row.id !== item.id);
+        State.fundSelectionLogs.selectedItemId = log.items[0]?.id || '';
+        renderAll();
+      }
+    });
+    $('#fsl-detail', area)?.addEventListener('keydown', (event) => {
+      const input = event.target.closest('.fsl-tag-input');
+      if (!input) return;
+      if (!['Enter', ','].includes(event.key)) return;
+      event.preventDefault();
+      const item = currentItem();
+      if (!item) return;
+      const mentionEl = input.closest('[data-mention-id]');
+      const mention = item.mentions.find(m => m.id === mentionEl?.dataset.mentionId);
+      if (!mention) return;
+      const tag = String(input.value || '').trim().replace(/,$/, '');
+      if (!tag) return;
+      addMentionTag(mention, tag);
+      input.value = '';
+      renderAll();
+    });
+
+    const suggestMenu = $('#fsl-fund-suggest-menu', area);
+    const hideFslFundSuggestMenu = () => {
+      if (!suggestMenu) return;
+      suggestMenu.hidden = true;
+      suggestMenu.innerHTML = '';
+    };
+    const applyFslFundSuggestion = (input, fund) => {
+      const item = currentItem();
+      if (!item || !input || !fund) return;
+      const mentionEl = input.closest('[data-mention-id]');
+      const mention = item.mentions.find(m => m.id === mentionEl?.dataset.mentionId);
+      if (!mention) return;
+      input.value = fund.code || '';
+      mention.fundCode = fund.code || '';
+      mention.updatedAt = nowIso();
+      mention.updatedBy = State.currentUser?.email || mention.updatedBy || '';
+      hideFslFundSuggestMenu();
+      renderItemList();
+    };
+    const renderFslFundSuggestMenu = (input) => {
+      if (!suggestMenu || !input) return;
+      const matches = fslFundMatches(input.value);
+      if (!matches.length) {
+        hideFslFundSuggestMenu();
+        return;
+      }
+      const rect = input.getBoundingClientRect();
+      const pageRect = $('.fsl-page', area)?.getBoundingClientRect() || area.getBoundingClientRect();
+      suggestMenu.style.left = `${Math.max(8, rect.left - pageRect.left + area.scrollLeft)}px`;
+      suggestMenu.style.top = `${rect.bottom - pageRect.top + area.scrollTop + 4}px`;
+      suggestMenu.style.width = `${Math.max(360, rect.width)}px`;
+      suggestMenu.innerHTML = matches.map(fund => `
+        <button class="fsl-fund-suggest-option" type="button" data-code="${esc(fund.code || '')}">
+          <strong>${esc(fund.code || '-')}</strong>
+          <span>${esc(fund.name || fund.assetHouse || '')}</span>
+        </button>
+      `).join('');
+      suggestMenu.hidden = false;
+      suggestMenu.dataset.targetMentionId = input.closest('[data-mention-id]')?.dataset.mentionId || '';
+    };
+    $('#fsl-detail', area)?.addEventListener('focusin', (event) => {
+      const input = event.target.closest('.fsl-fund-autocomplete');
+      if (!input) return;
+      renderFslFundSuggestMenu(input);
+    });
+    $('#fsl-detail', area)?.addEventListener('keydown', (event) => {
+      const input = event.target.closest('.fsl-fund-autocomplete');
+      if (!input) return;
+      if (event.key === 'Escape') hideFslFundSuggestMenu();
+      if (event.key !== 'Enter' || suggestMenu?.hidden) return;
+      const firstOption = suggestMenu.querySelector('.fsl-fund-suggest-option');
+      if (!firstOption) return;
+      const fund = fundSuggestions.find(item => item.code === firstOption.dataset.code);
+      if (fund) {
+        event.preventDefault();
+        applyFslFundSuggestion(input, fund);
+      }
+    });
+    suggestMenu?.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      const option = event.target.closest('.fsl-fund-suggest-option');
+      if (!option) return;
+      const input = $(`#fsl-detail [data-mention-id="${CSS.escape(suggestMenu.dataset.targetMentionId || '')}"] .fsl-fund-autocomplete`, area);
+      const fund = fundSuggestions.find(item => item.code === option.dataset.code);
+      if (input && fund) applyFslFundSuggestion(input, fund);
+    });
+    area.addEventListener('click', (event) => {
+      if (event.target.closest('.fsl-fund-autocomplete') || event.target.closest('#fsl-fund-suggest-menu')) return;
+      hideFslFundSuggestMenu();
+    });
+
+    renderAll();
+    App._currentExport = null;
+    App._currentTableExport = () => {
+      const rows = log.items.flatMap(item => (item.mentions || []).map(mention => [
+        log.quarter,
+        item.assetClass || '',
+        item.fundType || '',
+        roleLabel(mention.role),
+        mention.fundCode || '',
+        mention.reason || '',
+        (mention.tags || []).join(', '),
+      ]));
+      return buildSimpleTablePayload(
+        'Fund Selection Logs',
+        sourceNote,
+        ['Quarter', 'Asset Class', 'Fund Type', 'Role', 'Fund Code', 'Reason', 'Tags'],
+        rows,
+      );
+    };
+    App._currentClipboardExport = null;
+    App._currentImageExport = null;
+  },
+
   async feeComparisonPlaceholder(area) {
     const pageKey = 'master-placeholder-12';
     setLoading(area, 'กำลังโหลดตารางเปรียบเทียบค่าธรรมเนียม...');
@@ -4127,11 +6523,11 @@ const Pages = {
       const feeRowsPrevious = decorateRows(buildFeeComparisonRows(universePrevious, buildRawSecLookup(rawSecRowsPrevious)));
 
       if (!feeRowsCurrent.length && !feeRowsPrevious.length) {
-        setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Raw For Sec และ AVP Master Fund ID', pageKey);
+        setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Data For SEC API และ AVP Master Fund ID', pageKey);
         return;
       }
 
-      const source = `${CONFIG.PAGES[pageKey]?.source || 'Raw For Sec + AVP Master Fund ID'} · ${currentQuarter} vs ${previousQuarter}`;
+      const source = `${CONFIG.PAGES[pageKey]?.source || 'Data For SEC API + AVP Master Fund ID'} · ${currentQuarter} vs ${previousQuarter}`;
       area.innerHTML = `
         ${pageToolActions(pageKey, source)}
         <div id="report-card" class="fee-compare-page">
@@ -4281,15 +6677,34 @@ const Pages = {
     const jobList = Object.values(DATA_IMPORT_JOBS);
     const workbookCache = {};
 
+    const rememberImportPreviewScroll = () => {
+      const wrap = area.querySelector('.import-preview-table');
+      State.dataImport.previewScrollLeft = wrap?.scrollLeft || 0;
+    };
+    const restoreImportPreviewScroll = () => {
+      const left = State.dataImport.previewScrollLeft || 0;
+      if (!left) return;
+      requestAnimationFrame(() => {
+        const wrap = area.querySelector('.import-preview-table');
+        if (wrap) wrap.scrollLeft = Math.min(left, wrap.scrollWidth);
+      });
+    };
     const normalizeFileName = (value) => String(value || '').trim().toLowerCase();
     const findRawFileForJob = (job) => {
       const expected = normalizeFileName(job.sourceFileName);
       return (State.dataImport.rawFiles || []).find(file => normalizeFileName(file.name) === expected)
         || (State.dataImport.rawFiles || []).find(file => normalizeFileName(file.name).includes(expected.replace(/\.xlsx$/i, '')));
     };
-    const isBlankCell = (value) => value === null || value === undefined || String(value).trim() === '';
-    const cleanImportText = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
-    const transposeRows = (rows = []) => {
+	    const isBlankCell = (value) => value === null || value === undefined || String(value).trim() === '';
+	    const cleanImportText = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
+	    const withImportTimeout = (promise, message, timeoutMs = 20000) => {
+	      let timer;
+	      const timeout = new Promise((_, reject) => {
+	        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+	      });
+	      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+	    };
+	    const transposeRows = (rows = []) => {
       const maxCols = rows.length ? Math.max(...rows.map(row => row.length)) : 0;
       return Array.from({ length: maxCols }, (_, colIdx) => rows.map(row => row[colIdx] ?? ''));
     };
@@ -4317,8 +6732,209 @@ const Pages = {
         ...records.map(record => headers.map(header => record[header] ?? '')),
       ];
     };
+    const IMPORT_HEADER_TERMS = [
+      'group/investment',
+      'fund code',
+      'fundid',
+      'fund id',
+      'isin',
+      'master fund',
+      'return(',
+      'asset alloc',
+    ];
+    const IMPORT_CONTEXT_RE = /^(?:1M|3M|6M|YTD|1Y|3Y|5Y|10Y|20Y|\d{4})$/i;
+    const isPerformanceImportHeader = (header) => (
+      /return|drawdown|percentile|ratio|std dev|treynor|sortino|sharpe|information/i.test(header)
+    );
+    const fillMergedImportContext = (row = [], maxCols = row.length) => {
+      let currentContext = '';
+      return Array.from({ length: maxCols }, (_, idx) => {
+        const value = cleanImportText(row[idx]);
+        if (IMPORT_CONTEXT_RE.test(value)) currentContext = value.toUpperCase();
+        else if (value && !IMPORT_CONTEXT_RE.test(value)) currentContext = '';
+        return currentContext;
+      });
+    };
+    const headerHasImportContext = (header) => (
+      /\b(?:1M|3M|6M|YTD|1Y|3Y|5Y|10Y|20Y|\d{4})\b/i.test(header)
+    );
+    const appendContextToImportHeaders = (headers = [], contextRow = []) => {
+      const contexts = fillMergedImportContext(contextRow, headers.length);
+      return headers.map((header, idx) => {
+        const cleanHeader = cleanImportText(header) || `Column ${idx + 1}`;
+        const context = contexts[idx];
+        if (!context || !isPerformanceImportHeader(cleanHeader)) return cleanHeader;
+        if (headerHasImportContext(cleanHeader)) return cleanHeader;
+        return `${cleanHeader} ${context}`;
+      });
+    };
+    const contextualizeImportHeaders = (rows = [], externalContextRow = null) => {
+      if (!rows.length) return { headers: [], dataStartIdx: 1 };
+
+      const baseHeaders = rows[0] || [];
+      const maxCols = Math.max(
+        ...rows.map(row => row.length),
+        externalContextRow?.length || 0
+      );
+      const cleanedBase = Array.from({ length: maxCols }, (_, idx) => (
+        cleanImportText(baseHeaders[idx]) || `Column ${idx + 1}`
+      ));
+      const duplicates = cleanedBase.reduce((map, header) => {
+        map.set(header, (map.get(header) || 0) + 1);
+        return map;
+      }, new Map());
+      const duplicateCols = new Set(
+        cleanedBase
+          .map((header, idx) => (duplicates.get(header) > 1 ? idx : -1))
+          .filter(idx => idx >= 0)
+      );
+
+      if (externalContextRow) {
+        const headers = appendContextToImportHeaders(cleanedBase, externalContextRow);
+        return { headers, dataStartIdx: 1 };
+      }
+
+      if (!duplicateCols.size) {
+        return { headers: cleanedBase, dataStartIdx: 1 };
+      }
+
+      let bestContextIdx = -1;
+      let bestScore = 0;
+      rows.slice(1, 7).forEach((row, relIdx) => {
+        let score = 0;
+        duplicateCols.forEach(colIdx => {
+          const context = cleanImportText(row[colIdx]);
+          if (!context) return;
+          if (IMPORT_CONTEXT_RE.test(context)) score += 3;
+          else if (/return|drawdown|percentile|ratio|std dev|fee|asset|holding/i.test(context)) score += 2;
+          else if (context.length <= 24) score += 1;
+        });
+        if (score > bestScore) {
+          bestScore = score;
+          bestContextIdx = relIdx + 1;
+        }
+      });
+
+      if (bestContextIdx < 0 || bestScore < 3) {
+        return { headers: cleanedBase, dataStartIdx: 1 };
+      }
+
+      const contextRow = rows[bestContextIdx] || [];
+      const headers = cleanedBase.map((header, idx) => {
+        const context = cleanImportText(contextRow[idx]);
+        if (!duplicateCols.has(idx) || !context) return header;
+        if (header.toLowerCase().includes(context.toLowerCase())) return header;
+        return `${header} ${context}`;
+      });
+
+      return { headers, dataStartIdx: bestContextIdx + 1 };
+    };
+    const normalizeImportedTableRows = (rawRows = [], options = {}) => {
+      if (!rawRows.length) return [];
+
+      const rowHasValue = (row = []) => row.some(cell => !isBlankCell(cell));
+      const trimmedRows = rawRows.filter(rowHasValue);
+      if (!trimmedRows.length) return [];
+
+      const scoreHeaderRow = (row = [], idx) => {
+        const cells = row.map(cell => cleanImportText(cell)).filter(Boolean);
+        const lower = cells.map(cell => cell.toLowerCase());
+        const keywordScore = IMPORT_HEADER_TERMS.reduce((score, term) => (
+          score + (lower.some(cell => cell.includes(term)) ? 20 : 0)
+        ), 0);
+        const textScore = cells.filter(cell => Number.isNaN(Number(cell.replace(/,/g, '')))).length;
+        return (cells.length * 2) + keywordScore + textScore - (idx * 0.25);
+      };
+      const headerIdx = trimmedRows
+        .slice(0, 30)
+        .reduce((bestIdx, row, idx, sample) => (
+          scoreHeaderRow(row, idx) > scoreHeaderRow(sample[bestIdx], bestIdx) ? idx : bestIdx
+        ), 0);
+      const dataRows = trimmedRows.slice(headerIdx);
+      const contextRow = Number.isInteger(options.contextRowIdx)
+        ? rawRows[options.contextRowIdx]
+        : null;
+      const { headers, dataStartIdx } = contextualizeImportHeaders(dataRows, contextRow);
+
+      return [
+        headers,
+        ...dataRows.slice(dataStartIdx)
+          .filter(rowHasValue)
+          .map(row => headers.map((_, idx) => row[idx] ?? '')),
+      ];
+    };
+    const hasRecognizableImportHeader = (rows = []) => {
+      const headerText = (rows[0] || [])
+        .map(cell => cleanImportText(cell).toLowerCase())
+        .filter(Boolean);
+      const matches = IMPORT_HEADER_TERMS.filter(term => headerText.some(cell => cell.includes(term)));
+      return matches.length >= 2;
+    };
+    const cleanMorningstarExportRows = (rawRows = []) => {
+      const periodIdx = rawRows.slice(0, 15).findIndex(row => {
+        const periodCount = row.filter(value => IMPORT_CONTEXT_RE.test(cleanImportText(value))).length;
+        return periodCount >= 3;
+      });
+      if (periodIdx < 0) return [];
+
+      const headerOffset = rawRows.slice(periodIdx + 1, periodIdx + 8).findIndex(row => {
+        const text = row.map(value => cleanImportText(value).toLowerCase()).join('|');
+        return /group\/investment|fund code|fundid/.test(text)
+          && /return|drawdown|percentile|ratio|std dev/i.test(text);
+      });
+      if (headerOffset < 0) return [];
+
+      const headerIdx = periodIdx + 1 + headerOffset;
+      const periodRow = rawRows[periodIdx] || [];
+      const headerRow = rawRows[headerIdx] || [];
+      const maxCols = Math.max(periodRow.length, headerRow.length, ...rawRows.slice(headerIdx + 1).map(row => row.length));
+
+      const baseHeaders = Array.from({ length: maxCols }, (_, idx) => cleanImportText(headerRow[idx]));
+      const headers = appendContextToImportHeaders(baseHeaders, periodRow);
+      const dataRows = rawRows
+        .slice(headerIdx + 1)
+        .filter(row => row.some(cell => !isBlankCell(cell)))
+        .filter(row => !isBlankCell(row[1]))
+        .map(row => headers.map((_, idx) => row[idx] ?? ''));
+
+      const keepColumn = (idx) => {
+        if (cleanImportText(baseHeaders[idx])) return true;
+        return dataRows.some(row => !isBlankCell(row[idx]));
+      };
+      const keepIndexes = headers
+        .map((_, idx) => idx)
+        .filter(keepColumn);
+      if (!keepIndexes.length || !dataRows.length) return [];
+
+      return [
+        keepIndexes.map(idx => cleanImportText(headers[idx]) || `Column ${idx + 1}`),
+        ...dataRows.map(row => keepIndexes.map(idx => row[idx] ?? '')),
+      ];
+    };
+    const detectMorningstarRows = (rawRows = []) => {
+      const periodIdx = rawRows.slice(0, 15).findIndex(row => {
+        const periodCount = row.filter(value => IMPORT_CONTEXT_RE.test(cleanImportText(value))).length;
+        return periodCount >= 3;
+      });
+      const headerOffset = periodIdx >= 0
+        ? rawRows.slice(periodIdx + 1, periodIdx + 8).findIndex(row => {
+            const text = row.map(value => cleanImportText(value).toLowerCase()).join('|');
+            return /group\/investment|fund code|fundid/.test(text)
+              && /return|drawdown|percentile|ratio|std dev/i.test(text);
+          })
+        : -1;
+      return {
+        periodIdx,
+        headerIdx: periodIdx >= 0 && headerOffset >= 0 ? periodIdx + 1 + headerOffset : -1,
+      };
+    };
     const cleanMasterFundRawRows = (rawRows = []) => {
       if (!rawRows.length) return [];
+      const morningstarRows = cleanMorningstarExportRows(rawRows);
+      if (morningstarRows.length > 1 && hasRecognizableImportHeader(morningstarRows)) {
+        return morningstarRows;
+      }
+      const fallbackRows = () => normalizeImportedTableRows(rawRows, { contextRowIdx: 6 });
 
       // Mirrors the workbook's Power Query: promote first row, skip the next 5 metadata rows.
       // In array terms this starts from original row 7 because row 1 became headers.
@@ -4334,6 +6950,7 @@ const Pages = {
         next[0] = currentGroup;
         return next;
       });
+      const preparedContextRow = transposed.map(row => row[0] ?? '');
 
       transposed = transposed.map(row => {
         // After removing Column2 and Column3, Power Query's Column4 is now array index 1.
@@ -4353,13 +6970,20 @@ const Pages = {
 
       let cleaned = transposeRows(transposed);
       cleaned = cleaned.filter(row => !isBlankCell(row[1]));
-      if (!cleaned.length) return [];
+      if (!cleaned.length) return fallbackRows();
 
       const headers = cleaned[0].map((header, idx) => cleanImportText(header) || `Column ${idx + 1}`);
-      return [
+      const transformedRows = [
         headers,
         ...cleaned.slice(1).map(row => headers.map((_, idx) => row[idx] ?? '')),
       ];
+      const contextualizedRows = [
+        appendContextToImportHeaders(headers, preparedContextRow),
+        ...transformedRows.slice(1),
+      ];
+      return contextualizedRows.length > 1 && hasRecognizableImportHeader(contextualizedRows)
+        ? contextualizedRows
+        : fallbackRows();
     };
     const cleanRowsForJob = (job, rows) => {
       if (job.cleaner === 'masterFundRaw') return cleanMasterFundRawRows(rows);
@@ -4409,8 +7033,11 @@ const Pages = {
       return { job, rawMeta, targetMeta };
     };
 
-    try {
-      State.dataImport.rawFiles = await SheetsAPI.listDriveFolderFiles(RAW_FILES_FOLDER_ID);
+	    try {
+	      State.dataImport.rawFiles = await withImportTimeout(
+	        SheetsAPI.listDriveFolderFiles(RAW_FILES_FOLDER_ID),
+	        'โหลดรายการไฟล์ Raw Files Folder นานเกินไป กรุณาเข้าสู่ระบบใหม่หรือรีเฟรชหน้า'
+	      );
       State.dataImport.rawFilesError = '';
     } catch (e) {
       State.dataImport.rawFiles = [];
@@ -4423,7 +7050,10 @@ const Pages = {
 
     let active;
     try {
-      active = await loadJobMeta(DATA_IMPORT_JOBS[State.dataImport.selectedJobKey]);
+	      active = await withImportTimeout(
+	        loadJobMeta(DATA_IMPORT_JOBS[State.dataImport.selectedJobKey]),
+	        'โหลด metadata ของไฟล์ต้นทาง/ปลายทางนานเกินไป กรุณาลองใหม่อีกครั้ง'
+	      );
     } catch (e) {
       setError(area, e.message, 'data-import');
       return;
@@ -4518,6 +7148,42 @@ const Pages = {
       url.searchParams.set('key', JSON_EXPORT_SECRET_KEY);
       return url.toString();
     };
+    const exportBaseJsonFromSheets = async (quarter) => {
+      const cleanQuarter = String(quarter || '').trim().toUpperCase();
+      const targetFolder = await SheetsAPI.resolveDriveFolderPath(JSON_DRIVE_ROOT_FOLDER_ID, [
+        getQuarterYear(cleanQuarter),
+        cleanQuarter,
+        'base',
+      ]);
+      await SheetsAPI.resolveDriveFolderPath(JSON_DRIVE_ROOT_FOLDER_ID, [
+        getQuarterYear(cleanQuarter),
+        cleanQuarter,
+        'overrides',
+      ]);
+
+      const files = [];
+      for (const item of DATA_IMPORT_JSON_EXPORTS) {
+        const importJob = DATA_IMPORT_JOBS[item.jobKey];
+        const rows = await SheetsAPI.fetchSheetData(importJob.targetSheetId, cleanQuarter);
+        if (!rows.length) throw new Error(`ไม่พบข้อมูลใน ${importJob.targetLabel || importJob.label} / ${cleanQuarter}`);
+        const file = await SheetsAPI.uploadJsonToDriveFolder(targetFolder.id, item.fileName, rows);
+        files.push({
+          ...item,
+          rows: rows.length,
+          columns: Math.max(...rows.map(row => row.length), 0),
+          fileId: file.id,
+          fileName: file.name || item.fileName,
+          webViewLink: file.webViewLink || '',
+        });
+      }
+      return {
+        ok: true,
+        quarter: cleanQuarter,
+        folderId: targetFolder.id,
+        folderLink: targetFolder.webViewLink || `https://drive.google.com/drive/folders/${targetFolder.id}`,
+        files,
+      };
+    };
     const renderJsonReadiness = (readiness) => {
       const quarter = String(State.dataImport.targetTab || '').trim().toUpperCase() || '-';
       const jsonBaseFolder = `${JSON_STORE.rootName}/${getQuarterYear(quarter)}/${quarter}/base/`;
@@ -4563,8 +7229,8 @@ const Pages = {
             <button class="btn btn-ghost" id="json-readiness-check" type="button" ${State.dataImport.isCheckingJson ? 'disabled' : ''}>
               ${State.dataImport.isCheckingJson ? 'กำลังตรวจสอบ...' : 'ตรวจสอบความพร้อม'}
             </button>
-            <button class="btn btn-primary import-commit-btn" id="json-export-open" type="button" ${readiness?.allReady ? '' : 'disabled'}>
-              สร้าง JSON ทั้ง 3 ไฟล์
+            <button class="btn btn-primary import-commit-btn" id="json-export-open" type="button" ${readiness?.allReady && !State.dataImport.isExportingJson ? '' : 'disabled'}>
+              ${State.dataImport.isExportingJson ? 'กำลังสร้าง JSON...' : 'สร้าง JSON ทั้ง 3 ไฟล์'}
             </button>
             ${readiness && !readiness.allReady ? '<span class="json-export-hint">ต้องพร้อมครบทั้ง 3 ชุดก่อนจึงจะสร้าง JSON ได้</span>' : ''}
           </div>
@@ -4752,6 +7418,31 @@ const Pages = {
         </div>
         <div class="pg-info import-preview-note">แสดงทุกคอลัมน์ และตัวอย่าง 5 แถวแรกจาก ${dataRows.length.toLocaleString()} rows</div>`;
     };
+    const renderImportDebug = (debug) => {
+      if (!debug) return '';
+      const renderRow = (label, row = []) => `
+        <div class="import-header-report-item">
+          <span>${esc(label)}</span>
+          <small>${esc((row || []).map((value, idx) => `${idx + 1}:${cleanImportText(value) || '-'}`).join(' | '))}</small>
+        </div>`;
+      return `
+        <div class="import-header-report is-warning">
+          <div class="import-header-report-head">
+            <strong>Debug วิธีเตรียมข้อมูล</strong>
+            <span class="badge badge-warning">${esc(debug.cleaner || 'raw')}</span>
+          </div>
+          <div class="import-header-report-list">
+            ${debug.detected
+              ? `<div class="import-header-report-item"><span>Detected rows</span><small>period = raw row ${debug.detected.periodIdx >= 0 ? debug.detected.periodIdx + 1 : '-'} | header = raw row ${debug.detected.headerIdx >= 0 ? debug.detected.headerIdx + 1 : '-'}</small></div>`
+              : ''}
+            ${renderRow('Raw row 1 ที่เว็บอ่านได้', debug.rawRow1)}
+            ${renderRow('Raw row 6 ที่เว็บอ่านได้', debug.rawRow6)}
+            ${renderRow('Raw row 7 ที่เว็บอ่านได้', debug.rawRow7)}
+            ${renderRow('Raw row 8 ที่เว็บอ่านได้', debug.rawRow8)}
+            ${renderRow('Header หลัง clean ที่ใช้จริง', debug.cleanedHeader)}
+          </div>
+        </div>`;
+    };
     const renderHeaderReport = (report) => {
       if (!report) return '';
       const hasExact = report.exactDuplicates?.length > 0;
@@ -4798,7 +7489,7 @@ const Pages = {
         </div>`;
     };
 
-    const render = () => {
+      const render = () => {
       const job = active.job;
       const rawMeta = active.rawMeta;
       const targetMeta = active.targetMeta;
@@ -4901,6 +7592,7 @@ const Pages = {
                   <div><span>Output Rows</span><strong>${Number(preview.rowCount || 0).toLocaleString()}</strong></div>
                 ` : ''}
               </div>
+              ${renderImportDebug(preview.importDebug)}
               ${renderHeaderReport(preview.headerReport)}
               ${sampleTable(preview.rows)}
             </div>
@@ -4972,6 +7664,7 @@ const Pages = {
             </div>
           </div>
         </div>`;
+      restoreImportPreviewScroll();
 
       $('#import-job-select', area)?.addEventListener('change', async e => {
         const nextJob = DATA_IMPORT_JOBS[e.target.value] || DATA_IMPORT_JOBS.percentrank;
@@ -5051,6 +7744,7 @@ const Pages = {
         const duplicates = previewNow?.headerReport?.exactDuplicates || [];
         const removeIndexes = duplicates.flatMap(item => (item.columns || []).slice(1).map(col => Number(col) - 1));
         if (!previewNow?.rows?.length || !removeIndexes.length) return;
+        rememberImportPreviewScroll();
         const rows = removeImportColumns(previewNow.rows, removeIndexes);
         State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
         toast(`ลบคอลัมน์ซ้ำ ${removeIndexes.length.toLocaleString()} คอลัมน์ออกจาก Preview แล้ว`, 'success', 4200);
@@ -5062,6 +7756,7 @@ const Pages = {
           const colIdx = Number(e.currentTarget.dataset.deleteColumn);
           if (!previewNow?.rows?.length || !Number.isInteger(colIdx)) return;
           const headerName = cleanImportText(previewNow.rows[0]?.[colIdx]) || `Column ${colIdx + 1}`;
+          rememberImportPreviewScroll();
           const rows = removeImportColumns(previewNow.rows, [colIdx]);
           State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
           toast(`ลบคอลัมน์ ${headerName} ออกจาก Preview แล้ว`, 'success', 4200);
@@ -5088,6 +7783,15 @@ const Pages = {
             targetTab,
             sourceRowCount: sourceRows.length,
             cleaner: job.cleaner || '',
+            importDebug: {
+              cleaner: job.cleaner || 'none',
+              detected: job.cleaner === 'masterFundRaw' ? detectMorningstarRows(sourceRows) : null,
+              rawRow1: (sourceRows[0] || []).slice(0, 40),
+              rawRow6: (sourceRows[5] || []).slice(0, 40),
+              rawRow7: (sourceRows[6] || []).slice(0, 40),
+              rawRow8: (sourceRows[7] || []).slice(0, 40),
+              cleanedHeader: (rows[0] || []).slice(0, 60),
+            },
             targetExists: (latestTargetMeta.tabs || []).includes(targetTab),
           }, rows);
           render();
@@ -5150,16 +7854,28 @@ const Pages = {
           render();
         }
       });
-      $('#json-export-open', area)?.addEventListener('click', () => {
+      $('#json-export-open', area)?.addEventListener('click', async () => {
         const readiness = State.dataImport.jsonReadiness;
         const targetTab = (readiness?.quarter || State.dataImport.targetTab || job.defaultTab).trim().toUpperCase();
         if (!readiness?.allReady) {
           toast('กรุณาตรวจสอบให้พร้อมครบทั้ง 3 ชุดก่อนสร้าง JSON', 'warning');
           return;
         }
-        const exportUrl = buildJsonExportUrl(targetTab, 'all');
-        window.open(exportUrl, '_blank', 'noopener,noreferrer');
-        toast('เปิด Apps Script เพื่อสร้าง JSON ทั้ง 3 ไฟล์แล้ว', 'success', 5000);
+        State.dataImport.isExportingJson = true;
+        render();
+        try {
+          const result = await exportBaseJsonFromSheets(targetTab);
+          const summary = result.files
+            .map(file => `${file.fileName}: ${file.rows.toLocaleString()} rows`)
+            .join(' · ');
+          toast(`สร้าง JSON สำเร็จ: ${summary}`, 'success', 7000);
+          if (result.folderLink) window.open(result.folderLink, '_blank', 'noopener,noreferrer');
+        } catch (err) {
+          toast(err.message || 'สร้าง JSON ไม่สำเร็จ', 'error', 8000);
+        } finally {
+          State.dataImport.isExportingJson = false;
+          render();
+        }
       });
     };
 
@@ -5228,10 +7944,15 @@ const Pages = {
     const selectedDatasetIds = new Set(useDefaultDatasetIds ? defaultSelectedDatasetIds : savedSelectedDatasetIds);
     const secWorkflowUrl = 'https://github.com/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml';
     const secSpreadsheetId = '1SsL8fXFmKsAfnakrIBTtglZqhErrYz8SfiiZb4wKGDs';
-    const secDataPreparationDefaultTarget = SEC_DATA_PREPARATION_TARGETS[0];
-    const secDataPreparationSpreadsheetId = secDataPreparationDefaultTarget.spreadsheetId;
-    const secDataPreparationSheetUrl = secDataPreparationDefaultTarget.url;
-    const secWorkflowDispatchUrl = 'https://api.github.com/repos/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml/dispatches';
+	    const secDataPreparationDefaultTarget = SEC_DATA_PREPARATION_TARGETS[0];
+	    const secDataPreparationSpreadsheetId = secDataPreparationDefaultTarget.spreadsheetId;
+	    const secDataPreparationSheetUrl = secDataPreparationDefaultTarget.url;
+	    const secOutputSpreadsheetId = '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w';
+	    const secOutputSheetUrl = 'https://docs.google.com/spreadsheets/d/16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w/edit?gid=0#gid=0';
+	    const secJsonDriveFolderId = JSON_DRIVE_ROOT_FOLDER_ID;
+	    const secJsonDriveFolderUrl = JSON_DRIVE_ROOT_FOLDER_URL;
+	    const secJsonFileName = 'Data For SEC API.json';
+	    const secWorkflowDispatchUrl = 'https://api.github.com/repos/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml/dispatches';
     const secWorkflowRunsUrl = 'https://api.github.com/repos/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml/runs';
     const datasetKey = item => item.id.replace(/^\d+_/, '');
     const dataPreparationRequiredTabs = new Set([
@@ -5253,7 +7974,262 @@ const Pages = {
       ? '<span class="sec-dataset-status is-selected">จำเป็นต้องมี</span>'
       : '<span class="sec-dataset-status">เสริม</span>';
     const chip = (value, tone = '') => `<span class="sec-data-chip ${tone}">${esc(value)}</span>`;
-    const presetOptions = [
+    const secFactsheetLatestDatasetIds = new Set([
+      '07_ipos',
+      '08_benchmarks',
+      '09_subscription_redemption_minimums',
+      '10_subscription_redemption_periods',
+      '11_risk_spectrum',
+      '12_statistics',
+      '13_dividend_policy',
+      '14_fees',
+      '15_performance',
+      '16_asset_allocation',
+      '17_top5_holdings',
+    ]);
+    const parseSecDateValue = value => {
+      const text = String(value ?? '').trim();
+      if (!text) return Number.NEGATIVE_INFINITY;
+      const isoMatch = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+      if (isoMatch) {
+        const year = Number(isoMatch[1]);
+        const normalizedYear = year > 2400 ? year - 543 : year;
+        return new Date(normalizedYear, Number(isoMatch[2]) - 1, Number(isoMatch[3])).getTime();
+      }
+      const thaiMatch = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+      if (thaiMatch) {
+        const year = Number(thaiMatch[3]);
+        const normalizedYear = year > 2400 ? year - 543 : year;
+        return new Date(normalizedYear, Number(thaiMatch[2]) - 1, Number(thaiMatch[1])).getTime();
+      }
+      const parsed = Date.parse(text);
+      return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+    };
+    const secColumnIndex = (headers, candidates) => findColumnIndex(headers, candidates);
+    const secSortableValue = (value, mode = 'date') => {
+      const text = String(value ?? '').trim();
+      if (!text) return Number.NEGATIVE_INFINITY;
+      if (mode === 'period') {
+        const numeric = Number(text.replace(/[^\d]/g, ''));
+        return Number.isFinite(numeric) ? numeric : Number.NEGATIVE_INFINITY;
+      }
+      const parsed = parseSecDateValue(text);
+      return parsed === Number.NEGATIVE_INFINITY ? text : parsed;
+    };
+    const secColumnRange = (values, headers, candidates, mode = 'date') => {
+      const idx = secColumnIndex(headers, candidates);
+      if (idx < 0) return null;
+      let minValue = '';
+      let maxValue = '';
+      let minSort = Number.POSITIVE_INFINITY;
+      let maxSort = Number.NEGATIVE_INFINITY;
+      values.slice(1).forEach(row => {
+        const value = String(row?.[idx] ?? '').trim();
+        if (!value) return;
+        const sortable = secSortableValue(value, mode);
+        if (sortable < minSort || !minValue) {
+          minSort = sortable;
+          minValue = value;
+        }
+        if (sortable > maxSort || !maxValue) {
+          maxSort = sortable;
+          maxValue = value;
+        }
+      });
+      if (!minValue && !maxValue) return null;
+      return {
+        min: minValue || maxValue,
+        max: maxValue || minValue,
+        same: (minValue || maxValue) === (maxValue || minValue),
+      };
+    };
+    const secRangeText = (range) => {
+      if (!range) return '';
+      return range.same ? range.max : `${range.min} ถึง ${range.max}`;
+    };
+    const secDataCoverage = (values, item) => {
+      const headers = values?.[0] || [];
+      if (!headers.length) return { label: 'ข้อมูลจริง', value: '-', note: '' };
+      if (item.id === '06_factsheet_urls') {
+        const range = secColumnRange(values, headers, ['as_of_date']);
+        return { label: 'as_of_date', value: secRangeText(range) || '-', note: '' };
+      }
+      if (['18_outstanding_portfolio', '19_portfolio_asset_type'].includes(item.id)) {
+        const range = secColumnRange(values, headers, ['period'], 'period');
+        return { label: 'period', value: secRangeText(range) || '-', note: '' };
+      }
+      if (item.id === '20_nav_daily') {
+        const range = secColumnRange(values, headers, ['nav_date']);
+        return { label: 'nav_date', value: secRangeText(range) || '-', note: '' };
+      }
+      if (item.id === '21_dividend_history') {
+        const range = secColumnRange(values, headers, ['dividend_date']);
+        return { label: 'dividend_date', value: secRangeText(range) || '-', note: '' };
+      }
+      if (secFactsheetLatestDatasetIds.has(item.id)) {
+        const startRange = secColumnRange(values, headers, ['start_date']);
+        const endRange = secColumnRange(values, headers, ['end_date']);
+        const startText = secRangeText(startRange);
+        const endText = secRangeText(endRange);
+        const value = startText || endText
+          ? `${startText || '-'} ถึง ${endText || '-'}`
+          : '-';
+        return {
+          label: 'start/end ในข้อมูล',
+          value,
+          note: 'factsheet ใช้ latest=true จึงไม่ filter ตามวันที่ที่กรอก',
+        };
+      }
+      const startRange = secColumnRange(values, headers, ['start_date']);
+      const endRange = secColumnRange(values, headers, ['end_date']);
+      const fallbackRange = secColumnRange(values, headers, ['as_of_date', 'nav_date', 'dividend_date', 'period']);
+      const startText = secRangeText(startRange);
+      const endText = secRangeText(endRange);
+      if (startText || endText) return { label: 'start/end ในข้อมูล', value: `${startText || '-'} ถึง ${endText || '-'}`, note: '' };
+      return { label: 'ข้อมูลจริง', value: secRangeText(fallbackRange) || '-', note: '' };
+    };
+    const secCoverageHtml = (status) => {
+      if (!status?.exists) return '<span class="sec-dataset-status is-missing">-</span>';
+      const coverage = status.coverage || { label: 'ข้อมูลจริง', value: '-' };
+      return `
+        <div class="sec-coverage-stack">
+          <div><span>${esc(coverage.label || 'ข้อมูลจริง')}</span><strong>${esc(coverage.value || '-')}</strong></div>
+          ${coverage.note ? `<small>${esc(coverage.note)}</small>` : ''}
+        </div>`;
+    };
+	    const detectSecImportValueType = (value) => {
+	      const text = String(value ?? '').trim();
+	      if (!text) return '';
+	      if (/^[-–—]+$/.test(text)) return '';
+	      if (/^(n\/a|na|null|none)$/i.test(text)) return '';
+	      if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(text)) return 'date';
+	      if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/.test(text)) return 'date';
+	      if (/^-?\d+(,\d{3})*(\.\d+)?%$/.test(text) || /^-?\d+(\.\d+)?%$/.test(text)) return 'percent';
+	      if (/^-?\d+(,\d{3})*(\.\d+)?$/.test(text) || /^-?\d+(\.\d+)?$/.test(text)) return 'number';
+	      return 'text';
+	    };
+	    const secTypeBadgeClass = (type) => ({
+	      number: 'badge-success',
+	      percent: 'badge-accent',
+	      date: 'badge-primary',
+	      text: 'badge-data-origin',
+	      mixed: 'badge-warning',
+	      blank: 'badge-muted',
+	    }[type] || 'badge-data-origin');
+	    const secTypeLabel = (type) => ({
+	      number: 'Number',
+	      percent: 'Percent',
+	      date: 'Date',
+	      text: 'Text',
+	      mixed: 'Mixed',
+	      blank: 'Blank',
+	    }[type] || String(type || '').replace(/^./, c => c.toUpperCase()));
+	    const analyzeSecImportColumns = (rows = []) => {
+	      const headers = rows[0] || [];
+	      const maxCols = rows.length ? Math.max(...rows.map(row => row.length)) : headers.length;
+	      return Array.from({ length: maxCols }, (_, colIdx) => {
+	        const counts = { text: 0, number: 0, percent: 0, date: 0 };
+	        rows.slice(1, 101).forEach(row => {
+	          const type = detectSecImportValueType(row[colIdx]);
+	          if (type) counts[type] += 1;
+	        });
+	        const used = Object.entries(counts).filter(([, count]) => count > 0);
+	        const detectedType = used.length === 0
+	          ? 'blank'
+	          : (used.length === 1 ? used[0][0] : 'mixed');
+	        const key = `${colIdx}:${headers[colIdx] || `Column ${colIdx + 1}`}`;
+	        return {
+	          key,
+	          index: colIdx + 1,
+	          name: headers[colIdx] || `Column ${colIdx + 1}`,
+	          detectedType,
+	          type: State.secDataImport.columnTypes[key] || detectedType,
+	          counts,
+	        };
+	      });
+	    };
+	    const refreshSecDataPreparationPreview = (rows = []) => {
+	      const colCount = rows.length ? Math.max(...rows.map(row => row.length)) : 0;
+	      return {
+	        rows,
+	        rowCount: Math.max(0, rows.length - 1),
+	        colCount,
+	        columns: analyzeSecImportColumns(rows),
+	      };
+	    };
+	    const secImportTypeSelect = (col) => {
+	      const typeOptions = [
+	        ['auto', 'Auto'],
+	        ['text', 'Text'],
+	        ['number', 'Number'],
+	        ['percent', 'Percent'],
+	        ['date', 'Date'],
+	        ['blank', 'Blank'],
+	      ];
+	      return `
+	        <div class="import-header-type">
+	          <strong class="badge ${secTypeBadgeClass(col.type)}">${esc(secTypeLabel(col.type))}</strong>
+	          <select class="import-type-select sec-import-type-select" data-column-key="${esc(col.key)}" aria-label="เลือกชนิดข้อมูลของ ${esc(col.name)}">
+	            ${typeOptions.map(([value, label]) => `
+	              <option value="${value}" ${(State.secDataImport.columnTypes[col.key] || 'auto') === value ? 'selected' : ''}>
+	                ${label}${value === 'auto' ? ` (${secTypeLabel(col.detectedType)})` : ''}
+	              </option>`).join('')}
+	          </select>
+	        </div>`;
+	    };
+	    const secDataPreparationSampleTable = (preview) => {
+	      const rows = preview?.rows || [];
+	      if (!rows.length) return '<div class="state-box">ยังไม่ได้โหลด tab data_preparation</div>';
+	      const headers = rows[0] || [];
+	      const dataRows = rows.slice(1);
+	      const visibleRows = [headers, ...dataRows.slice(0, 5)];
+	      const maxCols = Math.max(...rows.map(row => row.length));
+	      const columns = preview.columns || analyzeSecImportColumns(rows);
+	      return `
+	        <div class="table-wrapper import-preview-table">
+	          <table>
+	            <tbody>
+	              ${visibleRows.map((row, rowIdx) => `
+	                <tr class="${rowIdx === 0 ? 'is-header-row' : ''}">
+	                  ${Array.from({ length: maxCols }, (_, i) => rowIdx === 0
+	                    ? `<td><div class="import-header-cell"><span>${esc(row[i] ?? `Column ${i + 1}`)}</span>${secImportTypeSelect(columns[i] || { key: `${i}:Column ${i + 1}`, name: `Column ${i + 1}`, type: 'blank', detectedType: 'blank' })}</div></td>`
+	                    : `<td>${esc(row[i] ?? '')}</td>`).join('')}
+	                </tr>
+	              `).join('')}
+	            </tbody>
+	          </table>
+	        </div>
+	        <div class="pg-info import-preview-note">แสดงทุกคอลัมน์ และตัวอย่าง 5 แถวแรกจาก ${dataRows.length.toLocaleString()} rows</div>`;
+	    };
+	    const secJsonStatusBadge = () => {
+	      if (State.secDataImport.isExportingJson) return '<span class="badge badge-data-origin">กำลังสร้าง JSON</span>';
+	      if (State.secDataImport.jsonStatus?.ok) return '<span class="badge badge-success">สร้าง JSON แล้ว</span>';
+	      if (State.secDataImport.jsonStatus?.error) return '<span class="badge badge-warning">สร้าง JSON ไม่สำเร็จ</span>';
+	      return '<span class="badge badge-data-origin">ยังไม่ได้สร้าง JSON</span>';
+	    };
+	    const getSecJsonQuarter = () => {
+	      const targetQuarter = String(State.secDataImport.targetTab || '').trim().toUpperCase();
+	      if (/^\d{4}-Q[1-4]$/.test(targetQuarter)) return targetQuarter;
+	      const cleanQuarter = String(State.currentQuarter || '').trim().toUpperCase();
+	      return /^\d{4}-Q[1-4]$/.test(cleanQuarter) ? cleanQuarter : 'unknown-quarter';
+	    };
+	    const getSecJsonYear = (quarter) => {
+	      const match = String(quarter || '').trim().match(/^(\d{4})-Q[1-4]$/i);
+	      return match?.[1] || 'unknown-year';
+	    };
+	    const getSecJsonPathParts = () => {
+	      const quarter = getSecJsonQuarter();
+	      return {
+	        quarter,
+	        year: getSecJsonYear(quarter),
+	        folderSegments: [getSecJsonYear(quarter), quarter, 'base'],
+	      };
+	    };
+	    const getSecJsonDisplayPath = () => {
+	      const { year, quarter } = getSecJsonPathParts();
+	      return `${JSON_STORE.rootName}/${year}/${quarter}/base/${secJsonFileName}`;
+	    };
+	    const presetOptions = [
       ['custom', 'เลือก endpoint raw tabs เอง'],
     ].map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join('');
     const renderChips = (values, tone = '') => values.map(value => chip(value, tone)).join('');
@@ -5418,7 +8394,6 @@ const Pages = {
               </label>
               <div class="sec-data-actions">
                 <button class="btn btn-secondary" id="sec-open-master-sheet" type="button">เปิด Google Sheet</button>
-                <button class="btn btn-secondary" id="sec-check-tabs" type="button">ตรวจสถานะ Tabs</button>
                 <button class="btn sec-data-primary-btn" id="sec-run-workflow" type="button">รัน GitHub Actions</button>
               </div>
             </div>
@@ -5454,7 +8429,7 @@ const Pages = {
                 </div>
               </div>
               <div class="sec-workflow-warning">
-                เมื่อ workflow เขียนสำเร็จ ระบบจะล้างข้อมูลเดิมใน tab endpoint ที่เลือก แล้วเขียนข้อมูลชุดล่าสุดใหม่ทั้งหมด
+                เมื่อ workflow เขียนสำเร็จ ระบบจะล้างข้อมูลเดิมใน tab endpoint ที่เลือก แล้วเขียนข้อมูลชุดล่าสุดใหม่ทั้งหมด โดย endpoint อื่นจะใช้ <strong>02_profiles เดิม</strong> เป็นฐาน เว้นแต่เลือกดึง 02_profiles เอง
               </div>
               <div class="sec-workflow-status" id="sec-workflow-status" hidden></div>
             </div>
@@ -5464,7 +8439,7 @@ const Pages = {
         <div class="sec-data-summary-grid">
           <div class="sec-data-summary-card">
             <span>Registered proj_id</span>
-            <strong>02_profiles เป็นฐาน</strong>
+            <strong>ใช้ 02_profiles เดิม</strong>
           </div>
           <div class="sec-data-summary-card">
             <span>Join key หลัก</span>
@@ -5482,7 +8457,11 @@ const Pages = {
 
         <div class="card sec-data-card">
           <div class="card-header">
-            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">2</span>เลือก endpoint และตรวจสถานะ raw tabs</span>
+            <span class="card-title data-import-card-title-step">
+              <span class="data-import-step-no">2</span>
+              เลือก endpoint และตรวจสถานะ raw tabs
+              <button class="btn btn-secondary btn-sm" id="sec-check-tabs" type="button">ตรวจสถานะ Tabs</button>
+            </span>
             <div class="page-tools-meta"><span class="badge badge-success">อ่านจาก tab จริง</span></div>
           </div>
           <div class="card-body">
@@ -5499,9 +8478,10 @@ const Pages = {
                   <tr>
                     <th>เลือก</th>
                     <th>ความจำเป็นของข้อมูล</th>
+                    <th>หลักฐานช่วงข้อมูล</th>
+                    <th>สถานะ</th>
                     <th>Tab</th>
                     <th>ชุดข้อมูล</th>
-                    <th>สถานะ</th>
                     <th>หัวคอลัมน์หลัก</th>
                   </tr>
                 </thead>
@@ -5520,9 +8500,10 @@ const Pages = {
                         </label>
                       </td>
                       <td>${dataPreparationRequirementBadge(item)}</td>
+                      <td data-sec-update-date-cell><span class="sec-dataset-status">ยังไม่ได้ตรวจ</span></td>
+                      <td data-sec-status-cell><span class="sec-dataset-status">ยังไม่ได้ตรวจ</span></td>
                       <td><code>${esc(item.id)}</code></td>
                       <td>${esc(item.title)}</td>
-                      <td><span class="sec-dataset-status">ยังไม่ได้ตรวจ</span></td>
                       <td>${renderChips(item.columns)}</td>
                     </tr>
                   `).join('')}
@@ -5534,45 +8515,150 @@ const Pages = {
 
         <div class="card sec-data-card">
           <div class="card-header">
-            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">3</span>รายละเอียดหัวข้อมูล SEC ทั้ง 21 ชุด</span>
-            <div class="page-tools-meta"><span class="badge badge-data-origin">catalog</span></div>
+            <span class="card-title data-import-card-title-step">
+              <span class="data-import-step-no">3</span>
+              รวบรวมข้อมูลเป็น data_preparation
+            </span>
+            <div class="page-tools-meta">
+              <span class="badge badge-data-origin">master_view</span>
+              <button class="btn sec-data-primary-btn btn-sm" id="sec-build-master-view" type="button">รวบรวมข้อมูล</button>
+            </div>
           </div>
           <div class="card-body">
-            <div class="table-scroll">
-              <table class="sec-data-catalog-table">
-                <thead>
-                  <tr>
-                    <th>ชุดข้อมูล</th>
-                    <th>ชื่อข้อมูล</th>
-                    <th>ไฟล์ CSV</th>
-                    <th>กลุ่ม</th>
-                    <th>ความถี่</th>
-                    <th>Key เชื่อมโยง</th>
-                    <th>หัวคอลัมน์หลักที่จะดึง</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${secDatasets.map(item => `
-                    <tr data-sec-dataset-row="${esc(item.id)}" class="${selectedDatasetIds.has(item.id) ? 'is-selected' : ''}">
-                      <td><strong>${esc(item.id)}</strong></td>
-                      <td>
-                        <div class="sec-data-title-cell">
-                          <strong>${esc(item.title)}</strong>
-                          <span>${esc(item.endpoint)}</span>
-                        </div>
-                      </td>
-                      <td><code>${esc(item.file)}</code></td>
-                      <td>${chip(item.group, 'sec-data-chip-blue')}</td>
-                      <td>${chip(item.cadence, item.cadence === 'ทุกวัน' ? 'sec-data-chip-green' : '')}</td>
-                      <td>${renderChips(item.keys, 'sec-data-chip-key')}</td>
-                      <td>${renderChips(item.columns)}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
+            <div class="sec-master-note">
+              อ่านข้อมูลจาก raw tabs ที่ตรวจในขั้นตอนที่ 2 แล้วรวมเป็น tab <strong>data_preparation</strong> สำหรับใช้งานต่อ โดยใช้ workflow โหมด <strong>master_from_raw</strong>
             </div>
           </div>
         </div>
+
+        <div class="card sec-data-card data-import-preview-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step">
+              <span class="data-import-step-no">4</span>
+              กำหนด Type ให้ถูกต้องก่อนบันทึกข้อมูล
+            </span>
+            <div class="page-tools-meta">
+              ${State.secDataImport.preview ? `
+                <span class="row-count-badge">${State.secDataImport.preview.rowCount.toLocaleString()} rows</span>
+                <span class="row-count-badge">${State.secDataImport.preview.colCount.toLocaleString()} columns</span>
+              ` : '<span class="badge badge-data-origin">data_preparation</span>'}
+              <button class="btn btn-secondary btn-sm" id="sec-load-data-preparation-preview" type="button" ${State.secDataImport.isLoadingPreview ? 'disabled' : ''}>
+                ${State.secDataImport.isLoadingPreview ? 'กำลังโหลด...' : 'โหลด data_preparation'}
+              </button>
+            </div>
+          </div>
+          <div class="card-body">
+            ${State.secDataImport.preview ? `
+              <div class="import-status-grid">
+                <div><span>Source</span><strong>Raw For SEC</strong></div>
+                <div><span>Tab</span><strong>data_preparation</strong></div>
+                <div><span>Mode</span><strong>Preview Type</strong></div>
+              </div>
+            ` : `
+              <div class="sec-master-note">
+                โหลด tab <strong>data_preparation</strong> หลังจากรวบรวมข้อมูลแล้ว เพื่อตรวจชนิดข้อมูลของแต่ละคอลัมน์ก่อนนำไปใช้งานต่อ
+              </div>
+            `}
+            ${secDataPreparationSampleTable(State.secDataImport.preview)}
+          </div>
+        </div>
+
+        <div class="card sec-data-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">5</span>ฐานข้อมูลปลายทางที่ต้องการจะบันทึก</span>
+            <div class="page-tools-meta">
+              <span class="badge ${State.secDataImport.targetExists ? 'badge-warning' : 'badge-success'}">
+                ${State.secDataImport.targetExists ? 'พบ Tab แล้ว' : 'ยังไม่มี Tab นี้'}
+              </span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="data-import-form">
+              <div class="fund-field">
+                <span>ฐานข้อมูลปลายทาง</span>
+                <input class="fund-input" value="SEC data_preparation" readonly>
+              </div>
+              <div class="fund-field">
+                <span>ระบุชื่อ Tab ปลายทาง</span>
+                <input class="fund-input" id="sec-output-target-tab" value="${esc(State.secDataImport.targetTab || 'data_preparation')}" placeholder="data_preparation">
+              </div>
+            </div>
+            <div class="sec-master-note">
+              ปลายทาง: <a href="${esc(secOutputSheetUrl)}" target="_blank" rel="noopener noreferrer">Google Sheet data_preparation</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="card sec-data-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">6</span>บันทึกข้อมูลปลายทางไปที่ Google Sheets</span>
+            <div class="page-tools-meta">
+              <span class="badge ${State.secDataImport.targetExists ? 'badge-warning' : 'badge-success'}">
+                ${State.secDataImport.targetExists ? 'พบ Tab แล้ว' : 'ยังไม่มี Tab นี้'}
+              </span>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="import-status-grid">
+              <div><span>Sheet</span><strong>SEC data_preparation</strong></div>
+              <div><span>Tab</span><strong>${esc(State.secDataImport.targetTab || 'data_preparation')}</strong></div>
+              <div><span>Mode</span><strong>${State.secDataImport.targetExists ? 'เขียนทับเมื่อยืนยัน' : 'สร้าง Tab ใหม่'}</strong></div>
+              <div class="import-status-action-cell">
+                <span>Action</span>
+                <div class="data-import-actions data-import-status-actions">
+                  ${State.secDataImport.preview ? `<button class="btn btn-primary import-commit-btn" id="sec-output-save" type="button" ${State.secDataImport.isImporting ? 'disabled' : ''}>บันทึกข้อมูล</button>` : ''}
+                  ${State.secDataImport.preview && State.secDataImport.targetExists ? `
+                    <label class="fund-manager-check import-confirm">
+                      <input type="checkbox" id="sec-output-overwrite-confirm">
+                      ติ๊กเพื่อยืนยันการเขียนทับข้อมูลใน ${esc(State.secDataImport.targetTab || 'data_preparation')}
+                    </label>` : ''}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card sec-data-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">7</span>บันทึกข้อมูลเป็นไฟล์ JSON</span>
+            <div class="page-tools-meta">${secJsonStatusBadge()}</div>
+          </div>
+	          <div class="card-body">
+	            <div class="json-readiness-box">
+	              <div class="json-readiness-copy">
+	                สร้างไฟล์ <strong>${esc(secJsonFileName)}</strong> จาก preview ปัจจุบัน แล้วบันทึกตาม path ของ Quarter ที่เลือก
+	              </div>
+	              <div class="json-path-grid">
+	                <div class="fund-field data-import-path-field">
+	                  <span>Base JSON Folder</span>
+	                  <input class="fund-input" value="${esc(secJsonDriveFolderUrl)}" readonly>
+	                </div>
+	                <div class="fund-field data-import-path-field">
+	                  <span>JSON Path</span>
+	                  <input class="fund-input" value="${esc(getSecJsonDisplayPath())}" readonly>
+	                </div>
+	              </div>
+	              ${State.secDataImport.jsonStatus?.webViewLink ? `
+	                <div class="json-readiness-list">
+	                  <div class="json-readiness-item is-ready">
+	                    <div>
+	                      <strong>${esc(State.secDataImport.jsonStatus.fileName || secJsonFileName)}</strong>
+	                      <span>อัปเดตล่าสุดแล้ว</span>
+	                    </div>
+                    <a class="badge badge-success" href="${esc(State.secDataImport.jsonStatus.webViewLink)}" target="_blank" rel="noopener noreferrer">เปิดไฟล์</a>
+                  </div>
+                </div>
+              ` : ''}
+              <div class="data-import-actions json-export-actions">
+                <button class="btn btn-ghost" id="sec-open-json-folder" type="button">เปิดโฟลเดอร์ JSON</button>
+                <button class="btn btn-primary import-commit-btn" id="sec-json-export" type="button" ${State.secDataImport.preview && !State.secDataImport.isExportingJson ? '' : 'disabled'}>
+                  ${State.secDataImport.isExportingJson ? 'กำลังสร้าง JSON...' : 'สร้าง JSON'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>`;
 
     const presetMap = {
@@ -5764,34 +8850,36 @@ const Pages = {
       secWorkflowPollTimer = window.setInterval(poll, 10000);
     };
 
-    const workflowInputs = () => {
-      const presetValue = 'custom';
-      const selectedIds = $$('.sec-dataset-check:checked', area).map(input => input.value);
-      const selectedDatasetKeys = selectedIds.map(id => datasetKey(secDatasets.find(item => item.id === id) || { id }));
-      const registeredMaxFunds = ($('#sec-registered-max-funds', area)?.value || '0').trim() || '0';
-      const maxPages = ($('#sec-max-pages', area)?.value || '0').trim() || '0';
-      return {
-        output_mode: 'raw_tabs',
-        tab_name: 'data_preparation',
-        dataset_preset: presetValue === 'custom' ? 'master_core' : presetValue,
-        custom_datasets: presetValue === 'custom' ? selectedDatasetKeys.join(',') : '',
-        proj_id: '',
-        proj_ids: projectIdsPayload(),
-        proj_class_pairs: projectPairPayload(),
-        fund_status: ($('#sec-fund-status', area)?.value || '').trim(),
-        registered_max_funds: registeredMaxFunds,
-        fund_class_name: '',
-        latest: 'true',
-        start_date: ($('#sec-start-date', area)?.value || '').trim(),
-        end_date: ($('#sec-end-date', area)?.value || '').trim(),
-        start_period: ($('#sec-start-period', area)?.value || '').trim(),
-        end_period: ($('#sec-end-period', area)?.value || '').trim(),
-        start_nav_date: ($('#sec-start-date', area)?.value || '').trim(),
-        end_nav_date: ($('#sec-end-date', area)?.value || '').trim(),
-        max_pages: maxPages,
-        continue_on_error: 'true',
-      };
-    };
+	    const workflowInputs = () => {
+	      const presetValue = 'custom';
+	      const selectedIds = $$('.sec-dataset-check:checked', area).map(input => input.value);
+	      const selectedDatasetKeys = selectedIds.map(id => datasetKey(secDatasets.find(item => item.id === id) || { id }));
+	      const registeredMaxFunds = ($('#sec-registered-max-funds', area)?.value || '0').trim() || '0';
+	      const maxPages = ($('#sec-max-pages', area)?.value || '0').trim() || '0';
+	      return {
+	        output_mode: 'raw_tabs',
+	        tab_name: 'data_preparation',
+	        output_spreadsheet_id: secSpreadsheetId,
+	        dataset_preset: presetValue === 'custom' ? 'master_core' : presetValue,
+	        custom_datasets: presetValue === 'custom' ? selectedDatasetKeys.join(',') : '',
+	        proj_id: '',
+	        proj_ids: projectIdsPayload(),
+	        proj_class_pairs: projectPairPayload(),
+	        fund_status: ($('#sec-fund-status', area)?.value || '').trim(),
+	        use_existing_profiles: 'true',
+	        registered_max_funds: registeredMaxFunds,
+	        fund_class_name: '',
+	        latest: 'true',
+	        start_date: ($('#sec-start-date', area)?.value || '').trim(),
+	        end_date: ($('#sec-end-date', area)?.value || '').trim(),
+	        start_period: ($('#sec-start-period', area)?.value || '').trim(),
+	        end_period: ($('#sec-end-period', area)?.value || '').trim(),
+	        start_nav_date: ($('#sec-start-date', area)?.value || '').trim(),
+	        end_nav_date: ($('#sec-end-date', area)?.value || '').trim(),
+	        max_pages: maxPages,
+	        continue_on_error: 'true',
+	      };
+	    };
 
     [
       'sec-fund-status',
@@ -5828,97 +8916,268 @@ const Pages = {
       saveSecImportPrefs();
     });
 
-    $('#sec-project-pair-list', area)?.addEventListener('input', saveSecImportPrefs);
+	    $('#sec-project-pair-list', area)?.addEventListener('input', saveSecImportPrefs);
 
-    $('#sec-run-workflow', area)?.addEventListener('click', async () => {
-      const token = (($('#sec-github-token', area)?.value || '').trim() || configuredGithubToken);
-      if (!token) {
-        updateWorkflowStatus('กรุณาใส่ GitHub token ก่อนรัน workflow', 'is-warning');
-        toast('กรุณาใส่ GitHub token ก่อนรัน workflow', 'warning');
-        return;
-      }
+	    const runSecWorkflow = async ({ button, inputs, runningMessage, successMessage }) => {
+	      if (!button) return;
+	      const token = (($('#sec-github-token', area)?.value || '').trim() || configuredGithubToken);
+	      if (!token) {
+	        updateWorkflowStatus('กรุณาใส่ GitHub token ก่อนรัน workflow', 'is-warning');
+	        toast('กรุณาใส่ GitHub token ก่อนรัน workflow', 'warning');
+	        return;
+	      }
 
-      const runButton = $('#sec-run-workflow', area);
-      const inputs = workflowInputs();
-      runButton.disabled = true;
-      stopWorkflowPolling();
-      updateWorkflowStatus('กำลังส่งคำสั่งรัน GitHub Actions...', 'is-running');
+	      button.disabled = true;
+	      stopWorkflowPolling();
+	      updateWorkflowStatus(runningMessage || 'กำลังส่งคำสั่งรัน GitHub Actions...', 'is-running');
 
-      try {
-        const response = await fetch(secWorkflowDispatchUrl, {
-          method: 'POST',
-          headers: {
-            Accept: 'application/vnd.github+json',
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-          body: JSON.stringify({
-            ref: 'main',
-            inputs,
-          }),
-        });
+	      try {
+	        const response = await fetch(secWorkflowDispatchUrl, {
+	          method: 'POST',
+	          headers: {
+	            Accept: 'application/vnd.github+json',
+	            Authorization: `Bearer ${token}`,
+	            'Content-Type': 'application/json',
+	            'X-GitHub-Api-Version': '2022-11-28',
+	          },
+	          body: JSON.stringify({
+	            ref: 'main',
+	            inputs,
+	          }),
+	        });
 
-        if (!response.ok) {
-          const errorText = await response.text();
-          if (response.status === 422 && errorText.includes('output_spreadsheet_id')) {
-            throw new Error('GitHub workflow บน repo ยังไม่รองรับ output_spreadsheet_id กรุณาอัปโหลดไฟล์ workflow เวอร์ชันล่าสุดก่อน แล้วค่อยรันใหม่');
-          }
-          throw new Error(errorText || `GitHub API error ${response.status}`);
-        }
+	        if (!response.ok) {
+	          const errorText = await response.text();
+	          if (response.status === 422 && errorText.includes('output_spreadsheet_id')) {
+	            throw new Error('GitHub workflow บน repo ยังไม่รองรับ output_spreadsheet_id กรุณาอัปโหลดไฟล์ workflow เวอร์ชันล่าสุดก่อน แล้วค่อยรันใหม่');
+	          }
+	          throw new Error(errorText || `GitHub API error ${response.status}`);
+	        }
 
-        updateWorkflowStatus('ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...', 'is-running');
-        toast('รัน GitHub Actions สำเร็จแล้ว', 'success', 5000);
-        startWorkflowPolling(token);
-      } catch (err) {
-        updateWorkflowStatus(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'is-error');
-        toast(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'error', 7000);
-      } finally {
-        runButton.disabled = false;
-      }
-    });
+	        updateWorkflowStatus('ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...', 'is-running');
+	        toast(successMessage || 'รัน GitHub Actions สำเร็จแล้ว', 'success', 5000);
+	        startWorkflowPolling(token);
+	      } catch (err) {
+	        updateWorkflowStatus(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'is-error');
+	        toast(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'error', 7000);
+	      } finally {
+	        button.disabled = false;
+	      }
+	    };
+
+	    $('#sec-run-workflow', area)?.addEventListener('click', async () => {
+	      const runButton = $('#sec-run-workflow', area);
+	      const inputs = workflowInputs();
+	      await runSecWorkflow({
+	        button: runButton,
+	        inputs,
+	        runningMessage: 'กำลังส่งคำสั่งดึง raw tabs ไปที่ GitHub Actions...',
+	        successMessage: 'รัน GitHub Actions สำเร็จแล้ว',
+	      });
+	    });
+
+	    $('#sec-build-master-view', area)?.addEventListener('click', async () => {
+	      const buildButton = $('#sec-build-master-view', area);
+	      const inputs = {
+	        ...workflowInputs(),
+	        output_mode: 'master_from_raw',
+	        tab_name: 'data_preparation',
+	        dataset_preset: 'master_core',
+	        custom_datasets: '',
+	      };
+	      await runSecWorkflow({
+	        button: buildButton,
+	        inputs,
+	        runningMessage: 'กำลังส่งคำสั่งรวบรวม raw tabs เป็น data_preparation...',
+	        successMessage: 'เริ่มรวบรวมข้อมูลเป็น data_preparation แล้ว',
+	      });
+	    });
 
     $('#sec-open-master-sheet', area)?.addEventListener('click', () => {
       window.open(`https://docs.google.com/spreadsheets/d/${secSpreadsheetId}/edit#gid=0`, '_blank', 'noopener,noreferrer');
     });
 
-    $('#sec-check-tabs', area)?.addEventListener('click', async () => {
-      const button = $('#sec-check-tabs', area);
-      button.disabled = true;
+	    $('#sec-check-tabs', area)?.addEventListener('click', async () => {
+	      const button = $('#sec-check-tabs', area);
+	      button.disabled = true;
       try {
         const meta = await SheetsAPI.getSheetTabs(secSpreadsheetId);
         const tabSet = new Set(meta.tabs || []);
         const readRows = await Promise.all(secDatasets
           .map(async item => {
-            if (!tabSet.has(item.id)) return { id: item.id, exists: false, rowCount: 0 };
+            if (!tabSet.has(item.id)) return { id: item.id, exists: false, rowCount: 0, coverage: null };
             try {
               const values = await SheetsAPI.fetchSheetData(secSpreadsheetId, item.id);
-              return { id: item.id, exists: true, rowCount: Math.max(0, values.length - 1) };
+              return {
+                id: item.id,
+                exists: true,
+                rowCount: Math.max(0, values.length - 1),
+                coverage: secDataCoverage(values, item),
+              };
             } catch {
-              return { id: item.id, exists: true, rowCount: null };
+              return { id: item.id, exists: true, rowCount: null, coverage: null };
             }
           }));
         const statusById = new Map(readRows.map(item => [item.id, item]));
         $$('[data-sec-tab-status-row]', area).forEach(row => {
           const status = statusById.get(row.dataset.secTabStatusRow);
-          const cell = row.children[3];
+          const dateCell = $('[data-sec-update-date-cell]', row);
+          const statusCell = $('[data-sec-status-cell]', row);
           if (!status?.exists) {
-            cell.innerHTML = '<span class="sec-dataset-status is-missing">ยังไม่มี</span>';
+            if (dateCell) dateCell.innerHTML = '<span class="sec-dataset-status is-missing">-</span>';
+            if (statusCell) statusCell.innerHTML = '<span class="sec-dataset-status is-missing">ยังไม่มี</span>';
             return;
           }
           const suffix = Number.isFinite(status.rowCount) ? ` · ${status.rowCount} rows` : '';
-          cell.innerHTML = `<span class="sec-dataset-status is-selected">พร้อม${esc(suffix)}</span>`;
+          if (dateCell) {
+            dateCell.innerHTML = secCoverageHtml(status);
+          }
+          if (statusCell) statusCell.innerHTML = `<span class="sec-dataset-status is-selected">พร้อม${esc(suffix)}</span>`;
         });
         toast('ตรวจสถานะ SEC tabs แล้ว', 'success');
       } catch (err) {
         toast(err.message || 'ตรวจสถานะ tab ไม่สำเร็จ', 'error', 7000);
       } finally {
-        button.disabled = false;
-      }
-    });
+	        button.disabled = false;
+	      }
+	    });
 
-    syncSelectedState();
-  },
+	    $('#sec-load-data-preparation-preview', area)?.addEventListener('click', async () => {
+	      State.secDataImport.isLoadingPreview = true;
+	      Pages.secDataImport(area);
+	      try {
+	        const [rows, targetMeta] = await Promise.all([
+	          SheetsAPI.fetchSheetData(secSpreadsheetId, 'data_preparation'),
+	          SheetsAPI.getSheetTabs(secOutputSpreadsheetId),
+	        ]);
+	        State.secDataImport.preview = refreshSecDataPreparationPreview(rows);
+	        State.secDataImport.targetTab = State.secDataImport.targetTab || 'data_preparation';
+	        State.secDataImport.targetExists = (targetMeta.tabs || []).includes(State.secDataImport.targetTab);
+	        toast('โหลด data_preparation สำหรับกำหนด Type แล้ว', 'success');
+	      } catch (err) {
+	        toast(err.message || 'โหลด data_preparation ไม่สำเร็จ', 'error', 7000);
+	      } finally {
+	        State.secDataImport.isLoadingPreview = false;
+	        Pages.secDataImport(area);
+	      }
+	    });
+
+	    $('#sec-output-target-tab', area)?.addEventListener('input', e => {
+	      State.secDataImport.targetTab = e.target.value.trim() || 'data_preparation';
+	      State.secDataImport.jsonStatus = null;
+	    });
+
+	    $('#sec-output-target-tab', area)?.addEventListener('change', async e => {
+	      State.secDataImport.targetTab = e.target.value.trim() || 'data_preparation';
+	      State.secDataImport.jsonStatus = null;
+	      try {
+	        const meta = await SheetsAPI.getSheetTabs(secOutputSpreadsheetId);
+	        State.secDataImport.targetExists = (meta.tabs || []).includes(State.secDataImport.targetTab);
+	      } catch (err) {
+	        toast(err.message || 'ตรวจสอบ Sheet ปลายทางไม่สำเร็จ', 'error', 6000);
+	      }
+	      Pages.secDataImport(area);
+	    });
+
+	    $('#sec-output-save', area)?.addEventListener('click', async () => {
+	      const previewNow = State.secDataImport.preview;
+	      const targetTab = ($('#sec-output-target-tab', area)?.value || State.secDataImport.targetTab || 'data_preparation').trim() || 'data_preparation';
+	      if (!previewNow?.rows?.length) {
+	        toast('ไม่มี data_preparation สำหรับบันทึก', 'warning');
+	        return;
+	      }
+	      if (State.secDataImport.targetExists && !$('#sec-output-overwrite-confirm', area)?.checked) {
+	        toast('กรุณายืนยันก่อนเขียนทับ Tab เดิม', 'warning');
+	        return;
+	      }
+	      State.secDataImport.isImporting = true;
+	      Pages.secDataImport(area);
+	      try {
+	        if (!State.secDataImport.targetExists) {
+	          await SheetsAPI.addSheetTab(secOutputSpreadsheetId, targetTab);
+	        } else {
+	          await SheetsAPI.clearSheetValues(secOutputSpreadsheetId, targetTab);
+	        }
+	        await SheetsAPI.updateSheetValues(secOutputSpreadsheetId, targetTab, previewNow.rows);
+	        State.secDataImport.targetTab = targetTab;
+	        State.secDataImport.targetExists = true;
+	        State.secDataImport.jsonStatus = null;
+	        toast(`บันทึกข้อมูล ${previewNow.rowCount.toLocaleString()} rows ไปที่ ${targetTab} แล้ว`, 'success', 5000);
+	      } catch (err) {
+	        toast(err.message || 'บันทึกข้อมูล SEC ไม่สำเร็จ', 'error', 7000);
+	      } finally {
+	        State.secDataImport.isImporting = false;
+	        Pages.secDataImport(area);
+	      }
+	    });
+
+	    $('#sec-open-json-folder', area)?.addEventListener('click', () => {
+	      window.open(secJsonDriveFolderUrl, '_blank', 'noopener,noreferrer');
+	    });
+
+	    $('#sec-json-export', area)?.addEventListener('click', async () => {
+	      const previewNow = State.secDataImport.preview;
+	      if (!previewNow?.rows?.length) {
+	        toast('กรุณาโหลด data_preparation ก่อนสร้าง JSON', 'warning');
+	        return;
+	      }
+	      const jsonPath = getSecJsonPathParts();
+	      if (!/^\d{4}-Q[1-4]$/.test(jsonPath.quarter)) {
+	        toast('กรุณาระบุชื่อ Tab ปลายทางเป็นรูปแบบ YYYY-Q1 ถึง YYYY-Q4 ก่อนสร้าง JSON', 'warning', 7000);
+	        return;
+	      }
+	      State.secDataImport.isExportingJson = true;
+	      State.secDataImport.jsonStatus = null;
+	      Pages.secDataImport(area);
+	      try {
+	        const targetFolder = await SheetsAPI.resolveDriveFolderPath(
+	          secJsonDriveFolderId,
+	          jsonPath.folderSegments
+	        );
+	        const file = await SheetsAPI.uploadJsonToDriveFolder(
+	          targetFolder.id,
+	          secJsonFileName,
+	          previewNow.rows
+	        );
+	        State.secDataImport.jsonStatus = {
+	          ok: true,
+	          fileId: file.id,
+	          fileName: file.name || secJsonFileName,
+	          path: `${JSON_STORE.rootName}/${jsonPath.year}/${jsonPath.quarter}/base/${secJsonFileName}`,
+	          webViewLink: file.webViewLink || '',
+	        };
+	        toast(`สร้าง ${secJsonFileName} ใน ${jsonPath.quarter}/base แล้ว`, 'success', 5000);
+	      } catch (err) {
+	        State.secDataImport.jsonStatus = { ok: false, error: err.message || String(err) };
+	        toast(err.message || 'สร้าง JSON ไม่สำเร็จ', 'error', 7000);
+	      } finally {
+	        State.secDataImport.isExportingJson = false;
+	        Pages.secDataImport(area);
+	      }
+	    });
+
+	    $$('.sec-import-type-select', area).forEach(select => {
+	      select.addEventListener('change', e => {
+	        const key = e.target.dataset.columnKey;
+	        const value = e.target.value;
+	        if (!key) return;
+	        if (value === 'auto') {
+	          delete State.secDataImport.columnTypes[key];
+	        } else {
+	          State.secDataImport.columnTypes[key] = value;
+	        }
+	        if (State.secDataImport.preview?.rows) {
+	          State.secDataImport.preview = {
+	            ...State.secDataImport.preview,
+	            columns: analyzeSecImportColumns(State.secDataImport.preview.rows),
+	          };
+	        }
+	        Pages.secDataImport(area);
+	      });
+	    });
+
+	    syncSelectedState();
+	  },
 
   /* ── MASTER MAPPING MANAGER ── */
   async fundDataManager(area) {
@@ -6942,7 +10201,7 @@ const Pages = {
     area.innerHTML = `
       ${pageToolActions(
         'thai-calendar',
-        CONFIG.PAGES['select-fund']?.source || 'Percentrank Freestyle',
+        CONFIG.PAGES['select-fund']?.source || 'Fund Key Performance AVP',
         toggleActions
       )}
       <div class="card report-card report-card-calendar" id="report-card">
@@ -7479,14 +10738,14 @@ const Pages = {
     try {
       const [rawSecRows, universe] = await Promise.all([
         fetchCached('master-placeholder-1'),
-        buildSelectedMasterUniverse(),
+        buildSelectedFeeUniverse(),
       ]);
       const rawLookup = buildRawSecLookup(rawSecRows);
-      const feeRows = buildFeeComparisonRows(universe, rawLookup)
+      const feeRows = buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true })
         .sort((a, b) => compareValues(a.combined, b.combined, 'asc'));
 
       if (!feeRows.length) {
-        setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Raw For Sec และ AVP Master Fund ID', 'master-placeholder-1');
+        setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Data For SEC API และ AVP Master Fund ID', 'master-placeholder-1');
         return;
       }
 
@@ -7519,7 +10778,7 @@ const Pages = {
       }).join('');
 
       area.innerHTML = `
-        ${pageToolActions('master-placeholder-1', CONFIG.PAGES['master-placeholder-1']?.source || 'Raw For Sec + AVP Master Fund ID')}
+        ${pageToolActions('master-placeholder-1', CONFIG.PAGES['master-placeholder-1']?.source || 'Data For SEC API + AVP Master Fund ID')}
         <div id="report-card" class="insight-page">
         ${buildInsightSummaryCards([
           { label: 'กองทุนที่จับคู่ได้', value: `${feeRows.length} กอง`, note: 'คัดจากกองที่เลือกไว้ก่อน ถ้าไม่ได้เลือกจะใช้ชุดแรกของรายการ' },
@@ -7538,7 +10797,7 @@ const Pages = {
           <div class="card insight-panel">
             <div class="insight-panel-head">
               <h3>รายละเอียดรายกอง</h3>
-              <p>อ้างอิง TER จาก Raw For Sec - 2026-Q1 และ Ongoing Cost จาก AVP Master Fund ID</p>
+              <p>อ้างอิง TER จาก Data For SEC API และ Ongoing Cost จาก AVP Master Fund ID</p>
             </div>
             ${buildInsightTable(feeRows, [
               { key: 'masterName', label: 'Master Fund', className: 'td-left' },
@@ -7555,7 +10814,7 @@ const Pages = {
       App._currentExport = null;
       App._currentTableExport = () => buildSimpleTablePayload(
         CONFIG.PAGES['master-placeholder-1']?.title || 'ค่าธรรมเนียม',
-        CONFIG.PAGES['master-placeholder-1']?.source || 'Raw For Sec + AVP Master Fund ID',
+        CONFIG.PAGES['master-placeholder-1']?.source || 'Data For SEC API + AVP Master Fund ID',
         ['Master Fund', 'กองไทย', 'Master Fund', 'กองไทย', 'Date', 'Combined TER'],
         feeRows.map(row => [
           row.masterName,
@@ -7578,10 +10837,10 @@ const Pages = {
     try {
       const [rawSecRows, universe] = await Promise.all([
         fetchCached('master-placeholder-4'),
-        buildSelectedMasterUniverse(),
+        buildSelectedFeeUniverse(),
       ]);
       const rawLookup = buildRawSecLookup(rawSecRows);
-      const feeRows = buildFeeComparisonRows(universe, rawLookup)
+      const feeRows = buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true })
         .sort((a, b) => compareValues(a.combined, b.combined, 'asc'))
         .map(row => {
           const matchedFund = Object.values(State.selectedFunds).find(f => f.code === row.thaiCode);
@@ -7593,11 +10852,11 @@ const Pages = {
         });
 
       if (!feeRows.length) {
-        setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Raw For Sec และ AVP Master Fund ID', 'master-placeholder-4');
+        setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Data For SEC API และ AVP Master Fund ID', 'master-placeholder-4');
         return;
       }
 
-      const source = CONFIG.PAGES['master-placeholder-4']?.source || 'Raw For Sec + AVP Master Fund ID';
+      const source = CONFIG.PAGES['master-placeholder-4']?.source || 'Data For SEC API + AVP Master Fund ID';
       const maxCombined = Math.max(...feeRows.map(item => item.combined || 0), 0);
 
       area.innerHTML = `
@@ -8779,6 +12038,617 @@ const Pages = {
       </div>`;
     App._currentExport = null;
     App._currentTableExport = null;
+  },
+
+  async otherFactorsFixedIncomeTable(area) {
+    const pageKey = 'master-placeholder-9';
+    setLoading(area, 'กำลังโหลดตารางปัจจัยประกอบกองทุนตราสารหนี้...');
+
+    let rows;
+    let editableColumns = [];
+    try {
+      await ensureSelectedFundsCatalog();
+      const [thaiQualityRows, secRows] = await Promise.all([
+        fetchCached('thai-annualized-v2'),
+        fetchCached('master-placeholder-4'),
+      ]);
+
+      const buildThaiQualityLookup = (rawRows) => {
+        const headers = rawRows[0] || [];
+        const ci = {
+          code: findColumnIndex(headers, ['Fund Code']),
+          fundSize: findColumnIndex(headers, ['Fund Size']),
+          fundSizeDate: findColumnIndex(headers, ['Fund Size Date', 'Fund SizeDate']),
+        };
+        const get = (row, index) => index >= 0 ? String(row[index] ?? '').trim() : '';
+        const lookup = new Map();
+        rawRows.slice(1).forEach(row => {
+          const code = get(row, ci.code).toUpperCase();
+          if (!code) return;
+          lookup.set(code, {
+            fundSize: get(row, ci.fundSize),
+            fundSizeDate: get(row, ci.fundSizeDate),
+          });
+        });
+        return lookup;
+      };
+
+      const formatFundSizeMillion = (value) => {
+        const n = parseNum(value);
+        if (Number.isNaN(n)) return '';
+        return Math.round(n / 1000000).toLocaleString('en-US');
+      };
+      const parseFundSizeMillion = (value) => {
+        const n = parseNum(value);
+        return Number.isNaN(n) ? NaN : Math.round(n / 1000000);
+      };
+      const formatPercentText = (value) => {
+        const text = String(value ?? '').trim();
+        if (!text) return '';
+        const n = parseNum(text);
+        if (Number.isNaN(n)) return text;
+        return `${n.toFixed(2)}%`;
+      };
+
+      const thaiQualityLookup = buildThaiQualityLookup(thaiQualityRows);
+      const secLookup = buildRawSecLookup(secRows);
+      const selectedFunds = Object.values(State.selectedFunds || {})
+        .filter(fund => State.selectedKeys?.has(fund.key));
+
+      rows = selectedFunds.length
+        ? selectedFunds.map(fund => {
+            const code = String(fund.code || '').trim().toUpperCase();
+            const quality = thaiQualityLookup.get(code) || {};
+            const sec = secLookup.get(code) || {};
+            return {
+              fundName: fund.code || fund.name || '-',
+              highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
+              fundSize: formatFundSizeMillion(quality.fundSize),
+              fundSizeValue: parseFundSizeMillion(quality.fundSize),
+              fundSizeDate: quality.fundSizeDate || '',
+              recoveringPeriod: sec.recoveringPeriod || '',
+              averageDuration: sec.portfolioDurationPeriod || '',
+              turnoverRatio: sec.portfolioTurnoverRatio || '',
+              turnoverValue: parseNum(sec.portfolioTurnoverRatio),
+              ytm: formatPercentText(sec.yieldToMaturity),
+              ytmValue: parseNum(sec.yieldToMaturity),
+            };
+          })
+        : Array.from({ length: 8 }, () => ({
+            fundName: '-',
+            highlightColor: '',
+            fundSize: '',
+            fundSizeDate: '',
+            recoveringPeriod: '',
+            averageDuration: '',
+            turnoverRatio: '',
+            turnoverValue: NaN,
+            ytm: '',
+            ytmValue: NaN,
+          }));
+    } catch (e) {
+      setError(area, e.message, pageKey);
+      return;
+    }
+
+    const source = 'AVP Thai Fund for Quality + Data For SEC API';
+
+    const headers = [
+      'ชื่อกอง',
+      'Fund Size (ลบ.)',
+      'Fund Size Date',
+      'Recovering Period',
+      'อายุของตราสารหนี้เฉลี่ย',
+      'อัตราส่วนหมุนเวียนการลงทุน',
+      'Yield to Maturity',
+    ];
+
+    const sortState = State.reportSorts[pageKey] || (State.reportSorts[pageKey] = { key: '', dir: 'asc' });
+    const parseThaiPeriodMonths = (value) => {
+      const text = String(value || '');
+      if (!text.trim()) return '';
+      const year = Number((/(\d+(?:\.\d+)?)\s*ปี/.exec(text) || [])[1] || 0);
+      const month = Number((/(\d+(?:\.\d+)?)\s*เดือน/.exec(text) || [])[1] || 0);
+      const day = Number((/(\d+(?:\.\d+)?)\s*วัน/.exec(text) || [])[1] || 0);
+      const total = (year * 12) + month + (day / 30);
+      return total || text;
+    };
+    const sortable = (row, key) => ({
+      fundName: row.fundName,
+      fundSize: row.fundSizeValue,
+      fundSizeDate: row.fundSizeDate,
+      recoveringPeriod: parseThaiPeriodMonths(row.recoveringPeriod),
+      averageDuration: parseThaiPeriodMonths(row.averageDuration),
+      turnoverRatio: row.turnoverValue,
+      ytm: row.ytmValue,
+    })[key];
+    const sortedRows = sortState.key
+      ? [...rows].sort((a, b) => compareValues(sortable(a, sortState.key), sortable(b, sortState.key), sortState.dir))
+      : rows;
+    const fundSizeValues = rows
+      .map(row => row.fundSizeValue)
+      .filter(value => !Number.isNaN(value));
+    const minFundSize = fundSizeValues.length ? Math.min(...fundSizeValues) : NaN;
+    const maxFundSize = fundSizeValues.length ? Math.max(...fundSizeValues) : NaN;
+    const fundSizeHeatStyle = (value) => {
+      if (Number.isNaN(value) || Number.isNaN(minFundSize) || Number.isNaN(maxFundSize)) return '';
+      const ratio = maxFundSize === minFundSize ? 1 : Math.max(0, Math.min(1, (value - minFundSize) / (maxFundSize - minFundSize)));
+      const start = { r: 255, g: 255, b: 255 };
+      const end = { r: 122, g: 188, b: 129 };
+      const mix = (a, b) => Math.round(a + (b - a) * ratio);
+      return `background:rgb(${mix(start.r, end.r)}, ${mix(start.g, end.g)}, ${mix(start.b, end.b)});color:#24364f;font-weight:700;`;
+    };
+    const sortHeader = (key, labelHtml) =>
+      `<th class="of2-sort ${sortState.key === key ? 'is-active' : ''}" data-of2-sort="${esc(key)}">${renderSortLabel(labelHtml, sortState.key === key, sortState.dir, false)}</th>`;
+
+    area.innerHTML = `
+      ${pageToolActions(pageKey, source)}
+      <div class="card report-card" id="report-card">
+        <div class="of2-table-wrap">
+          <table class="of2-table">
+            <colgroup>
+              <col class="of2-col-name">
+              <col class="of2-col-size">
+              <col class="of2-col-date">
+              <col class="of2-col-recovering">
+              <col class="of2-col-duration">
+              <col class="of2-col-turnover">
+              <col class="of2-col-ytm">
+            </colgroup>
+            <thead>
+              <tr>
+                ${sortHeader('fundName', 'ชื่อกอง')}
+                ${sortHeader('fundSize', '<span class="of2-th-lines"><span>Fund Size</span><span>(ลบ.)</span></span>')}
+                ${sortHeader('fundSizeDate', 'Fund Size Date')}
+                ${sortHeader('recoveringPeriod', '<span class="of2-th-lines"><span>Recovering</span><span>Period</span></span>')}
+                ${sortHeader('averageDuration', '<span class="of2-th-lines"><span>อายุของ</span><span>ตราสารหนี้เฉลี่ย</span></span>')}
+                ${sortHeader('turnoverRatio', '<span class="of2-th-lines"><span>อัตราส่วน</span><span>หมุนเวียนการลงทุน</span></span>')}
+                ${sortHeader('ytm', '<span class="of2-th-lines"><span>Yield to</span><span>Maturity</span></span>')}
+              </tr>
+            </thead>
+            <tbody>
+              ${sortedRows.map((row, rowIndex) => {
+                const baseRowBg = rowIndex % 2 === 0 ? '#ffffff' : '#f4f6fa';
+                const nameStyle = row.highlightColor
+                  ? `background:${esc(row.highlightColor)}`
+                  : `background:${baseRowBg}`;
+                return `
+                <tr>
+                  <td class="of2-name" style="${nameStyle}">${esc(row.fundName)}</td>
+                  <td class="of2-size ${row.fundSize ? '' : 'of2-placeholder'}" style="${fundSizeHeatStyle(row.fundSizeValue)}">${esc(row.fundSize || '-')}</td>
+                  <td class="${row.fundSizeDate ? '' : 'of2-placeholder'}">${esc(row.fundSizeDate || '-')}</td>
+                  <td class="${row.recoveringPeriod ? '' : 'of2-placeholder'}">${esc(row.recoveringPeriod || '-')}</td>
+                  <td class="${row.averageDuration ? '' : 'of2-placeholder'}">${esc(row.averageDuration || '-')}</td>
+                  <td class="${row.turnoverRatio ? '' : 'of2-placeholder'}">${esc(row.turnoverRatio || '-')}</td>
+                  <td class="${row.ytm ? '' : 'of2-placeholder'}">${esc(row.ytm || '-')}</td>
+                </tr>
+              `;}).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <style>
+        .of2-table-wrap{overflow-x:auto;background:#fff}
+        .of2-table{width:100%;min-width:1120px;border-collapse:collapse;table-layout:fixed;font-family:'Sarabun','THSarabunNew',sans-serif;color:#24364f}
+        .of2-col-name{width:15%}.of2-col-size{width:14%}.of2-col-date{width:14%}.of2-col-recovering{width:14%}.of2-col-duration{width:17%}.of2-col-turnover{width:16%}.of2-col-ytm{width:10%}
+        .of2-table th{height:54px;padding:8px 10px;background:#244a80;color:#fff;font-size:.78rem;font-weight:800;text-align:center;vertical-align:middle;border:1px solid #dbe4f0;line-height:1.2}
+        .of2-sort{cursor:pointer;user-select:none}
+        .of2-sort:hover{background:#315d96}
+        .of2-sort.is-active{background:#f7d774;color:#4e3500;border-color:#d79a12}
+        .of2-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%;line-height:1.2}
+        .of2-table .sort-text{display:inline-block}
+        .of2-th-lines,.of2-th-lines span{display:block}
+        .of2-table td{height:42px;padding:7px 10px;border:1px solid #dbe4f0;text-align:center;font-size:.82rem;font-weight:500;line-height:1.25;vertical-align:middle;background:#fff}
+        .of2-table tbody tr:nth-child(even) td{background:#f4f6fa}
+        .of2-table td.of2-name{font-weight:800;color:#173566}
+        .of2-table td.of2-placeholder{color:#8b98aa;font-weight:700}
+        @media(max-width:760px){.of2-table{min-width:980px}.of2-table th{font-size:.74rem;height:50px}.of2-table td{font-size:.78rem;height:40px}}
+      </style>`;
+
+    $$('.of2-sort', area).forEach(el => {
+      el.addEventListener('click', () => {
+        toggleNamedSort(sortState, el.dataset.of2Sort);
+        Pages.otherFactorsFixedIncomeTable(area);
+      });
+    });
+
+    App._currentExport = null;
+    App._currentTableExport = () => buildSimpleTablePayload(
+      CONFIG.PAGES[pageKey]?.title || 'ปัจจัยประกอบ กองทุนตราสารหนี้',
+      source,
+      headers,
+      sortedRows.map(row => [
+        row.fundName,
+        row.fundSize,
+        row.fundSizeDate,
+        row.recoveringPeriod,
+        row.averageDuration,
+        row.turnoverRatio,
+        row.ytm,
+      ])
+    );
+    App._currentClipboardExport = null;
+    bindPageImageActions(area, 'report-card', 'other-factors-fixed-income-table');
+  },
+
+  async otherFactorsFixedIncomeAllocationTable(area) {
+    const pageKey = 'master-placeholder-10';
+    const source = 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API';
+    setLoading(area, 'กำลังโหลดตารางปัจจัยประกอบ กองทุนตราสารหนี้...');
+
+    let rows;
+    let editableColumns = [];
+    try {
+      const [selectRows, thaiQualityRows, masterRows, secRows] = await Promise.all([
+        fetchCached('select-fund'),
+        fetchCached('thai-annualized-v2'),
+        fetchCached('master-annualized-v2'),
+        fetchCached('master-placeholder-4'),
+      ]);
+      await Promise.all([
+        loadFundOverrides(),
+        loadMasterAllocations(),
+        loadFixedIncomeFactorsOverrides(),
+      ]);
+      const catalogByKey = Object.fromEntries(
+        applyFundOverrides(buildSelectedFundsCatalog(selectRows)).map(fund => [fund.key, fund])
+      );
+      const previousSelectedFunds = State.selectedFunds || {};
+      State.selectedFunds = Object.keys(previousSelectedFunds).length
+        ? {
+            ...previousSelectedFunds,
+            ...Object.fromEntries(
+              Object.keys(previousSelectedFunds).map(key => [key, catalogByKey[key] || previousSelectedFunds[key]])
+            ),
+          }
+        : catalogByKey;
+      const headers = thaiQualityRows[0] || [];
+      const ci = {
+        code: findColumnIndex(headers, ['Fund Code']),
+        cash: findColumnIndex(headers, ['Asset Alloc Cash % (Net)']),
+        bond: findColumnIndex(headers, ['Asset Alloc Bond % (Net)']),
+        aaa: findColumnIndex(headers, ['Fixd-Inc Credit Rtg - Brkdwn AAA (Calc) (Net) (FI%)']),
+        aa: findColumnIndex(headers, ['Fixd-Inc Credit Rtg - Brkdwn AA (Calc) (Net) (FI%)']),
+        a: findColumnIndex(headers, ['Fixd-Inc Credit Rtg - Brkdwn A (Calc) (Net) (FI%)']),
+        bbb: findColumnIndex(headers, ['Fixd-Inc Credit Rtg - Brkdwn BBB (Calc) (Net) (FI%)']),
+        holdings: findColumnIndex(headers, ['# of Holdings (Long)']),
+        top10: findColumnIndex(headers, ['Latest % Asset in Top 10 Holdings']),
+        fundSize: findColumnIndex(headers, ['Fund Size']),
+        maxDd3y: findColumnIndex(headers, ['Max Drawdown 3Y']),
+        sd3y: findColumnIndex(headers, ['Std Dev(Annualized) 3Y']),
+        maxDd5y: findColumnIndex(headers, ['Max Drawdown 5Y']),
+        sd5y: findColumnIndex(headers, ['Std Dev(Annualized) 5Y']),
+      };
+      const masterHeaders = masterRows[0] || [];
+      const mci = {
+        isin: findColumnIndex(masterHeaders, ['ISIN']),
+        fundId: findColumnIndex(masterHeaders, ['FundId', 'Fund ID']),
+        holdings: findColumnIndex(masterHeaders, ['# of Holdings (Long)']),
+        top10: findColumnIndex(masterHeaders, ['Latest % Asset in Top 10 Holdings']),
+        maxDd3y: findColumnIndex(masterHeaders, ['Max Drawdown 3Y']),
+        sd3y: findColumnIndex(masterHeaders, ['Std Dev(Annualized) 3Y']),
+        maxDd5y: findColumnIndex(masterHeaders, ['Max Drawdown 5Y']),
+        sd5y: findColumnIndex(masterHeaders, ['Std Dev(Annualized) 5Y']),
+      };
+      const get = (row, index) => index >= 0 ? String(row[index] ?? '').trim() : '';
+      const qualityLookup = new Map();
+      thaiQualityRows.slice(1).forEach(row => {
+        const code = get(row, ci.code).toUpperCase();
+        if (code) qualityLookup.set(code, row);
+      });
+      const secLookup = buildRawSecLookup(secRows);
+      const masterLookup = new Map();
+      masterRows.slice(1).forEach(row => {
+        [get(row, mci.isin), get(row, mci.fundId)].forEach(key => {
+          const normalized = String(key || '').trim().toUpperCase();
+          if (normalized && !masterLookup.has(normalized)) masterLookup.set(normalized, row);
+        });
+      });
+      const formatTwo = (value) => {
+        const n = parseNum(value);
+        return Number.isNaN(n) ? '' : n.toFixed(2);
+      };
+      const formatFundSizeMillion = (value) => {
+        const n = parseNum(value);
+        if (Number.isNaN(n)) return '';
+        return Math.round(n / 1000000).toLocaleString('en-US');
+      };
+      const formatPercentText = (value) => {
+        const text = String(value ?? '').trim();
+        if (!text) return '';
+        const n = parseNum(text);
+        if (Number.isNaN(n)) return text;
+        return `${n.toFixed(2)}%`;
+      };
+      const masterAllocationsForFund = (fund) => {
+        const saved = State.masterAllocations?.items?.[fund.key];
+        const savedAllocations = Array.isArray(saved?.allocations) ? saved.allocations : [];
+        const validSaved = savedAllocations.filter(item => item?.masterId || item?.masterName);
+        if (validSaved.length) return validSaved;
+        return fund.masterId ? [{ masterId: fund.masterId, weight: 100 }] : [];
+      };
+      const weightedMasterMetric = (fund, index) => {
+        if (index < 0) return '';
+        const allocations = masterAllocationsForFund(fund);
+        let totalWeight = 0;
+        let weightedValue = 0;
+        allocations.forEach(item => {
+          const masterKey = String(item.masterId || '').trim().toUpperCase();
+          const masterRow = masterLookup.get(masterKey);
+          if (!masterRow) return;
+          const value = parseNum(get(masterRow, index));
+          if (Number.isNaN(value)) return;
+          const weight = parseFloat(item.weight);
+          const effectiveWeight = Number.isNaN(weight) ? 100 : weight;
+          weightedValue += value * effectiveWeight;
+          totalWeight += effectiveWeight;
+        });
+        return totalWeight ? (weightedValue / totalWeight).toFixed(2) : '';
+      };
+      const preferMasterMetric = (fund, raw, masterIndex, thaiIndex) =>
+        weightedMasterMetric(fund, masterIndex) || formatTwo(get(raw, thaiIndex));
+      editableColumns = [
+        'cash',
+        'bond',
+        'sector2',
+        'foreign',
+        'aaa',
+        'aa',
+        'a',
+        'bbb',
+        'duration',
+        'ytm',
+        'holdings',
+        'top10',
+        'fundSize',
+        'maxDd3y',
+        'sd3y',
+        'maxDd5y',
+        'sd5y',
+      ];
+      const applyFixedIncomeFactorsOverride = (fund, row) => {
+        const override = State.fixedIncomeFactorsOverrides?.items?.[fund.key] || State.fixedIncomeFactorsOverrides?.items?.[String(fund.code || '').trim().toUpperCase()];
+        const baseValues = Object.fromEntries(editableColumns.map(key => [key, row[key] || '']));
+        if (!override) return { ...row, baseValues };
+        const next = { ...row, baseValues, isOverride: true };
+        editableColumns.forEach(key => {
+          if (Object.prototype.hasOwnProperty.call(override, key)) next[key] = String(override[key] ?? '').trim();
+        });
+        return next;
+      };
+      const selectedFunds = Object.values(State.selectedFunds || {})
+        .filter(fund => State.selectedKeys?.has(fund.key));
+      rows = selectedFunds.length
+        ? selectedFunds.map(fund => {
+            const code = String(fund.code || '').trim().toUpperCase();
+            const raw = qualityLookup.get(code) || [];
+            const sec = secLookup.get(code) || {};
+            const row = {
+              key: fund.key,
+              code,
+              fundName: fund.code || fund.name || '-',
+              highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
+              cash: formatTwo(get(raw, ci.cash)),
+              bond: formatTwo(get(raw, ci.bond)),
+              sector2: '',
+              foreign: '',
+              aaa: formatTwo(get(raw, ci.aaa)),
+              aa: formatTwo(get(raw, ci.aa)),
+              a: formatTwo(get(raw, ci.a)),
+              bbb: formatTwo(get(raw, ci.bbb)),
+              duration: sec.portfolioDurationPeriod || '',
+              ytm: formatPercentText(sec.yieldToMaturity),
+              holdings: preferMasterMetric(fund, raw, mci.holdings, ci.holdings),
+              top10: preferMasterMetric(fund, raw, mci.top10, ci.top10),
+              fundSize: formatFundSizeMillion(get(raw, ci.fundSize)),
+              maxDd3y: preferMasterMetric(fund, raw, mci.maxDd3y, ci.maxDd3y),
+              sd3y: preferMasterMetric(fund, raw, mci.sd3y, ci.sd3y),
+              maxDd5y: preferMasterMetric(fund, raw, mci.maxDd5y, ci.maxDd5y),
+              sd5y: preferMasterMetric(fund, raw, mci.sd5y, ci.sd5y),
+            };
+            return applyFixedIncomeFactorsOverride(fund, row);
+          })
+        : Array.from({ length: 6 }, () => ({ fundName: '-', highlightColor: '' }));
+    } catch (e) {
+      setError(area, e.message, pageKey);
+      return;
+    }
+
+    const columns = [
+      'กองไทย',
+      'Asset Alloc Cash',
+      'Fixd-Inc Sector -',
+      'Fixd-Inc Sector -',
+      'ลงทุนต่างประเทศ',
+      'AAA',
+      'AA',
+      'A',
+      'BBB',
+      'อายุของตราสารหนี้เฉลี่ย',
+      'YTM',
+      'Number of Holdings',
+      '% Asset in Top 10',
+      'Fund Size (ลบ.)',
+      'Max DD 3Y',
+      'SD 3Y',
+      'Max DD 5Y',
+      'SD 5Y',
+    ];
+    const isEditingFixedIncomeFactors = !!State.fixedIncomeFactorsEditMode;
+    const editFundDataButton = isEditingFixedIncomeFactors
+      ? `
+        <button class="btn btn-primary" id="of3-save-overrides" type="button" title="บันทึกข้อมูลแก้ไขของหน้านี้">
+          บันทึก Override
+        </button>
+        <button class="btn btn-ghost" id="of3-cancel-edit" type="button" title="ยกเลิกการแก้ไข">
+          ยกเลิก
+        </button>`
+      : `
+        <button class="btn btn-ghost" id="of3-edit-fund-data" type="button" title="แก้ไขข้อมูลในตารางนี้">
+          แก้ไขข้อมูลกองทุน
+        </button>`;
+    const renderOf3Cell = (row, key) => {
+      const value = row[key] || '';
+      if (!isEditingFixedIncomeFactors) {
+        return `<td class="${value ? '' : 'of3-placeholder'}">${esc(value || '-')}</td>`;
+      }
+      return `
+        <td class="of3-edit-cell">
+          <input class="fund-input fund-input-editable of3-override-input" data-key="${esc(key)}" value="${esc(value)}" placeholder="-">
+        </td>`;
+    };
+
+    area.innerHTML = `
+      ${pageToolActions(pageKey, source, '', editFundDataButton)}
+      <div class="card report-card" id="report-card">
+        <div class="of3-table-wrap">
+          <table class="of3-table">
+            <colgroup>
+              <col class="of3-col-fund">
+              <col class="of3-col-small">
+              <col class="of3-col-small">
+              <col class="of3-col-small">
+              <col class="of3-col-small">
+              <col class="of3-col-rating">
+              <col class="of3-col-rating">
+              <col class="of3-col-rating">
+              <col class="of3-col-rating">
+              <col class="of3-col-duration">
+              <col class="of3-col-small">
+              <col class="of3-col-holdings">
+              <col class="of3-col-holdings">
+              <col class="of3-col-size">
+              <col class="of3-col-risk">
+              <col class="of3-col-risk">
+              <col class="of3-col-risk">
+              <col class="of3-col-risk">
+            </colgroup>
+            <thead>
+              <tr>
+                <th rowspan="2">กองไทย</th>
+                <th rowspan="2"><span>Asset Alloc</span><span>Cash</span></th>
+                <th rowspan="2"><span>Fixd-Inc</span><span>Sector -</span></th>
+                <th rowspan="2"><span>Fixd-Inc</span><span>Sector -</span></th>
+                <th rowspan="2"><span>ลงทุน</span><span>ต่างประเทศ</span></th>
+                <th colspan="4" class="of3-group">Rating</th>
+                <th rowspan="2"><span>อายุของตรา</span><span>สารหนี้เฉลี่ย</span></th>
+                <th rowspan="2">YTM</th>
+                <th rowspan="2"><span>Number of</span><span>Holdings</span></th>
+                <th rowspan="2"><span>% Asset in</span><span>Top 10</span></th>
+                <th rowspan="2"><span>Fund Size</span><span>(ลบ.)</span></th>
+                <th colspan="4" class="of3-group">ความเสี่ยง</th>
+              </tr>
+              <tr>
+                <th>AAA</th>
+                <th>AA</th>
+                <th>A</th>
+                <th>BBB</th>
+                <th>Max DD 3Y</th>
+                <th>SD 3Y</th>
+                <th>Max DD 5Y</th>
+                <th>SD 5Y</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row, rowIndex) => {
+                const baseBg = rowIndex % 2 === 0 ? '#ffffff' : '#f4f6fa';
+                const nameStyle = row.highlightColor
+                  ? `background:${esc(row.highlightColor)}`
+                  : `background:${baseBg}`;
+                return `
+                  <tr>
+                    <td class="of3-name" style="${nameStyle}">${esc(row.fundName)}</td>
+                    ${editableColumns.map(key => renderOf3Cell(row, key)).join('')}
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <style>
+        .of3-table-wrap{overflow-x:auto;background:#fff}
+        .of3-table{width:100%;min-width:1320px;border-collapse:collapse;table-layout:fixed;font-family:'Sarabun','THSarabunNew',sans-serif;color:#24364f}
+        .of3-col-fund{width:11%}.of3-col-small{width:7%}.of3-col-rating{width:6%}.of3-col-duration{width:9%}.of3-col-holdings{width:8%}.of3-col-size{width:7%}.of3-col-risk{width:6%}
+        .of3-table th{height:38px;padding:6px 8px;background:#123a73;color:#fff;font-size:.74rem;font-weight:800;text-align:center;vertical-align:middle;border:1px solid #dbe4f0;line-height:1.15}
+        .of3-table th span{display:block}
+        .of3-table th.of3-group{background:#143e79}
+        .of3-table td{height:34px;padding:6px 8px;border:1px solid #dbe4f0;text-align:center;font-size:.8rem;font-weight:500;line-height:1.2;vertical-align:middle;background:#fff}
+        .of3-table tbody tr:nth-child(even) td{background:#f4f6fa}
+        .of3-table td.of3-name{font-weight:800;color:#173566;text-align:left}
+        .of3-table td.of3-placeholder{color:#8b98aa;font-weight:700}
+        .of3-table td.of3-edit-cell{padding:3px;background:#fff8df}
+        .of3-table .of3-override-input{height:28px;min-width:0;width:100%;padding:3px 5px;text-align:center;font-size:.78rem}
+        @media(max-width:760px){.of3-table{min-width:1120px}.of3-table th{font-size:.7rem}.of3-table td{font-size:.76rem}}
+      </style>`;
+
+    $('#of3-edit-fund-data', area)?.addEventListener('click', () => {
+      State.fixedIncomeFactorsEditMode = true;
+      Pages.otherFactorsFixedIncomeAllocationTable(area);
+    });
+    $('#of3-cancel-edit', area)?.addEventListener('click', () => {
+      State.fixedIncomeFactorsEditMode = false;
+      Pages.otherFactorsFixedIncomeAllocationTable(area);
+    });
+    $('#of3-save-overrides', area)?.addEventListener('click', async () => {
+      const items = {};
+      $$('.of3-table tbody tr', area).forEach((tr, idx) => {
+        const row = rows[idx];
+        const code = String(row?.code || row?.key || '').trim().toUpperCase();
+        if (!code) return;
+        const item = { key: code, code };
+        $$('.of3-override-input', tr).forEach(input => {
+          const key = input.dataset.key;
+          if (!key) return;
+          const nextValue = input.value.trim();
+          const baseValue = String(row?.baseValues?.[key] ?? '').trim();
+          if (nextValue !== baseValue) item[key] = nextValue;
+        });
+        if (row?.isOverride || Object.keys(item).length > 2) items[code] = item;
+      });
+      if (!Object.keys(items).length) {
+        State.fixedIncomeFactorsEditMode = false;
+        toast('ไม่มีข้อมูลที่ต้องบันทึก Override', 'info');
+        Pages.otherFactorsFixedIncomeAllocationTable(area);
+        return;
+      }
+      try {
+        await saveFixedIncomeFactorsOverrides(items);
+        State.fixedIncomeFactorsEditMode = false;
+        toast('บันทึก Override ของปัจจัยประกอบ กองทุนตราสารหนี้แล้ว', 'success');
+        Pages.otherFactorsFixedIncomeAllocationTable(area);
+      } catch (err) {
+        toast(err.message || 'บันทึก Override ไม่สำเร็จ', 'error');
+      }
+    });
+
+    App._currentExport = null;
+    App._currentTableExport = () => buildSimpleTablePayload(
+      CONFIG.PAGES[pageKey]?.title || 'ปัจจัยประกอบ กองทุนตราสารหนี้',
+      source,
+      columns,
+      rows.map(row => [
+        row.fundName,
+        row.cash || '-',
+        row.bond || '-',
+        row.sector2 || '-',
+        row.foreign || '-',
+        row.aaa || '-',
+        row.aa || '-',
+        row.a || '-',
+        row.bbb || '-',
+        row.duration || '-',
+        row.ytm || '-',
+        row.holdings || '-',
+        row.top10 || '-',
+        row.fundSize || '-',
+        row.maxDd3y || '-',
+        row.sd3y || '-',
+        row.maxDd5y || '-',
+        row.sd5y || '-',
+      ])
+    );
+    App._currentClipboardExport = null;
+    bindPageImageActions(area, 'report-card', 'other-factors-fixed-income-allocation-table');
   },
 
   /* ── Variants of masterOtherFactors with different default metrics ── */
@@ -9998,6 +13868,96 @@ const Pages = {
     App._currentExport = null;
   },
 
+  async incomeFund(area, pageKey = 'income-fund-1') {
+    const source = 'Data For SEC API + Fund Key Performance AVP';
+    setLoading(area, 'กำลังโหลดรายชื่อ Income Fund...');
+
+    let rows;
+    try {
+      rows = await fetchIncomeFundListRows(pageKey);
+    } catch (e) {
+      try {
+        const [secRows, keyPerformanceRows] = await Promise.all([
+          fetchIncomeFundSourceRows(pageKey, 'master-placeholder-4'),
+          fetchIncomeFundSourceRows(pageKey, 'select-fund'),
+        ]);
+        rows = buildIncomeFundRows(secRows, keyPerformanceRows);
+      } catch (fallbackError) {
+        setError(area, `${e.message}\n${fallbackError.message}`, pageKey);
+        return;
+      }
+    }
+
+    State.sortCol = null;
+    State.sortDir = 'asc';
+
+    const render = (query = '', policy = '') => {
+      const q = String(query || '').trim().toLowerCase();
+      const visible = rows.filter(row => {
+        if (policy && row.policy !== policy) return false;
+        if (q && !`${row.name} ${row.policy}`.toLowerCase().includes(q)) return false;
+        return true;
+      });
+      const tableRows = [
+        ['ชื่อกองทุน', 'นโยบาย'],
+        ...visible.map(row => [row.name, row.policy]),
+      ];
+
+      area.innerHTML = `
+        ${pageToolActions(pageKey, source)}
+        <div class="card" id="report-card">
+          <div class="card-header">
+            <span class="card-title">Income Fund</span>
+            <div class="filter-bar">
+              <div class="search-wrap">
+                <span class="s-icon">${searchIcon()}</span>
+                <input class="search-input" id="income-q" type="text"
+                  placeholder="ค้นหาชื่อกองทุน..." value="${esc(query)}" autocomplete="off">
+              </div>
+              <select class="sf-select" id="income-policy" aria-label="กรองนโยบาย">
+                ${opt('', 'ทุกนโยบาย', policy)}
+                ${opt('Dividend', 'Dividend', policy)}
+                ${opt('Redemption', 'Redemption', policy)}
+              </select>
+              <span class="row-count-badge">${visible.length.toLocaleString()} รายการ</span>
+              <span class="row-count-badge is-info">ทั้งหมด ${rows.length.toLocaleString()} รายการ</span>
+            </div>
+          </div>
+          <div id="tbl-area">${buildTable(tableRows)}</div>
+        </div>`;
+
+      bindTable(area, () => {
+        const nextQ = $('#income-q', area)?.value || '';
+        const nextPolicy = $('#income-policy', area)?.value || '';
+        const nextQuery = nextQ.trim().toLowerCase();
+        const filtered = rows.filter(row => {
+          if (nextPolicy && row.policy !== nextPolicy) return false;
+          if (nextQuery && !`${row.name} ${row.policy}`.toLowerCase().includes(nextQuery)) return false;
+          return true;
+        });
+        return [
+          ['ชื่อกองทุน', 'นโยบาย'],
+          ...filtered.map(row => [row.name, row.policy]),
+        ];
+      });
+
+      const input = $('#income-q', area);
+      let timer;
+      input?.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => render(input.value, $('#income-policy', area)?.value || ''), 180);
+      });
+      $('#income-policy', area)?.addEventListener('change', event => render(input?.value || '', event.target.value));
+
+      App._currentExport = () => exportExcel(tableRows, 'Income Fund');
+      App._currentTableExport = () => buildSimpleTablePayload('Income Fund', source, tableRows[0], tableRows.slice(1));
+      App._currentClipboardExport = null;
+      bindPageImageActions(area, 'report-card', 'income-fund');
+    };
+
+    render();
+  },
+
   placeholder(area, title) {
     area.innerHTML = `
       <div class="card">
@@ -10968,13 +14928,15 @@ const App = {
       'master-placeholder-8': { title: 'Top 10 Holding', subtitle: 'วิเคราะห์เปรียบเทียบกองทุน 8 ช่องพร้อมกัน — iShare Index 1 กอง + กองทุนไทย 7 กอง' },
       'master-placeholder-5': { title: 'ปัจจัยประกอบอื่นๆ', subtitle: 'Sharpe, Sortino, Information, Treynor Ratio ทุก Period' },
       'master-placeholder-6': { title: 'Income Fund', subtitle: '' },
-      'income-fund-1': { title: 'Income Fund', subtitle: 'เตรียมหน้าไว้สำหรับต่อยอดเมนู Income Fund' },
-      'income-fund-2': { title: 'Income Fund 2', subtitle: 'เตรียมหน้าไว้สำหรับต่อยอดเมนู Income Fund' },
-      'master-placeholder-9': { title: 'ปัจจัยประกอบอื่นๆ 2', subtitle: 'Sharpe vs Return' },
-      'master-placeholder-10': { title: 'ปัจจัยประกอบอื่นๆ 3', subtitle: 'Sortino vs Return' },
+      'income-fund-1': { title: 'Income Fund', subtitle: 'รายชื่อกองทุนจาก SEC dividend_policy = Y และ Fund Key Performance Dividend/Redemption' },
+      'income-fund-2': { title: 'Income Fund 2', subtitle: 'รายชื่อกองทุนจาก SEC dividend_policy = Y และ Fund Key Performance Dividend/Redemption' },
+      'master-placeholder-9': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'Fund Size, Duration, Turnover และ Yield to Maturity' },
+      'master-placeholder-10': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'Asset Allocation, Rating, Holdings และความเสี่ยง' },
       'master-placeholder-11': { title: 'ปัจจัยประกอบอื่นๆ 4', subtitle: 'Max DD vs Sortino' },
       'notes': { title: 'บันทึกข้อมูล', subtitle: 'ดราฟงานค้างและโหลดกลับมาทำต่อ' },
       'guide':             { title: 'คู่มือการใช้งาน', subtitle: '' },
+      'fund-list-update':  { title: 'Fund List Update', subtitle: 'ติดตามการเพิ่ม นำออก และสลับตำแหน่ง Fund List ราย Quarter' },
+      'fund-selection-logs': { title: 'Fund Selection Logs', subtitle: 'บันทึกเหตุผลการคัดเลือกกองทุนราย Quarter จาก Investment Committee' },
       'avenger-studio':   { title: 'Avenger Studio', subtitle: 'Planner Designer V7' },
     };
     const pageMeta = titles[page] || { title: page, subtitle: '' };
@@ -11012,13 +14974,15 @@ const App = {
       case 'master-placeholder-8': Pages.masterMenu02V3(area);              break;
       case 'master-placeholder-5': Pages.masterOtherFactors(area);             break;
       case 'master-placeholder-6': Pages.placeholder(area, 'Income Fund');           break;
-      case 'income-fund-1': Pages.placeholder(area, 'Income Fund');         break;
-      case 'income-fund-2': Pages.placeholder(area, 'Income Fund 2');       break;
-      case 'master-placeholder-9':
-      case 'master-placeholder-10':
+      case 'income-fund-1': Pages.incomeFund(area, 'income-fund-1');        break;
+      case 'income-fund-2': Pages.incomeFund(area, 'income-fund-2');        break;
+      case 'master-placeholder-9': Pages.otherFactorsFixedIncomeTable(area); break;
+      case 'master-placeholder-10': Pages.otherFactorsFixedIncomeAllocationTable(area); break;
       case 'master-placeholder-11': Pages.comingSoon(area);                 break;
       case 'notes':             Pages.notesPage(area);                      break;
       case 'guide':             Pages.guide(area);                          break;
+      case 'fund-list-update':  Pages.fundListUpdate(area);                 break;
+      case 'fund-selection-logs': Pages.fundSelectionLogs(area);             break;
       case 'avenger-studio':    Pages.avengerStudio(area);                  break;
       default:
         area.innerHTML = '<div class="card"><div class="state-box">ไม่พบหน้าที่ต้องการ</div></div>';
@@ -11052,7 +15016,7 @@ const App = {
 
 const QuarterSelector = {
 
-  /* ดึงรายชื่อ Tab จาก Sheet แล้วกรองเฉพาะรูปแบบ YYYY-QN */
+  /* ดึงรายชื่อ Quarter ที่พร้อมครบทั้ง Google Sheets และ Drive JSON */
   async detect() {
     const sel    = $('#quarter-select');
     const status = $('#quarter-status');
@@ -11062,20 +15026,9 @@ const QuarterSelector = {
     sel.disabled = true;
 
     try {
-      const sheetId = CONFIG.SHEETS?.MASTER_FUND_ID;
-      if (!sheetId) throw new Error('ไม่พบ MASTER_FUND_ID');
-
-      const { tabs } = await SheetsAPI.getSheetTabs(sheetId);
-
-      /* กรองเฉพาะ Tab ที่เป็น Quarter เช่น 2025-Q1, 2026-Q3 */
-      const quarters = tabs
-        .filter(t => /^\d{4}-Q[1-4]$/i.test(t.trim()))
-        .sort()
-        .reverse(); // ล่าสุดขึ้นก่อน
-
-      if (quarters.length === 0) {
-        /* ถ้าไม่เจอ Tab รูปแบบ Quarter ให้แสดงทุก Tab */
-        quarters.push(...tabs);
+      const quarters = await detectReadyQuarters();
+      if (!quarters.length) {
+        throw new Error('ไม่พบ Quarter ที่พร้อมครบทั้ง 4 Google Sheets และ 4 JSON files ใน Drive');
       }
 
       State.availableQuarters = quarters;
@@ -11106,10 +15059,11 @@ const QuarterSelector = {
       status.className  = 'quarter-status error';
       status.textContent = '✕';
       sel.innerHTML = `<option value="${CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1'}">
-        ${CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1'} (default)</option>`;
-      sel.disabled = false;
+        ไม่มี Quarter พร้อมครบ</option>`;
+      sel.disabled = true;
       State.currentQuarter = CONFIG.PAGES?.['select-fund']?.tabName || null;
       console.warn('Quarter auto-detect failed:', err.message);
+      toast(err.message || 'ตรวจ Quarter ไม่สำเร็จ', 'error', 7000);
     }
   },
 

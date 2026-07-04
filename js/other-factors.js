@@ -400,7 +400,7 @@ window.OtherFactors = {
           border-radius: 20px;
           cursor: pointer;
           font-family: 'Sarabun', 'THSarabunNew', sans-serif;
-          font-size: 13px;
+          font-size: 14px;
           transition: all 0.2s ease;
         }
 
@@ -439,7 +439,7 @@ window.OtherFactors = {
           padding: 12px;
           text-align: left;
           font-weight: 600;
-          font-size: 13px;
+          font-size: 14px;
           border-bottom: 2px solid #0f172a;
         }
 
@@ -470,14 +470,14 @@ window.OtherFactors = {
           padding: 12px 15px;
           font-weight: 500;
           color: #1a2744;
-          font-size: 13px;
+          font-size: 14px;
           white-space: nowrap;
         }
 
         .data-cell {
           padding: 12px;
           text-align: center;
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 500;
         }
 
@@ -493,7 +493,7 @@ window.OtherFactors = {
           }
 
           .data-table {
-            font-size: 12px;
+            font-size: 14px;
           }
 
           .metric-label,

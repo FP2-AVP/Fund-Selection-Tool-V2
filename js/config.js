@@ -15,16 +15,18 @@ const CONFIG = {
      APIs & Services → Credentials → Create Credentials → OAuth client ID
      Application type: Web application
      ---------------------------------------------------------- */
-  CLIENT_ID: '1024922664942-958fev7r5815ucu2u4rkqpahagj6ish9.apps.googleusercontent.com',
+  CLIENT_ID: '847033645933-m3do0gub1cdkesproseahvvrudavgi7p.apps.googleusercontent.com',
 
   /* ----------------------------------------------------------
      OAuth Scopes
      ---------------------------------------------------------- */
-  SCOPES: [
-    'https://www.googleapis.com/auth/spreadsheets.readonly',
-    'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile',
-  ].join(' '),
+	  SCOPES: [
+	    'https://www.googleapis.com/auth/spreadsheets',
+	    'https://www.googleapis.com/auth/drive.readonly',
+	    'https://www.googleapis.com/auth/drive.file',
+	    'https://www.googleapis.com/auth/userinfo.email',
+	    'https://www.googleapis.com/auth/userinfo.profile',
+	  ].join(' '),
 
   /* ----------------------------------------------------------
      Google Sheet IDs (ดึงมาจากไฟล์ .gsheet อัตโนมัติ)
@@ -32,6 +34,7 @@ const CONFIG = {
   SHEETS: {
     MASTER_FUND_ID:        '10Bsu4w7CluWdOWYIbi1K6OWoZlVXTSE_ixVl13rWBig',
     THAI_FUND_QUALITY:     '1m1rSyJAel9atGMrmeRSwgYWa9wgc4gi7-3cp4Yvc8GM',
+    FUND_KEY_PERFORMANCE:  '1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4',
     PERCENTRANK_FREESTYLE: '1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4',
     RAW_FOR_SEC:           '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
     ISHARE_INDEX_PASSIVE:  '1miHQVkwEq7k4S0upoYsRg8Z0KsbZirbwtn7BKCk_Edw',
@@ -49,7 +52,7 @@ const CONFIG = {
       sheetId:  '1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4',
       tabName:  '2026-Q1',   // ← แก้ชื่อ Tab ตามจริง
       title:    'เลือกกองทุน',
-      source:   'Percentrank Freestyle',
+      source:   'Fund Key Performance AVP',
     },
 
     'thai-annualized': {
@@ -98,7 +101,7 @@ const CONFIG = {
       sheetId:  '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
       tabName:  '2026-Q1',
       title:    'ค่าธรรมเนียม',
-      source:   'Raw For Sec + AVP Master Fund ID',
+      source:   'Data For SEC API + AVP Master Fund ID',
     },
 
     'master-placeholder-2': {
@@ -119,7 +122,7 @@ const CONFIG = {
       sheetId:  '16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w',
       tabName:  '2026-Q1',
       title:    'ค่าธรรมเนียม V2',
-      source:   'Raw For Sec + AVP Master Fund ID',
+      source:   'Data For SEC API + AVP Master Fund ID',
     },
 
     'master-placeholder-7': {
@@ -132,6 +135,23 @@ const CONFIG = {
     'master-placeholder-8': {
       title:  'Top 10 Holding',
       source: 'Multi-Fund Compare API',
+    },
+
+    'income-fund-1': {
+      title:  'Income Fund',
+      source: 'Data For SEC API + Fund Key Performance AVP',
+    },
+
+    'income-fund-2': {
+      title:  'Income Fund 2',
+      source: 'Data For SEC API + Fund Key Performance AVP',
+    },
+
+    'fund-list-update': {
+      sheetId: '1akokyOCLUAYF7zCrpubOMl1UZHRv8cOeDsNTJzahbqU',
+      tabName: 'fund_list_changes',
+      title: 'Fund List Update',
+      source: 'Google Sheet: fund_list_changes',
     },
   },
 

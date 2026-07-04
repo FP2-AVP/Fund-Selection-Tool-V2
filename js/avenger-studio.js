@@ -89,11 +89,11 @@
       .studio-canvas-shell { box-shadow:0 10px 30px rgba(0,0,0,.25); flex-shrink:0; background:white; }
       .studio-panel { width:280px; background:white; border-radius:12px; box-shadow:0 4px 15px rgba(0,0,0,.05); padding:14px; display:flex; flex-direction:column; gap:10px; overflow-y:auto; }
       .studio-prop-section { padding:12px; background:#f8fafc; border-radius:10px; border:1px solid #e2e8f0; }
-      .studio-section-title { font-size:11px; font-weight:bold; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin-bottom:10px; display:block; }
+      .studio-section-title { font-size:14px; font-weight:bold; color:#94a3b8; text-transform:uppercase; letter-spacing:.5px; margin-bottom:10px; display:block; }
       .studio-tool-btn { width:100%; padding:10px; display:flex; align-items:center; gap:8px; border-radius:8px; transition:all .2s; color:#475569; background:#fff; border:1px solid #e2e8f0; cursor:pointer; font-size:14px; font-weight:bold; font-family:'THSarabunNew',sans-serif; }
       .studio-tool-btn:hover { background:#f1f5f9; border-color:#cbd5e1; transform:translateY(-1px); }
       .studio-tool-btn.active-mode { background:#eff6ff !important; color:#1a3c6e !important; border-color:#bfdbfe !important; }
-      .studio-sidebar-label { font-size:12px; color:#64748b; font-weight:bold; display:block; margin-top:8px; margin-bottom:3px; }
+      .studio-sidebar-label { font-size:14px; color:#64748b; font-weight:bold; display:block; margin-top:8px; margin-bottom:3px; }
       .studio-sidebar-input { width:100%; padding:7px 10px; border:1px solid #e2e8f0; border-radius:6px; font-family:'THSarabunNew',sans-serif; font-size:14px; color:#1e293b; background:white; }
       .studio-sidebar-divider { height:1px; background:#e2e8f0; flex-shrink:0; }
       .studio-palette-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-top:8px; }
@@ -109,8 +109,8 @@
       .studio-slide-item.active { border-color:#1a3c6e; box-shadow:0 0 0 3px rgba(26,60,110,.12); transform:translateY(-3px); }
       .studio-slide-item img { width:100%; height:100%; object-fit:contain; pointer-events:none; }
       .studio-slide-del { position:absolute; top:-8px; right:-8px; width:24px; height:24px; border-radius:50%; background:#ef4444; border:2px solid white; color:white; font-size:15px; font-weight:bold; cursor:pointer; display:flex; align-items:center; justify-content:center; z-index:10; box-shadow:0 2px 6px rgba(0,0,0,.2); }
-      .studio-slide-badge { position:absolute; bottom:-10px; left:50%; transform:translateX(-50%); background:#1a3c6e; color:white; font-size:10px; font-weight:bold; padding:1px 8px; border-radius:10px; font-family:'THSarabunNew',sans-serif; white-space:nowrap; }
-      .studio-slide-kind { position:absolute; top:8px; left:8px; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:bold; color:white; background:rgba(15,23,42,.78); letter-spacing:.04em; }
+      .studio-slide-badge { position:absolute; bottom:-10px; left:50%; transform:translateX(-50%); background:#1a3c6e; color:white; font-size:14px; font-weight:bold; padding:1px 8px; border-radius:10px; font-family:'THSarabunNew',sans-serif; white-space:nowrap; }
+      .studio-slide-kind { position:absolute; top:8px; left:8px; padding:2px 8px; border-radius:999px; font-size:14px; font-weight:bold; color:white; background:rgba(15,23,42,.78); letter-spacing:.04em; }
       .studio-slide-kind.kind-table { background:rgba(21,101,192,.86); }
       .studio-slide-kind.kind-image { background:rgba(22,101,52,.86); }
       .studio-preview-overlay { position:fixed; inset:0; background:rgba(0,0,0,.8); z-index:1000; display:none; align-items:center; justify-content:center; }
@@ -137,7 +137,7 @@
             <div style="width:38px;height:38px;background:#1a3c6e;border-radius:9px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;font-size:18px;font-family:'THSarabunNew',sans-serif">A</div>
             <div>
               <h1 style="font-size:16px;color:#1e293b;font-family:'THSarabunNew',sans-serif;font-weight:bold">Avenger Studio</h1>
-              <p style="font-size:11px;color:#94a3b8;font-weight:bold;text-transform:uppercase;letter-spacing:.5px">Presentation Slide Designer</p>
+              <p style="font-size:14px;color:#94a3b8;font-weight:bold;text-transform:uppercase;letter-spacing:.5px">Presentation Slide Designer</p>
             </div>
           </div>
           <div class="studio-tab-nav">
@@ -145,7 +145,7 @@
             <button class="studio-tab-btn" data-studio-tab="canvas" type="button">Canvas</button>
           </div>
           <div style="display:flex; gap:10px; align-items:center">
-            <div id="studio-edit-indicator" style="display:none;font-size:13px;color:#1a3c6e;background:#eff6ff;padding:5px 14px;border-radius:20px;border:1px solid #bfdbfe;font-weight:bold;font-family:'THSarabunNew',sans-serif">
+            <div id="studio-edit-indicator" style="display:none;font-size:14px;color:#1a3c6e;background:#eff6ff;padding:5px 14px;border-radius:20px;border:1px solid #bfdbfe;font-weight:bold;font-family:'THSarabunNew',sans-serif">
               แก้ไขหน้า: <span id="studio-page-display">1</span>
             </div>
             <button id="studio-preview-btn" type="button" class="studio-tool-btn" style="width:auto;padding:8px 14px">Preview</button>
@@ -160,9 +160,9 @@
             <aside class="studio-panel">
               <button id="studio-new-page" type="button" class="studio-tool-btn" style="background:#eff6ff;color:#1a3c6e;border-color:#bfdbfe;justify-content:center">สร้างหน้าใหม่</button>
               <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-                <button id="studio-add-rect" type="button" class="studio-tool-btn" style="flex-direction:column;padding:12px;justify-content:center;align-items:center"><span style="font-size:18px">⬜</span><span style="font-size:12px">สี่เหลี่ยม</span></button>
-                <button id="studio-add-circle" type="button" class="studio-tool-btn" style="flex-direction:column;padding:12px;justify-content:center;align-items:center"><span style="font-size:18px">◯</span><span style="font-size:12px">วงกลม</span></button>
-                <button id="studio-add-line" type="button" class="studio-tool-btn" style="flex-direction:column;padding:12px;justify-content:center;align-items:center"><span style="font-size:18px">／</span><span style="font-size:12px">เส้นตรง</span></button>
+                <button id="studio-add-rect" type="button" class="studio-tool-btn" style="flex-direction:column;padding:12px;justify-content:center;align-items:center"><span style="font-size:18px">⬜</span><span style="font-size:14px">สี่เหลี่ยม</span></button>
+                <button id="studio-add-circle" type="button" class="studio-tool-btn" style="flex-direction:column;padding:12px;justify-content:center;align-items:center"><span style="font-size:18px">◯</span><span style="font-size:14px">วงกลม</span></button>
+                <button id="studio-add-line" type="button" class="studio-tool-btn" style="flex-direction:column;padding:12px;justify-content:center;align-items:center"><span style="font-size:18px">／</span><span style="font-size:14px">เส้นตรง</span></button>
               </div>
               <button id="studio-add-text" type="button" class="studio-tool-btn">เพิ่มข้อความ</button>
               <div class="studio-sidebar-divider"></div>
@@ -172,7 +172,7 @@
                 <input class="studio-sidebar-input" type="text" id="studio-footer-date" placeholder="28/02/2026">
                 <label class="studio-sidebar-label">ที่มา :</label>
                 <input class="studio-sidebar-input" type="text" id="studio-footer-source" placeholder="Percent Rank">
-                <button id="studio-apply-footer" type="button" class="studio-tool-btn" style="margin-top:10px;font-size:13px;background:#f0fdf4;color:#166534;border-color:#bbf7d0">อัพเดต Footer</button>
+                <button id="studio-apply-footer" type="button" class="studio-tool-btn" style="margin-top:10px;font-size:14px;background:#f0fdf4;color:#166534;border-color:#bbf7d0">อัพเดต Footer</button>
               </div>
               <div class="studio-sidebar-divider"></div>
               <div id="studio-table-tools" class="studio-prop-section studio-table-tools">
@@ -186,7 +186,7 @@
                   <button id="studio-table-font-down" type="button" class="studio-tool-btn" style="justify-content:center">ฟอนต์เล็กลง</button>
                   <button id="studio-table-font-up" type="button" class="studio-tool-btn" style="justify-content:center">ฟอนต์ใหญ่ขึ้น</button>
                 </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-top:10px;color:#64748b">
+                <div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;margin-top:10px;color:#64748b">
                   <label>ขนาดตัวอักษรโดยประมาณ</label><span id="studio-table-font-estimate">-</span>
                 </div>
                 <label class="studio-sidebar-label" style="margin-top:10px">ขยับตาราง</label>
@@ -195,41 +195,41 @@
                   <button id="studio-table-move-up"    type="button" class="studio-tool-btn" style="justify-content:center">▲</button>
                   <div></div>
                   <button id="studio-table-move-left"  type="button" class="studio-tool-btn" style="justify-content:center">◀</button>
-                  <button id="studio-table-move-center" type="button" class="studio-tool-btn" style="justify-content:center;font-size:11px">กึ่งกลาง</button>
+                  <button id="studio-table-move-center" type="button" class="studio-tool-btn" style="justify-content:center;font-size:14px">กึ่งกลาง</button>
                   <button id="studio-table-move-right" type="button" class="studio-tool-btn" style="justify-content:center">▶</button>
                   <div></div>
                   <button id="studio-table-move-down"  type="button" class="studio-tool-btn" style="justify-content:center">▼</button>
                   <div></div>
                 </div>
-                <p style="font-size:12px;color:#64748b;line-height:1.4;margin-top:10px">ใช้สำหรับจูน Presentation ของตารางข้อมูลที่ส่งเข้ามา</p>
+                <p style="font-size:14px;color:#64748b;line-height:1.4;margin-top:10px">ใช้สำหรับจูน Presentation ของตารางข้อมูลที่ส่งเข้ามา</p>
               </div>
               <div class="studio-sidebar-divider"></div>
               <div class="studio-prop-section">
                 <span class="studio-section-title">Properties</span>
                 <div id="studio-text-tools" class="studio-control-disabled">
-                  <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                  <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px">
                     <label>ขนาดตัวอักษร</label><span id="studio-font-val">28</span>
                   </div>
                   <input type="range" id="studio-font-slider" min="10" max="200" value="28">
                 </div>
                 <div id="studio-general-tools" class="studio-control-disabled" style="margin-top:12px">
-                  <label style="font-size:13px;display:block;margin-bottom:6px">สีพื้นหลัง / ข้อความ</label>
+                  <label style="font-size:14px;display:block;margin-bottom:6px">สีพื้นหลัง / ข้อความ</label>
                   <div class="studio-palette-grid" id="studio-palette"></div>
                   <div style="margin-top:12px">
-                    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+                    <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px">
                       <label>ความโปร่งใส</label><span id="studio-alpha-val">100%</span>
                     </div>
                     <input type="range" id="studio-alpha-slider" min="0" max="100" value="100">
                   </div>
                   <div style="margin-top:12px">
-                    <label style="font-size:13px;display:block;margin-bottom:6px">เส้นขอบ</label>
+                    <label style="font-size:14px;display:block;margin-bottom:6px">เส้นขอบ</label>
                     <button id="studio-stroke-toggle" type="button" class="studio-tool-btn" style="justify-content:center">มีขอบ</button>
                     <div style="margin-top:8px">
                       <input type="color" id="studio-stroke-color" value="#94a3b8" style="width:100%;height:38px;border:1px solid #dbe4f0;border-radius:8px;background:#fff;padding:4px">
                     </div>
                   </div>
                   <div style="margin-top:12px">
-                    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
+                    <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px">
                       <label>ความหนาเส้นขอบ</label><span id="studio-stroke-width-val">1 px</span>
                     </div>
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -243,7 +243,7 @@
             </aside>
           </div>
           <div class="studio-library-section">
-            <p style="font-size:11px;font-weight:bold;color:#94a3b8;text-transform:uppercase;margin-bottom:6px;letter-spacing:.5px">Library (รายการหน้าทั้งหมด)</p>
+            <p style="font-size:14px;font-weight:bold;color:#94a3b8;text-transform:uppercase;margin-bottom:6px;letter-spacing:.5px">Library (รายการหน้าทั้งหมด)</p>
             <div id="studio-slides-grid" class="studio-slides-scroll"></div>
           </div>
         </div>
@@ -267,19 +267,19 @@
               <div class="studio-prop-section">
                 <span class="studio-section-title">Canvas Properties</span>
                 <div id="studio-c-brush-tools">
-                  <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><label>ขนาดพู่กัน</label><span id="studio-brush-val">3</span></div>
+                  <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px"><label>ขนาดพู่กัน</label><span id="studio-brush-val">3</span></div>
                   <input type="range" id="studio-brush-slider" min="1" max="50" value="3">
                 </div>
                 <div id="studio-c-text-tools" class="studio-control-disabled" style="margin-top:10px">
-                  <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><label>ขนาดตัวอักษร</label><span id="studio-c-font-val">28</span></div>
+                  <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px"><label>ขนาดตัวอักษร</label><span id="studio-c-font-val">28</span></div>
                   <input type="range" id="studio-c-font-slider" min="10" max="200" value="28">
                 </div>
                 <div style="margin-top:10px">
-                  <label style="font-size:13px;display:block;margin-bottom:6px">สี</label>
+                  <label style="font-size:14px;display:block;margin-bottom:6px">สี</label>
                   <div class="studio-palette-grid" id="studio-c-palette"></div>
                 </div>
                 <div id="studio-c-obj-tools" class="studio-control-disabled" style="margin-top:10px">
-                  <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><label>ความโปร่งใส</label><span id="studio-c-alpha-val">100%</span></div>
+                  <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px"><label>ความโปร่งใส</label><span id="studio-c-alpha-val">100%</span></div>
                   <input type="range" id="studio-c-alpha-slider" min="0" max="100" value="100">
                 </div>
               </div>
@@ -783,7 +783,7 @@
   }
 
   function updateLogoPreview(dataURL) {
-    $('#studio-logo-preview').innerHTML = dataURL ? `<img src="${dataURL}" alt="logo">` : '<span style="font-size:12px;color:#94a3b8">ยังไม่มีโลโก้</span>';
+    $('#studio-logo-preview').innerHTML = dataURL ? `<img src="${dataURL}" alt="logo">` : '<span style="font-size:14px;color:#94a3b8">ยังไม่มีโลโก้</span>';
   }
 
   function createNewPage() {
@@ -1108,7 +1108,7 @@
     const grid = $('#studio-slides-grid');
     grid.innerHTML = '';
     if (!slides.length) {
-      grid.innerHTML = '<p style="font-size:13px;color:#cbd5e1;padding:20px">ยังไม่มีหน้าในคลัง...</p>';
+      grid.innerHTML = '<p style="font-size:14px;color:#cbd5e1;padding:20px">ยังไม่มีหน้าในคลัง...</p>';
       return;
     }
     slides.forEach((slide, index) => {

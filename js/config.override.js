@@ -16,19 +16,20 @@
 if (typeof CONFIG !== 'undefined') {
 
   CONFIG.DATA_SOURCE = 'google_first';
+  CONFIG.GITHUB_TOKEN = '';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */
   const FILE = {
     THAI:   'Data/AVP Thai Fund for Quality - 2026-Q1.json',
     MASTER: 'Data/AVP Master Fund ID - 2026-Q1.json',
-    PERCENTRANK: 'Data/Percentrank Freestyle - 2026-Q1.json',
-    RAW_SEC: 'Data/Raw For Sec - 2026-Q1.json',
+    FUND_KEY_PERFORMANCE: 'Data/Fund Key Performance AVP - 2026-Q1.json',
+    SEC_API: 'Data/Data For SEC API - 2026-Q1.json',
   };
 
   /* ── Mapping หน้าเว็บ → ไฟล์ข้อมูล ── */
   if (CONFIG.PAGES?.['select-fund']) {
-    CONFIG.PAGES['select-fund'].localFile = FILE.PERCENTRANK;
-    CONFIG.PAGES['select-fund'].source    = 'Percentrank Freestyle';
+    CONFIG.PAGES['select-fund'].localFile = FILE.FUND_KEY_PERFORMANCE;
+    CONFIG.PAGES['select-fund'].source    = 'Fund Key Performance AVP';
   }
   if (CONFIG.PAGES?.['thai-annualized']) {
     CONFIG.PAGES['thai-annualized'].localFile = FILE.THAI;
@@ -49,7 +50,8 @@ if (typeof CONFIG !== 'undefined') {
     CONFIG.PAGES['master-calendar'].localFile = FILE.MASTER;
   }
   if (CONFIG.PAGES?.['master-placeholder-1']) {
-    CONFIG.PAGES['master-placeholder-1'].localFile = FILE.RAW_SEC;
+    CONFIG.PAGES['master-placeholder-1'].localFile = FILE.SEC_API;
+    CONFIG.PAGES['master-placeholder-1'].source    = 'Data For SEC API + AVP Master Fund ID';
   }
   if (CONFIG.PAGES?.['master-placeholder-2']) {
     CONFIG.PAGES['master-placeholder-2'].localFile = FILE.MASTER;
@@ -58,7 +60,8 @@ if (typeof CONFIG !== 'undefined') {
     CONFIG.PAGES['master-placeholder-3'].localFile = FILE.MASTER;
   }
   if (CONFIG.PAGES?.['master-placeholder-4']) {
-    CONFIG.PAGES['master-placeholder-4'].localFile = FILE.RAW_SEC;
+    CONFIG.PAGES['master-placeholder-4'].localFile = FILE.SEC_API;
+    CONFIG.PAGES['master-placeholder-4'].source    = 'Data For SEC API + AVP Master Fund ID';
   }
   if (CONFIG.PAGES?.['master-placeholder-7']) {
     CONFIG.PAGES['master-placeholder-7'].localFile = FILE.MASTER;
