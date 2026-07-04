@@ -1,0 +1,38 @@
+name: Export Fund Selection Logs JSON
+
+on:
+  workflow_dispatch:
+    inputs:
+      quarter:
+        description: "Quarter tab to export, e.g. 2026-Q1"
+        required: true
+        default: "2026-Q1"
+
+jobs:
+  export-fund-selection-logs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements-json-export.txt
+
+      - name: Export Fund Selection Logs to Google Drive
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          FUND_SELECTION_LOGS_SHEET_ID: ${{ vars.FUND_SELECTION_LOGS_SHEET_ID }}
+          DRIVE_JSON_TARGET_FUND_SELECTION_LOGS: ${{ vars.DRIVE_JSON_TARGET_FUND_SELECTION_LOGS }}
+        run: |
+          python scripts/export_fund_selection_logs.py \
+            --quarter "${{ inputs.quarter }}"
