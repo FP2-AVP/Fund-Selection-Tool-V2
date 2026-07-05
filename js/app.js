@@ -111,7 +111,7 @@ const JSON_DRIVE_ROOT_FOLDER_ID = '1vUWAU5qP0qiIHPa5C4TZUybVmEwqfl6W';
 const JSON_DRIVE_ROOT_FOLDER_URL = 'https://drive.google.com/drive/u/2/folders/1vUWAU5qP0qiIHPa5C4TZUybVmEwqfl6W';
 const JSON_EXPORT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwV-OUqOXxv1GAkdXJP5ICbXAa4gzEAxWjU6Yd9Z_KKkO2y1dhm4aWrjHik7_4gJNHx/exec';
 const JSON_EXPORT_SECRET_KEY = 'sheets-to-drive-json';
-const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyX3plEd-uz34i6th4_tOdJNRP-NiJJeyB9q3NdStzKKH1eucATrVX8yfm9FR3Mi9VCFA/exec';
+const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwtPbn93YVc3i8KVvPHCA28v0giukB7Ihe59TbLMcjwow0O1PcgaFjY39qa9KwWE3DJ6Q/exec';
 const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
 
 const JSON_STORE = {
@@ -12698,7 +12698,87 @@ const Pages = {
 	      return Boolean(String(DRAFT_API_WEB_APP_URL || '').trim());
 	    }
 
+	    function shouldUseLocalDraftProxy() {
+	      return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+	    }
+
+	    function draftApiJsonp(params) {
+	      return new Promise((resolve, reject) => {
+	        const callbackName = `__draftApiCallback_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+	        const script = document.createElement('script');
+	        const cleanup = () => {
+	          delete window[callbackName];
+	          script.remove();
+	        };
+	        const timer = setTimeout(() => {
+	          cleanup();
+	          reject(new Error('Draft API request timeout'));
+	        }, 30000);
+	        window[callbackName] = (data) => {
+	          clearTimeout(timer);
+	          cleanup();
+	          resolve(data || {});
+	        };
+	        const url = new URL(DRAFT_API_WEB_APP_URL);
+	        Object.entries({
+	          key: DRAFT_API_SECRET_KEY,
+	          callback: callbackName,
+	          ...params,
+	        }).forEach(([key, value]) => {
+	          if (value !== undefined && value !== null && value !== '') {
+	            url.searchParams.set(key, value);
+	          }
+	        });
+	        script.onerror = () => {
+	          clearTimeout(timer);
+	          cleanup();
+	          reject(new Error('Draft API script failed to load'));
+	        };
+	        script.src = url.toString();
+	        document.head.appendChild(script);
+	      });
+	    }
+
+	    async function draftApiCompressedPayload(payload) {
+	      const text = JSON.stringify(payload || {});
+	      if (!('CompressionStream' in window)) return { payload: text };
+	      const stream = new Blob([text], { type: 'application/json' }).stream().pipeThrough(new CompressionStream('gzip'));
+	      const buffer = await new Response(stream).arrayBuffer();
+	      let binary = '';
+	      const bytes = new Uint8Array(buffer);
+	      for (let i = 0; i < bytes.length; i += 0x8000) {
+	        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	      }
+	      return {
+	        payloadGzipB64: btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''),
+	      };
+	    }
+
+	    async function draftApiDirectRequest(action, payload = {}) {
+	      const params = { action };
+	      if (action === 'list') {
+	        if (payload?.quarter) params.quarter = payload.quarter;
+	      } else if (action === 'delete') {
+	        params.id = payload?.id || '';
+	        if (payload?.quarter) params.quarter = payload.quarter;
+	      } else {
+	        Object.assign(params, await draftApiCompressedPayload({
+	          action,
+	          key: DRAFT_API_SECRET_KEY,
+	          draft: payload?.draft || payload || {},
+	        }));
+	      }
+	      const data = await draftApiJsonp(params);
+	      if (data.ok === false) {
+	        throw new Error(data.error || `Draft API ${action} failed`);
+	      }
+	      return data;
+	    }
+
 	    async function draftApiRequest(action, payload = {}) {
+	      if (!shouldUseLocalDraftProxy()) {
+	        return await draftApiDirectRequest(action, payload);
+	      }
 	      let res;
 	      if (action === 'list') {
 	        const quarter = payload?.quarter ? `?quarter=${encodeURIComponent(payload.quarter)}` : '';
