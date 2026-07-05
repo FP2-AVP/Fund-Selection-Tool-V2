@@ -5683,6 +5683,22 @@ const Pages = {
       document.head.appendChild(script);
     });
 
+    const logsApiFetch = async (params) => {
+      const url = new URL(FUND_SELECTION_LOGS_API_WEB_APP_URL);
+      Object.entries({
+        key: FUND_SELECTION_LOGS_API_SECRET_KEY,
+        ...params,
+      }).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          url.searchParams.set(key, value);
+        }
+      });
+      const res = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`Fund Selection Logs API HTTP ${res.status}`);
+      return JSON.parse(text);
+    };
+
     const logsApiCompressedPayload = async (payload) => {
       const text = JSON.stringify(payload || {});
       if (!('CompressionStream' in window)) return { payload: text };
@@ -5709,7 +5725,12 @@ const Pages = {
           ...payload,
         }));
       }
-      const data = await logsApiJsonp(params);
+      let data;
+      try {
+        data = await logsApiFetch(params);
+      } catch {
+        data = await logsApiJsonp(params);
+      }
       if (data.ok === false && !data.conflict) {
         throw new Error(data.error || `Fund Selection Logs API ${action} failed`);
       }
@@ -12851,6 +12872,22 @@ const Pages = {
 	      });
 	    }
 
+	    async function draftApiFetch(params) {
+	      const url = new URL(DRAFT_API_WEB_APP_URL);
+	      Object.entries({
+	        key: DRAFT_API_SECRET_KEY,
+	        ...params,
+	      }).forEach(([key, value]) => {
+	        if (value !== undefined && value !== null && value !== '') {
+	          url.searchParams.set(key, value);
+	        }
+	      });
+	      const res = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
+	      const text = await res.text();
+	      if (!res.ok) throw new Error(`Draft API HTTP ${res.status}`);
+	      return JSON.parse(text);
+	    }
+
 	    async function draftApiCompressedPayload(payload) {
 	      const text = JSON.stringify(payload || {});
 	      if (!('CompressionStream' in window)) return { payload: text };
@@ -12880,7 +12917,12 @@ const Pages = {
 	          draft: payload?.draft || payload || {},
 	        }));
 	      }
-	      const data = await draftApiJsonp(params);
+	      let data;
+	      try {
+	        data = await draftApiFetch(params);
+	      } catch {
+	        data = await draftApiJsonp(params);
+	      }
 	      if (data.ok === false) {
 	        throw new Error(data.error || `Draft API ${action} failed`);
 	      }
