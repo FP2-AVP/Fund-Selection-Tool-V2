@@ -111,7 +111,7 @@ const JSON_DRIVE_ROOT_FOLDER_ID = '1vUWAU5qP0qiIHPa5C4TZUybVmEwqfl6W';
 const JSON_DRIVE_ROOT_FOLDER_URL = 'https://drive.google.com/drive/u/2/folders/1vUWAU5qP0qiIHPa5C4TZUybVmEwqfl6W';
 const JSON_EXPORT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwV-OUqOXxv1GAkdXJP5ICbXAa4gzEAxWjU6Yd9Z_KKkO2y1dhm4aWrjHik7_4gJNHx/exec';
 const JSON_EXPORT_SECRET_KEY = 'sheets-to-drive-json';
-const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwtPbn93YVc3i8KVvPHCA28v0giukB7Ihe59TbLMcjwow0O1PcgaFjY39qa9KwWE3DJ6Q/exec';
+const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzcOc5s3SYM2gkw3trpO43Jp0wwTasOIU8Mns4LJ-YQveE2cq5LXX98G0NVW7qHohGFKA/exec';
 const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
 
 const JSON_STORE = {
@@ -303,6 +303,8 @@ const FUND_LIST_UPDATE_ASSET_OPTIONS = [
 const FUND_LIST_UPDATE_DRAFT_KEY = 'fund-list-update-draft-v1';
 const FUND_LIST_UPDATE_SEED_FILE = 'Data/fund_list_update_q3_2025_seed.json';
 const FUND_SELECTION_LOGS_DRIVE_FOLDER_ID = '12ciJQq-dpBr-DpdnzXCOXqtW_ijctJN6';
+const FUND_SELECTION_LOGS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycby3cNUpeF8IZrQHFnPbAtd1zJXkA9qu-QtCTgzyYO96O47ymuE-pXFRltxrKRYUg8GpXw/exec';
+const FUND_SELECTION_LOGS_API_SECRET_KEY = 'change-this-fund-selection-logs-api-key';
 const FUND_SELECTION_LOGS_SHEET_ID = '1fOdq3JSKTjRZLE8sQ62jn3OmmuKGuhDo2tUCLjy1zIg';
 const FUND_SELECTION_LOGS_SHEET_HEADERS = [
   'quarter',
@@ -5643,6 +5645,76 @@ const Pages = {
       .replace(/^-+|-+$/g, '')
       .slice(0, 80) || fallback;
     const newId = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const shouldUseLocalLogsApi = () => ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    const hasLogsApi = () => Boolean(String(FUND_SELECTION_LOGS_API_WEB_APP_URL || '').trim());
+
+    const logsApiJsonp = (params) => new Promise((resolve, reject) => {
+      const callbackName = `__fslApiCallback_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const script = document.createElement('script');
+      const cleanup = () => {
+        delete window[callbackName];
+        script.remove();
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('Fund Selection Logs API request timeout'));
+      }, 30000);
+      window[callbackName] = (data) => {
+        clearTimeout(timer);
+        cleanup();
+        resolve(data || {});
+      };
+      const url = new URL(FUND_SELECTION_LOGS_API_WEB_APP_URL);
+      Object.entries({
+        key: FUND_SELECTION_LOGS_API_SECRET_KEY,
+        callback: callbackName,
+        ...params,
+      }).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          url.searchParams.set(key, value);
+        }
+      });
+      script.onerror = () => {
+        clearTimeout(timer);
+        cleanup();
+        reject(new Error('Fund Selection Logs API script failed to load'));
+      };
+      script.src = url.toString();
+      document.head.appendChild(script);
+    });
+
+    const logsApiCompressedPayload = async (payload) => {
+      const text = JSON.stringify(payload || {});
+      if (!('CompressionStream' in window)) return { payload: text };
+      const stream = new Blob([text], { type: 'application/json' }).stream().pipeThrough(new CompressionStream('gzip'));
+      const buffer = await new Response(stream).arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      return {
+        payloadGzipB64: btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''),
+      };
+    };
+
+    const logsApiRequest = async (action, payload = {}) => {
+      const params = { action };
+      if (action === 'get' || action === 'delete') {
+        params.quarter = payload.quarter || quarter;
+      } else {
+        Object.assign(params, await logsApiCompressedPayload({
+          action,
+          key: FUND_SELECTION_LOGS_API_SECRET_KEY,
+          ...payload,
+        }));
+      }
+      const data = await logsApiJsonp(params);
+      if (data.ok === false && !data.conflict) {
+        throw new Error(data.error || `Fund Selection Logs API ${action} failed`);
+      }
+      return data;
+    };
 
     const defaultLog = () => ({
       schemaVersion: 1,
@@ -5895,6 +5967,34 @@ const Pages = {
     };
 
     const loadLog = async () => {
+      if (!shouldUseLocalLogsApi() && hasLogsApi()) {
+        try {
+          const data = await logsApiRequest('get', { quarter });
+          return {
+            log: normalizeLog(data.log || null),
+            sourceNote: data.source || (data.notFound ? 'New file' : `Google Drive: Fund Selection Logs - ${quarter}.json`),
+            warning: data.notFound ? `ยังไม่พบไฟล์ของ ${quarter}` : '',
+          };
+        } catch (err) {
+          try {
+            const localFile = `Data/Fund Selection Logs - ${quarter}.json`;
+            const resp = await fetch(localFile, { cache: 'no-store' });
+            if (!resp.ok) throw new Error(`Local ${resp.status}`);
+            const payload = await resp.json();
+            return {
+              log: normalizeLog(payload),
+              sourceNote: `Local JSON fallback: ${localFile}`,
+              warning: `Fund Selection Logs API ใช้งานไม่ได้: ${err.message || err}`,
+            };
+          } catch {
+            return {
+              log: normalizeLog(null),
+              sourceNote: 'New file',
+              warning: `Fund Selection Logs API ใช้งานไม่ได้: ${err.message || err}`,
+            };
+          }
+        }
+      }
       try {
         const resp = await fetch(`/api/fund-selection-logs?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
         const data = await resp.json().catch(() => ({}));
@@ -6226,24 +6326,36 @@ const Pages = {
         const saveBtn = $('#fsl-save', area);
         if (saveBtn) saveBtn.disabled = true;
         log = cleanForSave();
-        const resp = await fetch('/api/fund-selection-logs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        let data;
+        if (!shouldUseLocalLogsApi() && hasLogsApi()) {
+          data = await logsApiRequest('save', {
             quarter,
             baseRevision: State.fundSelectionLogs.baseRevision,
             updatedBy: State.currentUser?.email || '',
             log,
-          }),
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (resp.status === 409) {
+          });
+        } else {
+          const resp = await fetch('/api/fund-selection-logs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              quarter,
+              baseRevision: State.fundSelectionLogs.baseRevision,
+              updatedBy: State.currentUser?.email || '',
+              log,
+            }),
+          });
+          data = await resp.json().catch(() => ({}));
+          if (!resp.ok && resp.status !== 409) throw new Error(data.error || `API ${resp.status}`);
+          if (resp.status === 409) data.conflict = true;
+        }
+        if (data.conflict) {
           toast('มีคนแก้ไขไฟล์นี้ก่อนหน้าแล้ว กรุณาโหลดใหม่เพื่อตรวจข้อมูลล่าสุด', 'warning', 6500);
           warning = `Revision conflict: ไฟล์ล่าสุดเป็น revision ${data.currentRevision}`;
           renderAll();
           return;
         }
-        if (!resp.ok || data.ok === false) throw new Error(data.error || `API ${resp.status}`);
+        if (data.ok === false) throw new Error(data.error || 'Fund Selection Logs API save failed');
         log = normalizeLog(data.log);
         State.fundSelectionLogs.baseRevision = log.revision;
         sourceNote = data.driveUploaded ? `Google Drive: ${data.drive?.fileName || `Fund Selection Logs - ${quarter}.json`}` : `Local JSON: Fund Selection Logs - ${quarter}.json`;
