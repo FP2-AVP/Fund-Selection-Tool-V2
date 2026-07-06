@@ -94,7 +94,10 @@ def validate_quarter(value: str) -> str:
 def credentials_from_env() -> Any:
     from google.oauth2 import service_account
 
-    raw_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    raw_json = (
+        os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT", "").strip()
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    )
     if raw_json:
         return service_account.Credentials.from_service_account_info(
             json.loads(raw_json),
@@ -108,7 +111,10 @@ def credentials_from_env() -> Any:
             scopes=SCOPES,
         )
 
-    raise RuntimeError("Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS first.")
+    raise RuntimeError(
+        "Set GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT, GOOGLE_SERVICE_ACCOUNT_JSON, "
+        "or GOOGLE_APPLICATION_CREDENTIALS first."
+    )
 
 
 def sheet_titles(sheets: Any, spreadsheet_id: str) -> set[str]:

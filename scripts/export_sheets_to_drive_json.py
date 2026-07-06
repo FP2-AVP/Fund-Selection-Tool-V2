@@ -8,12 +8,13 @@ Example:
 
 Authentication:
   Set one of these environment variables:
-    GOOGLE_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'
+    GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT='{"type":"service_account",...}'
+    GOOGLE_SERVICE_ACCOUNT_JSON='{"type":"service_account",...}'  # legacy fallback
     GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 
-If JSON_DRIVE_ROOT_FOLDER_ID is provided, the script creates the year/quarter
-folders inside that folder. Otherwise it creates/finds "Fund List Tool JSON"
-in the service account's My Drive.
+If DRIVE_JSON_TARGET_DATA or JSON_DRIVE_ROOT_FOLDER_ID is provided, the script
+creates the year/quarter folders inside that folder. Otherwise it creates/finds
+"Fund List Tool JSON" in the service account's My Drive.
 """
 
 from __future__ import annotations
@@ -80,7 +81,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--root-folder-id",
-        default=os.environ.get("JSON_DRIVE_ROOT_FOLDER_ID", ""),
+        default=(
+            os.environ.get("DRIVE_JSON_TARGET_DATA", "").strip()
+            or os.environ.get("JSON_DRIVE_ROOT_FOLDER_ID", "").strip()
+        ),
         help="Optional Google Drive folder ID for the JSON root.",
     )
     parser.add_argument(
@@ -105,7 +109,10 @@ def quarter_year(quarter: str) -> str:
 def credentials_from_env() -> Any:
     from google.oauth2 import service_account
 
-    raw_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    raw_json = (
+        os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT", "").strip()
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    )
     if raw_json:
         info = json.loads(raw_json)
         return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
@@ -118,7 +125,8 @@ def credentials_from_env() -> Any:
         )
 
     raise RuntimeError(
-        "Set GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_APPLICATION_CREDENTIALS first."
+        "Set GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT, GOOGLE_SERVICE_ACCOUNT_JSON, "
+        "or GOOGLE_APPLICATION_CREDENTIALS first."
     )
 
 
