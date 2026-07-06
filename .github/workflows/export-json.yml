@@ -40,8 +40,8 @@ jobs:
 
       - name: Export JSON to Google Drive
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          JSON_DRIVE_ROOT_FOLDER_ID: ${{ secrets.JSON_DRIVE_ROOT_FOLDER_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT }}
+          DRIVE_JSON_TARGET_DATA: ${{ secrets.DRIVE_JSON_TARGET_DATA }}
         run: |
           python scripts/export_sheets_to_drive_json.py \
             --quarter "${{ inputs.quarter }}" \

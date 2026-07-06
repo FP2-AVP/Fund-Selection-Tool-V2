@@ -30,9 +30,9 @@ jobs:
 
       - name: Export Fund Selection Logs to Google Drive
         env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT }}
           FUND_SELECTION_LOGS_SHEET_ID: ${{ vars.FUND_SELECTION_LOGS_SHEET_ID }}
-          DRIVE_JSON_TARGET_FUND_SELECTION_LOGS: ${{ vars.DRIVE_JSON_TARGET_FUND_SELECTION_LOGS }}
+          DRIVE_JSON_TARGET_FUND_SELECTION_LOGS: ${{ secrets.DRIVE_JSON_TARGET_FUND_SELECTION_LOGS }}
         run: |
           python scripts/export_fund_selection_logs.py \
             --quarter "${{ inputs.quarter }}"

@@ -1,0 +1,77 @@
+name: Sync JSON Overrides to Drive
+
+on:
+  workflow_dispatch:
+    inputs:
+      quarter:
+        description: "Quarter to sync, e.g. 2026-Q1"
+        required: true
+        default: "2026-Q1"
+  push:
+    branches:
+      - main
+    paths:
+      - "Data/**/overrides/*.json"
+      - "scripts/drive_json_store.py"
+      - ".github/workflows/sync-json-overrides.yml"
+
+jobs:
+  sync-json-overrides:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON_UPLOAD: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_UPLOAD }}
+      DRIVE_JSON_TARGET_DATA: ${{ secrets.DRIVE_JSON_TARGET_DATA }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/requirements-json-export.txt
+
+      - name: Upload override JSON files
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from scripts.drive_json_store import upload_json_payload_to_path
+
+          root_folder_id = os.environ["DRIVE_JSON_TARGET_DATA"].strip()
+          quarter_input = "${{ inputs.quarter }}".strip().upper()
+          if not quarter_input:
+              quarter_input = ""
+
+          files = sorted(Path("Data").glob("*/**/overrides/*.json"))
+          if quarter_input:
+              year = quarter_input.split("-", 1)[0]
+              files = [
+                  path for path in files
+                  if path.parts[:4] == ("Data", year, quarter_input, "overrides")
+              ]
+
+          if not files:
+              raise SystemExit("No override JSON files found to upload.")
+
+          for path in files:
+              relative = path.relative_to("Data")
+              path_segments = list(relative.parts[:-1])
+              payload = json.loads(path.read_text(encoding="utf-8"))
+              file_id, folder_id = upload_json_payload_to_path(
+                  root_folder_id,
+                  path_segments,
+                  path.name,
+                  payload,
+              )
+              print(f"Uploaded {path} -> {'/'.join(path_segments)}/{path.name} ({file_id}) in folder {folder_id}")
+          PY

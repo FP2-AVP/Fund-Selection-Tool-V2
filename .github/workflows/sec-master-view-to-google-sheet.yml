@@ -134,7 +134,7 @@ jobs:
       - name: Build SEC data_preparation and write Google Sheet
         env:
           SEC_API_KEY: ${{ secrets.SEC_API_KEY }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT }}
           SEC_MASTER_VIEW_SPREADSHEET_ID: ${{ secrets.SEC_MASTER_VIEW_SPREADSHEET_ID }}
         run: |
           if [ "${{ inputs.output_mode }}" = "raw_tabs" ]; then
