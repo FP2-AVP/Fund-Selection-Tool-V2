@@ -2699,7 +2699,8 @@ async function deleteFundOverride(key) {
 async function loadMasterAllocations(force = false) {
   if (!force && State.masterAllocationsLoaded) return State.masterAllocations;
   try {
-    const resp = await fetch('/api/master-allocations', { cache: 'no-store' });
+    const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+    const resp = await fetch(`/api/master-allocations?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     State.masterAllocations = {
@@ -2728,11 +2729,12 @@ async function saveMasterAllocation(item) {
   }
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
-  return data.item;
+  return data;
 }
 
 async function deleteMasterAllocation(key) {
-  const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+  const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}?quarter=${encodeURIComponent(quarter)}`, { method: 'DELETE' });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok || data.ok === false) {
     throw new Error(data.error || `ลบ mapping ไม่สำเร็จ (${resp.status})`);
@@ -4861,6 +4863,20 @@ const Pages = {
       return cleanRows(payload?.rows || payload?.values || []);
     };
 
+    const applyLoadedRows = (nextRows, nextSourceNote, nextSourceKey) => {
+      rows = cleanRows(nextRows);
+      listFrom = rows.find(row => row.list_from)?.list_from || '2025-Q3';
+      listTo = rows.find(row => row.list_to)?.list_to || State.currentQuarter || '2026-Q1';
+      const fromInput = $('#flu-list-from', area);
+      const toInput = $('#flu-list-to', area);
+      if (fromInput) fromInput.value = listFrom;
+      if (toInput) toInput.value = listTo;
+      sourceNote = nextSourceNote;
+      loadError = '';
+      State._pageDataSource[pageKey] = nextSourceKey;
+      render();
+    };
+
     let fundSuggestions = [];
     try {
       const selectRows = await fetchCached('select-fund');
@@ -5113,10 +5129,14 @@ const Pages = {
       const tbody = $('#flu-body', area);
       const count = $('#flu-count', area);
       const summary = $('#flu-summary', area);
+      const sourceBadge = $('#flu-source-badge', area);
+      const loadErrorBadge = $('#flu-load-error', area);
       const a4Preview = $('#flu-a4-preview', area);
       const oldHeader = $('#flu-old-list-header', area);
       const currentHeader = $('#flu-current-list-header', area);
       if (count) count.textContent = `${filtered.length.toLocaleString()} / ${rows.length.toLocaleString()} รายการ`;
+      if (sourceBadge) sourceBadge.innerHTML = sourceBadgeHtml(pageKey, sourceNote);
+      if (loadErrorBadge) loadErrorBadge.innerHTML = loadError ? `<span class="badge badge-warning">โหลด Sheet ไม่สำเร็จ: ${esc(loadError)}</span>` : '';
       if (oldHeader) oldHeader.textContent = `Fund List ${listFrom || 'เดิม'}`;
       if (currentHeader) currentHeader.textContent = `Fund List ${listTo || 'ปัจจุบัน'}`;
       if (a4Preview) a4Preview.innerHTML = renderA4Preview(filtered);
@@ -5176,11 +5196,12 @@ const Pages = {
       <div class="flu-layout">
         <div class="page-tools flu-entry-tools">
           <div class="page-tools-meta">
-            ${sourceBadgeHtml(pageKey, sourceNote)}
+            <span id="flu-source-badge">${sourceBadgeHtml(pageKey, sourceNote)}</span>
             <span class="badge badge-data-origin" id="flu-count">${rows.length.toLocaleString()} รายการ</span>
-            ${loadError ? `<span class="badge badge-warning">โหลด Sheet ไม่สำเร็จ: ${esc(loadError)}</span>` : ''}
+            <span id="flu-load-error">${loadError ? `<span class="badge badge-warning">โหลด Sheet ไม่สำเร็จ: ${esc(loadError)}</span>` : ''}</span>
           </div>
           <div class="page-tools-actions">
+            <button class="btn btn-ghost" id="flu-load-sheet" type="button" ${cfg.sheetId ? '' : 'disabled'}>โหลดจาก Google Sheet</button>
             <button class="btn btn-ghost" id="flu-load-seed" type="button">โหลด Q3-2025 จาก PDF</button>
             <button class="btn btn-primary" id="flu-save-draft" type="button">บันทึก Draft</button>
             <button class="btn btn-success" id="flu-save-sheet" type="button" ${cfg.sheetId ? '' : 'disabled'}>บันทึกลง Google Sheet</button>
@@ -5280,19 +5301,26 @@ const Pages = {
     });
     $('#flu-load-seed', area)?.addEventListener('click', async () => {
       try {
-        rows = await fetchSeedRows();
-        listFrom = rows.find(row => row.list_from)?.list_from || '2025-Q3';
-        listTo = rows.find(row => row.list_to)?.list_to || '2026-Q1';
-        const fromInput = $('#flu-list-from', area);
-        const toInput = $('#flu-list-to', area);
-        if (fromInput) fromInput.value = listFrom;
-        if (toInput) toInput.value = listTo;
-        sourceNote = 'Seed จาก PDF: Fund List Q3-2025';
-        State._pageDataSource[pageKey] = 'PDF seed';
-        render();
+        applyLoadedRows(await fetchSeedRows(), 'Seed จาก PDF: Fund List Q3-2025', 'PDF seed');
         toast(`โหลด Q3-2025 จาก PDF แล้ว ${rows.length.toLocaleString()} รายการ`, 'success');
       } catch (err) {
         toast(`โหลด seed ไม่สำเร็จ: ${err.message || err}`, 'error');
+      }
+    });
+    $('#flu-load-sheet', area)?.addEventListener('click', async () => {
+      if (!cfg.sheetId) {
+        toast('ยังไม่ได้ตั้งค่า Google Sheet ID สำหรับ Fund List Update', 'warning');
+        return;
+      }
+      try {
+        if (!SheetsAPI.accessToken) await SheetsAPI.requestToken(false);
+        const sheetRows = normalizeRows(await SheetsAPI.fetchSheetData(cfg.sheetId, cfg.tabName || 'fund_list_changes'));
+        applyLoadedRows(sheetRows, `${cfg.source || 'Google Sheet'} · ${cfg.tabName || 'fund_list_changes'}`, 'Google Sheet');
+        toast(`โหลดจาก Google Sheet แล้ว ${rows.length.toLocaleString()} รายการ`, 'success');
+      } catch (err) {
+        loadError = err.message || String(err);
+        render();
+        toast(`โหลดจาก Google Sheet ไม่สำเร็จ: ${loadError}`, 'error', 6000);
       }
     });
     $('#flu-save-draft', area)?.addEventListener('click', () => {
@@ -5818,9 +5846,236 @@ const Pages = {
       }
       return name || 'A';
     };
-    const fslHeaderIndex = (headers = FUND_SELECTION_LOGS_SHEET_HEADERS) => Object.fromEntries(
-      headers.map((header, index) => [String(header || '').trim().toLowerCase(), index]),
-    );
+    const fslHeaderIndex = (headers = FUND_SELECTION_LOGS_SHEET_HEADERS) => {
+      const normalizeHeader = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9ก-๙]+/g, '');
+      const aliases = {
+        quarter: 'quarter',
+        itemorder: 'item_order',
+        order: 'item_order',
+        itemid: 'item_id',
+        sectionid: 'item_id',
+        assetclass: 'asset_class',
+        asset: 'asset_class',
+        fundtype: 'fund_type',
+        type: 'fund_type',
+        category: 'category',
+        role: 'role',
+        fundcode: 'fund_code',
+        code: 'fund_code',
+        status: 'status',
+        reason: 'reason',
+        note: 'reason',
+        notes: 'reason',
+        tags: 'tags',
+        tag: 'tags',
+        dataasof: 'data_as_of',
+        asof: 'data_as_of',
+        itemrevision: 'item_revision',
+        updatedby: 'updated_by',
+        updater: 'updated_by',
+        updatedat: 'updated_at',
+        mentionid: 'mention_id',
+        rowrevision: 'row_revision',
+        deleted: 'deleted',
+      };
+      const index = {};
+      headers.forEach((header, headerIndex) => {
+        const raw = String(header || '').trim().toLowerCase();
+        const normalized = normalizeHeader(header);
+        const canonical = aliases[normalized];
+        if (raw) index[raw] = headerIndex;
+        if (normalized) index[normalized] = headerIndex;
+        if (canonical) index[canonical] = headerIndex;
+      });
+      return index;
+    };
+    const normalizeFslRole = (value) => {
+      const key = String(value || '').trim().replace(/\s+/g, '').toLowerCase();
+      return ({
+        mainchoice: 'mainChoice',
+        'ตัวเลือกหลัก': 'mainChoice',
+        secondarychoice: 'secondaryChoice',
+        'ตัวเลือกรอง': 'secondaryChoice',
+        additionalnote: 'additionalNote',
+        'ความเห็นเพิ่มเติม': 'additionalNote',
+        notselected: 'notSelected',
+        'ไม่ถูกคัดเลือก': 'notSelected',
+      })[key] || String(value || 'mainChoice').trim();
+    };
+    const fslSplitTags = (value) => String(value || '')
+      .split(/[,|]/)
+      .map(tag => tag.trim())
+      .filter(Boolean);
+    const fslNumber = (value, fallback = 1) => {
+      const number = Number(value);
+      return Number.isFinite(number) && number > 0 ? number : fallback;
+    };
+    const fundSelectionLogFromSheetRows = (rows = []) => {
+      const headerKeys = ['asset_class', 'fund_type', 'fund_code', 'reason', 'role', 'item_id', 'mention_id'];
+      const headerCandidates = rows.slice(0, 20).map((row, rowIndex) => {
+        const candidateIndex = fslHeaderIndex(row || []);
+        const score = headerKeys.filter(key => candidateIndex[key] !== undefined).length;
+        return { rowIndex, score };
+      });
+      const headerRowIndex = headerCandidates
+        .filter(candidate => candidate.score >= 2)
+        .sort((a, b) => b.score - a.score || a.rowIndex - b.rowIndex)[0]?.rowIndex || 0;
+      const headers = (rows[headerRowIndex] || []).map(header => String(header || '').trim());
+      const index = fslHeaderIndex(headers.length ? headers : FUND_SELECTION_LOGS_SHEET_HEADERS);
+      const get = (row, key) => String(row[index[key]] ?? '').trim();
+      const generatedAt = nowIso();
+      const grouped = new Map();
+      let dataAsOf = '';
+      let updatedBy = '';
+      let latestUpdatedAt = '';
+
+      rows.slice(headerRowIndex + 1).forEach((row, rowIndex) => {
+        if (!row.some(cell => String(cell ?? '').trim())) return;
+        if (/^true$/i.test(get(row, 'deleted'))) return;
+        const rowQuarter = (get(row, 'quarter') || quarter).toUpperCase();
+        if (rowQuarter !== quarter) return;
+
+        const assetClass = get(row, 'asset_class');
+        const fundType = get(row, 'fund_type');
+        const category = get(row, 'category');
+        if (!assetClass && !fundType) return;
+
+        dataAsOf = dataAsOf || get(row, 'data_as_of');
+        updatedBy = get(row, 'updated_by') || updatedBy;
+        latestUpdatedAt = get(row, 'updated_at') || latestUpdatedAt;
+
+        const itemId = get(row, 'item_id') || `${quarter}-${slug(assetClass || `section-${rowIndex + 1}`, 'section')}-${slug(fundType || 'general', 'general')}`;
+        const itemOrder = fslNumber(get(row, 'item_order'), rowIndex + 1);
+        const groupKey = itemId || `${assetClass}|${fundType}|${category}`;
+        if (!grouped.has(groupKey)) {
+          grouped.set(groupKey, {
+            id: itemId,
+            assetClass,
+            fundType,
+            category,
+            itemRevision: fslNumber(get(row, 'item_revision'), 1),
+            updatedAt: get(row, 'updated_at') || generatedAt,
+            updatedBy: get(row, 'updated_by'),
+            itemOrder,
+            mentions: [],
+          });
+        }
+
+        const fundCode = get(row, 'fund_code').toUpperCase();
+        const reason = get(row, 'reason');
+        const tags = fslSplitTags(get(row, 'tags'));
+        if (!fundCode && !reason && !tags.length) return;
+
+        grouped.get(groupKey).mentions.push({
+          id: get(row, 'mention_id') || newId(`mention-${rowIndex + 1}`),
+          fundCode,
+          role: normalizeFslRole(get(row, 'role')),
+          status: statusLabel(get(row, 'status')),
+          sentiment: 'neutral',
+          reason,
+          tags,
+          updatedAt: get(row, 'updated_at') || generatedAt,
+          updatedBy: get(row, 'updated_by'),
+          rowRevision: fslNumber(get(row, 'row_revision'), 1),
+        });
+      });
+
+      const items = [...grouped.values()]
+        .sort((a, b) => (a.itemOrder - b.itemOrder) || String(a.assetClass).localeCompare(String(b.assetClass)))
+        .map(item => {
+          const { itemOrder, ...cleanItem } = item;
+          return cleanItem;
+        });
+
+      return normalizeLog({
+        schemaVersion: 1,
+        quarter,
+        title: `Fund Selection Logs ${quarter}`,
+        revision: 0,
+        dataAsOf,
+        createdAt: generatedAt,
+        updatedAt: latestUpdatedAt || generatedAt,
+        updatedBy,
+        driveFolderId: FUND_SELECTION_LOGS_DRIVE_FOLDER_ID,
+        items,
+      });
+    };
+    const loadLogFromSheet = async () => {
+      if (!SheetsAPI.accessToken) await SheetsAPI.requestToken(false);
+      const meta = await SheetsAPI.getSheetTabs(FUND_SELECTION_LOGS_SHEET_ID);
+      if (!meta.tabs.includes(quarter)) {
+        return {
+          log: normalizeLog(null),
+          sourceNote: 'New file',
+          warning: `ยังไม่พบแท็บ ${quarter} ใน Google Sheet`,
+        };
+      }
+      const rows = await SheetsAPI.fetchSheetData(FUND_SELECTION_LOGS_SHEET_ID, quarter);
+      const logFromSheet = fundSelectionLogFromSheetRows(rows);
+      return {
+        log: logFromSheet,
+        sourceNote: `Google Sheet: ${quarter}`,
+        warning: logFromSheet.items.length ? '' : `แท็บ ${quarter} ยังไม่มีรายการบันทึก`,
+      };
+    };
+    const loadLogFromJsonStore = async () => {
+      if (!shouldUseLocalLogsApi() && hasLogsApi()) {
+        try {
+          const data = await logsApiRequest('get', { quarter });
+          return {
+            log: normalizeLog(data.log || null),
+            sourceNote: data.source || (data.notFound ? 'New file' : `Google Drive: Fund Selection Logs - ${quarter}.json`),
+            warning: data.notFound ? `ยังไม่พบไฟล์ของ ${quarter}` : '',
+          };
+        } catch (err) {
+          try {
+            const localFile = `Data/Fund Selection Logs - ${quarter}.json`;
+            const resp = await fetch(localFile, { cache: 'no-store' });
+            if (!resp.ok) throw new Error(`Local ${resp.status}`);
+            const payload = await resp.json();
+            return {
+              log: normalizeLog(payload),
+              sourceNote: `Local JSON fallback: ${localFile}`,
+              warning: `Fund Selection Logs API ใช้งานไม่ได้: ${err.message || err}`,
+            };
+          } catch {
+            return {
+              log: normalizeLog(null),
+              sourceNote: 'New file',
+              warning: `Fund Selection Logs API ใช้งานไม่ได้: ${err.message || err}`,
+            };
+          }
+        }
+      }
+      try {
+        const resp = await fetch(`/api/fund-selection-logs?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.ok === false) throw new Error(data.error || `API ${resp.status}`);
+        return {
+          log: normalizeLog(data.log || null),
+          sourceNote: data.source || 'New file',
+          warning: data.warning || (data.notFound ? `ยังไม่พบไฟล์ของ ${quarter}` : ''),
+        };
+      } catch (err) {
+        try {
+          const localFile = `Data/Fund Selection Logs - ${quarter}.json`;
+          const resp = await fetch(localFile, { cache: 'no-store' });
+          if (!resp.ok) throw new Error(`Local ${resp.status}`);
+          const payload = await resp.json();
+          return {
+            log: normalizeLog(payload),
+            sourceNote: `Local JSON fallback: ${localFile}`,
+            warning: `API ใช้งานไม่ได้: ${err.message || err}`,
+          };
+        } catch {
+          return {
+            log: normalizeLog(null),
+            sourceNote: 'New file',
+            warning: `ยังไม่พบไฟล์ของ ${quarter}`,
+          };
+        }
+      }
+    };
     const fslSheetRecordFromRow = (headers, row = [], rowNumber = 1) => {
       const index = fslHeaderIndex(headers);
       const get = (key) => String(row[index[key]] ?? '').trim();
@@ -5986,61 +6241,36 @@ const Pages = {
       fslMentionRecordsForSave(sheetLog).forEach(record => rows.push(record.row));
       return rows;
     };
-
     const loadLog = async () => {
-      if (!shouldUseLocalLogsApi() && hasLogsApi()) {
-        try {
-          const data = await logsApiRequest('get', { quarter });
-          return {
-            log: normalizeLog(data.log || null),
-            sourceNote: data.source || (data.notFound ? 'New file' : `Google Drive: Fund Selection Logs - ${quarter}.json`),
-            warning: data.notFound ? `ยังไม่พบไฟล์ของ ${quarter}` : '',
-          };
-        } catch (err) {
-          try {
-            const localFile = `Data/Fund Selection Logs - ${quarter}.json`;
-            const resp = await fetch(localFile, { cache: 'no-store' });
-            if (!resp.ok) throw new Error(`Local ${resp.status}`);
-            const payload = await resp.json();
-            return {
-              log: normalizeLog(payload),
-              sourceNote: `Local JSON fallback: ${localFile}`,
-              warning: `Fund Selection Logs API ใช้งานไม่ได้: ${err.message || err}`,
-            };
-          } catch {
-            return {
-              log: normalizeLog(null),
-              sourceNote: 'New file',
-              warning: `Fund Selection Logs API ใช้งานไม่ได้: ${err.message || err}`,
-            };
-          }
-        }
-      }
       try {
-        const resp = await fetch(`/api/fund-selection-logs?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok || data.ok === false) throw new Error(data.error || `API ${resp.status}`);
-        return {
-          log: normalizeLog(data.log || null),
-          sourceNote: data.source || 'New file',
-          warning: data.warning || '',
-        };
-      } catch (err) {
-        try {
-          const localFile = `Data/Fund Selection Logs - ${quarter}.json`;
-          const resp = await fetch(localFile, { cache: 'no-store' });
-          if (!resp.ok) throw new Error(`Local ${resp.status}`);
-          const payload = await resp.json();
+        const sheetResult = await loadLogFromSheet();
+        if (sheetResult.log?.items?.length) return sheetResult;
+
+        const jsonResult = await loadLogFromJsonStore();
+        if (jsonResult.log?.items?.length) {
           return {
-            log: normalizeLog(payload),
-            sourceNote: `Local JSON fallback: ${localFile}`,
-            warning: `API ใช้งานไม่ได้: ${err.message || err}`,
+            ...jsonResult,
+            warning: [
+              `Google Sheet ${quarter} อ่านได้แต่ยังแปลงเป็นรายการไม่ได้`,
+              sheetResult.warning,
+              jsonResult.warning,
+            ].filter(Boolean).join(' | '),
+          };
+        }
+        return sheetResult;
+      } catch (sheetErr) {
+        const sheetWarning = `โหลด Google Sheet ไม่สำเร็จ: ${sheetErr.message || sheetErr}`;
+        try {
+          const jsonResult = await loadLogFromJsonStore();
+          return {
+            ...jsonResult,
+            warning: [sheetWarning, jsonResult.warning].filter(Boolean).join(' | '),
           };
         } catch {
           return {
             log: normalizeLog(null),
             sourceNote: 'New file',
-            warning: `ยังไม่พบไฟล์ของ ${quarter}`,
+            warning: sheetWarning,
           };
         }
       }
@@ -6049,7 +6279,7 @@ const Pages = {
       const text = String(message || '');
       if (!text) return '';
       if (text.includes('GOOGLE_SERVICE_ACCOUNT_JSON') || text.includes('GOOGLE_APPLICATION_CREDENTIALS')) {
-        return 'บันทึกลงไฟล์ในเครื่องแล้ว แต่ยัง sync เข้า Google Drive ไม่ได้: ต้องตั้งค่า GOOGLE_APPLICATION_CREDENTIALS หรือ GOOGLE_SERVICE_ACCOUNT_JSON ให้ server ก่อน';
+        return 'บันทึกลงไฟล์ในเครื่องแล้ว แต่ยัง sync เข้า Google Drive ไม่ได้: ต้องตั้งค่า GOOGLE_SERVICE_ACCOUNT_JSON_UPLOAD หรือ GOOGLE_APPLICATION_CREDENTIALS ให้ server ก่อน';
       }
       return text;
     };
@@ -6237,6 +6467,12 @@ const Pages = {
       updateSummary();
       renderItemList();
       renderDetail();
+      const sourceBadge = $('#fsl-source-badge', area);
+      if (sourceBadge) sourceBadge.innerHTML = sourceBadgeHtml(pageKey, sourceNote);
+      const warningBadge = $('#fsl-warning', area);
+      if (warningBadge) {
+        warningBadge.innerHTML = warning ? `<span class="badge badge-warning">${esc(warning)}</span>` : '';
+      }
       const count = $('#fsl-count', area);
       if (count) count.textContent = `${filteredItems().length.toLocaleString()} / ${log.items.length.toLocaleString()} หมวด`;
     };
@@ -6245,14 +6481,14 @@ const Pages = {
       <div class="fsl-page">
         <div class="page-tools">
           <div class="page-tools-meta">
-            ${sourceBadgeHtml(pageKey, sourceNote)}
+            <span id="fsl-source-badge">${sourceBadgeHtml(pageKey, sourceNote)}</span>
             <span class="badge badge-data-origin" id="fsl-count">${log.items.length.toLocaleString()} หมวด</span>
-            ${warning ? `<span class="badge badge-warning">${esc(warning)}</span>` : ''}
+            <span id="fsl-warning">${warning ? `<span class="badge badge-warning">${esc(warning)}</span>` : ''}</span>
           </div>
           <div class="page-tools-actions">
             <button class="btn btn-ghost" id="fsl-add-item" type="button">เพิ่มหมวด</button>
-            <button class="btn btn-secondary" id="fsl-save-sheet" type="button">บันทึกลง Sheet</button>
-            <button class="btn btn-primary" id="fsl-save" type="button">บันทึก JSON</button>
+            <button class="btn btn-primary" id="fsl-save-sheet" type="button">บันทึกลง Sheet</button>
+            <button class="btn btn-secondary" id="fsl-save" type="button">สำรอง JSON ลง Drive</button>
             <button class="btn btn-ghost" id="fsl-reload" type="button">โหลดใหม่</button>
           </div>
         </div>
@@ -6331,6 +6567,9 @@ const Pages = {
         log = cleanForSave();
         const result = await saveFundSelectionRowsToSheet(log);
         const createdTabText = result.createdTab ? ' สร้างแท็บใหม่แล้ว' : '';
+        sourceNote = `Google Sheet: ${quarter}`;
+        warning = '';
+        renderAll();
         toast(
           `บันทึกลง Google Sheet แล้ว: update ${result.updatedCount.toLocaleString()}, append ${result.appendedCount.toLocaleString()}, deleted ${result.deletedCount.toLocaleString()}${createdTabText}`,
           'success',
@@ -6351,7 +6590,6 @@ const Pages = {
         if (!shouldUseLocalLogsApi() && hasLogsApi()) {
           data = await logsApiRequest('save', {
             quarter,
-            baseRevision: State.fundSelectionLogs.baseRevision,
             updatedBy: State.currentUser?.email || '',
             log,
           });
@@ -6361,7 +6599,6 @@ const Pages = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               quarter,
-              baseRevision: State.fundSelectionLogs.baseRevision,
               updatedBy: State.currentUser?.email || '',
               log,
             }),
@@ -6382,9 +6619,9 @@ const Pages = {
         sourceNote = data.driveUploaded ? `Google Drive: ${data.drive?.fileName || `Fund Selection Logs - ${quarter}.json`}` : `Local JSON: Fund Selection Logs - ${quarter}.json`;
         warning = driveWarningMessage(data.warning || '');
         renderAll();
-        toast(warning || 'บันทึก Fund Selection Logs ลง Google Drive แล้ว', warning ? 'warning' : 'success', warning ? 7500 : 3200);
+        toast(warning || 'สำรอง Fund Selection Logs เป็น JSON บน Google Drive แล้ว', warning ? 'warning' : 'success', warning ? 7500 : 3200);
       } catch (err) {
-        toast(`บันทึกไม่สำเร็จ: ${err.message || err}`, 'error', 6500);
+        toast(`สำรอง JSON ไม่สำเร็จ: ${err.message || err}`, 'error', 6500);
       } finally {
         const saveBtn = $('#fsl-save', area);
         if (saveBtn) saveBtn.disabled = false;
@@ -6629,17 +6866,20 @@ const Pages = {
       }
 
       const selectRows = await fetchCached('select-fund');
+      await loadFundOverrides();
       const [
         rawSecRowsCurrent,
         rawSecRowsPrevious,
-        universeCurrent,
-        universePrevious,
+        masterRowsCurrent,
+        masterRowsPrevious,
       ] = await Promise.all([
         fetchCachedForTab(pageKey, currentQuarter),
         fetchCachedForTab(pageKey, previousQuarter),
-        buildSelectedMasterUniverseForQuarter(currentQuarter, selectRows),
-        buildSelectedMasterUniverseForQuarter(previousQuarter, selectRows),
+        fetchCachedForTab('master-placeholder-2', currentQuarter),
+        fetchCachedForTab('master-placeholder-2', previousQuarter),
       ]);
+      const universeCurrent = buildSelectedFeeUniverseFromRows(selectRows, buildMasterRecords(masterRowsCurrent));
+      const universePrevious = buildSelectedFeeUniverseFromRows(selectRows, buildMasterRecords(masterRowsPrevious));
 
       const decorateRows = (rows) => rows
         .sort((a, b) => compareValues(a.combined, b.combined, 'asc'))
@@ -6652,8 +6892,8 @@ const Pages = {
           };
         });
 
-      const feeRowsCurrent = decorateRows(buildFeeComparisonRows(universeCurrent, buildRawSecLookup(rawSecRowsCurrent)));
-      const feeRowsPrevious = decorateRows(buildFeeComparisonRows(universePrevious, buildRawSecLookup(rawSecRowsPrevious)));
+      const feeRowsCurrent = decorateRows(buildFeeComparisonRows(universeCurrent, buildRawSecLookup(rawSecRowsCurrent), { includeThaiOnly: true }));
+      const feeRowsPrevious = decorateRows(buildFeeComparisonRows(universePrevious, buildRawSecLookup(rawSecRowsPrevious), { includeThaiOnly: true }));
 
       if (!feeRowsCurrent.length && !feeRowsPrevious.length) {
         setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Data For SEC API และ AVP Master Fund ID', pageKey);
@@ -9904,10 +10144,10 @@ const Pages = {
       $('#fdm-delete', area)?.addEventListener('click', async () => {
         if (!selected.key) return;
         try {
-          await deleteMasterAllocation(selected.key);
+          const result = await deleteMasterAllocation(selected.key);
           State.fundDataManager.draftMapping = null;
           State.fundDataManager.selectedKey = selected.key;
-          toast('ลบ mapping แล้ว', 'success');
+          toast(result.warning || 'ลบ mapping แล้ว', result.warning ? 'warning' : 'success');
           render();
         } catch (err) {
           toast(err.message || 'ลบไม่สำเร็จ', 'error');
@@ -9917,6 +10157,7 @@ const Pages = {
         e.preventDefault();
         if (!selected) return;
         const payload = {
+          quarter: State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1',
           thaiFundCode: selected.code,
           thaiFundName: selected.name || '',
           allocations: readAllocationsFromForm(),
@@ -9925,10 +10166,11 @@ const Pages = {
           note: mapping.note || '',
         };
         try {
-          const saved = await saveMasterAllocation(payload);
+          const result = await saveMasterAllocation(payload);
+          const saved = result.item || {};
           State.fundDataManager.draftMapping = null;
           State.fundDataManager.selectedKey = saved.key || selected.key;
-          toast('บันทึก Master Mapping แล้ว', 'success');
+          toast(result.warning || 'บันทึก Master Mapping แล้ว', result.warning ? 'warning' : 'success');
           render();
         } catch (err) {
           toast(err.message || 'บันทึกไม่สำเร็จ', 'error');
@@ -9948,7 +10190,10 @@ const Pages = {
     let rawRows;
     try {
       rawRows = await fetchCached('select-fund');
-      await loadFundOverrides();
+      await Promise.all([
+        loadFundOverrides(),
+        loadMasterAllocations(true),
+      ]);
     } catch (e) {
       setError(area, e.message, 'select-fund');
       return;
@@ -9968,6 +10213,35 @@ const Pages = {
     const opt = (val, label, cur) =>
       `<option value="${esc(val)}" ${cur === val ? 'selected' : ''}>${esc(label)}</option>`;
 
+    const getSavedMasterAllocations = (fund) => {
+      const saved = State.masterAllocations?.items?.[fund.key];
+      const allocations = Array.isArray(saved?.allocations) ? saved.allocations : [];
+      return allocations.filter(item => item?.masterId || item?.masterName);
+    };
+    const masterMappingDisplay = (fund) => {
+      const allocations = getSavedMasterAllocations(fund);
+      if (!allocations.length) {
+        return {
+          isMapped: false,
+          masterId: fund.masterId,
+          masterName: fund.masterName,
+          searchText: `${fund.masterId || ''} ${fund.masterName || ''}`,
+        };
+      }
+      const masterId = allocations.map(item => item.masterId).filter(Boolean).join(', ') || '-';
+      const masterName = allocations.map(item => {
+        const name = item.masterName || item.masterId || '-';
+        const weight = parseFloat(item.weight);
+        return Number.isNaN(weight) ? name : `${name} (${weight.toFixed(2)}%)`;
+      }).join(' + ');
+      return {
+        isMapped: true,
+        masterId,
+        masterName,
+        searchText: allocations.map(item => `${item.masterId || ''} ${item.masterName || ''}`).join(' '),
+      };
+    };
+
     const render = (goPage = 1, opts = {}) => {
       const preserveScroll = !!opts.preserveScroll;
       const prevScrollTop = preserveScroll ? area.scrollTop : 0;
@@ -9976,7 +10250,8 @@ const Pages = {
 
       /* Filter */
       let visible = allFunds.filter(f => {
-        if (State.selectFundFilters.query && !f.code.toLowerCase().includes(State.selectFundFilters.query) && !f.masterName.toLowerCase().includes(State.selectFundFilters.query)) return false;
+        const mappingText = masterMappingDisplay(f).searchText.toLowerCase();
+        if (State.selectFundFilters.query && !f.code.toLowerCase().includes(State.selectFundFilters.query) && !f.masterName.toLowerCase().includes(State.selectFundFilters.query) && !mappingText.includes(State.selectFundFilters.query)) return false;
         if (State.selectFundFilters.category && f.category !== State.selectFundFilters.category) return false;
         if (State.selectFundFilters.type  && f.type     !== State.selectFundFilters.type)  return false;
         if (State.selectFundFilters.style && f.style    !== State.selectFundFilters.style) return false;
@@ -9989,6 +10264,9 @@ const Pages = {
           if (key === 'highlight') {
             const idx = State.highlights[fund.key];
             return idx === undefined ? '' : HL_COLORS[idx]?.name || '';
+          }
+          if (key === 'masterId' || key === 'masterName') {
+            return masterMappingDisplay(fund)[key];
           }
           return fund[key];
         };
@@ -10007,6 +10285,7 @@ const Pages = {
       const allVisibleChecked = pageData.length > 0 && pageData.every(f => State.selectedKeys.has(f.key));
       const tRows = pageData.map(f => {
         const isSelected = State.selectedKeys.has(f.key);
+        const mapping = masterMappingDisplay(f);
         return `
           <tr data-key="${esc(f.key)}" class="${isSelected ? 'row-selected' : ''}">
             <td class="td-check">
@@ -10016,8 +10295,8 @@ const Pages = {
             <td class="td-hl">${buildHighlightSelect(f.key, State.highlights[f.key])}</td>
             <td>${esc(f.dividend)}</td>
             <td>${esc(f.style)}</td>
-            <td class="td-isin">${esc(f.masterId)}</td>
-            <td>${esc(f.masterName)}${f.isOverride ? ' <span class="badge badge-accent fund-override-mini">แก้ไขแล้ว</span>' : ''}</td>
+            <td class="td-isin">${esc(mapping.masterId)}</td>
+            <td>${esc(mapping.masterName)}${mapping.isMapped ? ' <span class="badge badge-success fund-override-mini">Master Mapping</span>' : ''}${f.isOverride ? ' <span class="badge badge-accent fund-override-mini">แก้ไขแล้ว</span>' : ''}</td>
           </tr>`;
       }).join('');
 
@@ -10066,6 +10345,9 @@ const Pages = {
               : ''}
             ${Object.keys(State.fundOverrides?.items || {}).length > 0
               ? `<span class="badge badge-success">ข้อมูลแก้ไข ${Object.keys(State.fundOverrides.items).length} รายการ</span>`
+              : ''}
+            ${Object.keys(State.masterAllocations?.items || {}).length > 0
+              ? `<span class="badge badge-success">Master Mapping ${Object.keys(State.masterAllocations.items).length} รายการ</span>`
               : ''}
             ${CI.CATEGORY === -1
               ? `<span class="badge badge-warning">ยังไม่พบคอลัมน์ AVP® Category</span>`
@@ -10213,16 +10495,19 @@ const Pages = {
     App._currentExport = () => {
       const selectedRows = allFunds
         .filter(f => State.selectedKeys.has(f.key))
-        .map(f => [
-          f.code,
-          f.category,
-          f.type,
-          f.dividend,
-          f.style,
-          f.masterId,
-          f.masterName,
-          State.highlights[f.key] !== undefined ? HL_COLORS[State.highlights[f.key]].name : '',
-        ]);
+        .map(f => {
+          const mapping = masterMappingDisplay(f);
+          return [
+            f.code,
+            f.category,
+            f.type,
+            f.dividend,
+            f.style,
+            mapping.masterId,
+            mapping.masterName,
+            State.highlights[f.key] !== undefined ? HL_COLORS[State.highlights[f.key]].name : '',
+          ];
+        });
 
       if (selectedRows.length === 0) {
         toast('ยังไม่ได้เลือกกองทุนสำหรับ Export', 'warning');
