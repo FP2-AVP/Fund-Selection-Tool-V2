@@ -1,0 +1,120 @@
+name: Build FT Historical Prices Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      quarter:
+        description: "Quarter label, used for artifact naming."
+        required: true
+        default: "2026-Q1"
+      symbol:
+        description: "FT Markets symbol, e.g. IXN:PCQ:USD"
+        required: true
+        default: "IXN:PCQ:USD"
+      ft_url:
+        description: "Original FT.com URL, kept for logs."
+        required: false
+        default: ""
+      start_date:
+        description: "Historical price start date, YYYY-MM-DD"
+        required: false
+        default: ""
+      end_date:
+        description: "Historical price end date, YYYY-MM-DD"
+        required: false
+        default: ""
+      run_prices:
+        description: "Fetch historical price rows"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      run_qualitative:
+        description: "Fetch profile/risk/holdings qualitative rows"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      drive_folder_id:
+        description: "Google Drive folder id for ft_historical_prices_database.json"
+        required: true
+        default: "1Locig3aW7hVs0SxCoeFpa76OJ0XcF1rg"
+      file_name:
+        description: "Output JSON file name"
+        required: true
+        default: "ft_historical_prices_database.json"
+      app_script_url:
+        description: "Apps Script web app URL for saving the output JSON to Drive"
+        required: false
+        default: ""
+      app_script_key:
+        description: "Apps Script API key"
+        required: false
+        default: ""
+
+jobs:
+  build-ft-historical-prices-database:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show sync plan
+        run: |
+          echo "quarter=${{ inputs.quarter }}"
+          echo "symbol=${{ inputs.symbol }}"
+          echo "ft_url=${{ inputs.ft_url }}"
+          echo "run_prices=${{ inputs.run_prices }}"
+          echo "run_qualitative=${{ inputs.run_qualitative }}"
+          echo "start_date=${{ inputs.start_date }}"
+          echo "end_date=${{ inputs.end_date }}"
+
+      - name: Sync FT historical prices
+        if: ${{ inputs.run_prices == 'true' }}
+        run: |
+          python scripts/ft_historical_prices_store.py \
+            --symbol "${{ inputs.symbol }}" \
+            --start-date "${{ inputs.start_date }}" \
+            --end-date "${{ inputs.end_date }}"
+
+      - name: Sync FT qualitative data
+        if: ${{ inputs.run_qualitative == 'true' }}
+        run: |
+          python scripts/ft_historical_prices_store.py \
+            --symbol "${{ inputs.symbol }}" \
+            --qualitative-only
+
+      - name: Export FT database JSON
+        run: |
+          python scripts/ft_historical_prices_store.py \
+            --export-json \
+            --output "Data/ft_historical_prices/exports/${{ inputs.file_name }}"
+
+      - name: Upload FT database JSON via Apps Script
+        if: ${{ inputs.app_script_url != '' }}
+        run: |
+          python scripts/upload_ft_historical_database_to_apps_script.py \
+            --url "${{ inputs.app_script_url }}" \
+            --key "${{ inputs.app_script_key }}" \
+            --input "Data/ft_historical_prices/exports/${{ inputs.file_name }}" \
+            --folder-id "${{ inputs.drive_folder_id }}" \
+            --file-name "${{ inputs.file_name }}"
+
+      - name: Upload JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ft-historical-prices-database-${{ inputs.quarter }}
+          path: Data/ft_historical_prices/exports/${{ inputs.file_name }}
+          if-no-files-found: error
