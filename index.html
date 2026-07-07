@@ -6,13 +6,11 @@
   <title>Fund Selection Tool – FP2</title>
   <meta name="description" content="Fund Selection Tool for FP2 ใช้สำหรับคัดเลือก เปรียบเทียบ และวิเคราะห์ข้อมูลกองทุนจาก Google Sheets ภายในองค์กร">
   <meta name="theme-color" content="#1a3c6e">
-  <link rel="stylesheet" href="css/style.css?v=20260701-sec-actual-coverage-only">
+  <link rel="stylesheet" href="css/style.css?v=20260706-income-detail-modal">
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" defer></script>
   <!-- SheetJS for Excel export -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js" defer></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" defer></script>
 </head>
 <body>
 
@@ -211,12 +209,6 @@
             </span>
             ปัจจัยประกอบอื่นๆ 4
           </a>
-          <a class="nav-item" data-page="master-placeholder-8" href="#">
-            <span class="nav-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16"/><path d="M9 4v16"/></svg>
-            </span>
-            Top 10 Holding
-          </a>
         </div>
 
         <div class="nav-section">
@@ -236,6 +228,28 @@
         </div>
 
         <div class="nav-section">
+          <div class="nav-label">Robustness Fund</div>
+          <a class="nav-item" data-page="robustness-ft-import" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/><path d="M4 17h16"/></svg>
+            </span>
+            เตรียมข้อมูลจาก FT.com
+          </a>
+          <a class="nav-item" data-page="ft-top10-holding" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/><path d="M8 6v12"/><path d="M16 6v12"/></svg>
+            </span>
+            Top 10 Holding
+          </a>
+          <a class="nav-item" data-page="upside-downside-capture" href="#">
+            <span class="nav-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 14 4-4 3 3 5-7"/><path d="m16 6h3v3"/></svg>
+            </span>
+            Upside Downside Capture
+          </a>
+        </div>
+
+        <div class="nav-section">
           <div class="nav-label">เครื่องมือ</div>
           <a class="nav-item" data-page="fund-list-update" href="#">
             <span class="nav-icon">
@@ -248,12 +262,6 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5V4.8A2.8 2.8 0 0 1 6.8 2H20v18H6.5A2.5 2.5 0 0 0 4 22"/><path d="M8 7h8"/><path d="M8 11h8"/><path d="M8 15h5"/></svg>
             </span>
             Fund Selection Logs
-          </a>
-          <a class="nav-item" data-page="avenger-studio" href="#">
-            <span class="nav-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><circle cx="11" cy="11" r="2"/></svg>
-            </span>
-            Avenger Studio
           </a>
         </div>
       </nav>
@@ -337,7 +345,6 @@
   <script src="js/config.js?v=20260620-client-847033645933"></script>
   <script src="js/config.override.js?v=20260628-github-token"></script>
   <script src="js/sheets.js?v=20260620-import-files"></script>
-  <script src="js/avenger-studio.js?v=20260413c"></script>
-  <script src="js/app.js?v=20260705-apps-script-fetch-first"></script>
+  <script src="js/app.js?v=20260706-income-detail-modal"></script>
 </body>
 </html>
