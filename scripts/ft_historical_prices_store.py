@@ -817,6 +817,200 @@ def write_raw(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def row_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {key: row[key] for key in row.keys()}
+
+
+def export_database_json(db_path: Path = DEFAULT_DB_PATH, output_path: Path | None = None) -> dict[str, Any]:
+    init_db(db_path)
+    output_path = output_path or (DEFAULT_OUTPUT_ROOT / "exports" / "ft_historical_prices_database.json")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        symbols = [
+            row_dict(row)
+            for row in conn.execute(
+                """
+                with symbol_keys as (
+                    select symbol from ft_historical_prices
+                    union
+                    select symbol from ft_profile_investment
+                    union
+                    select symbol from ft_risk_measures
+                    union
+                    select symbol from ft_top_holdings
+                ),
+                price_symbols as (
+                    select
+                        symbol,
+                        max(ft_issue_id) as ftIssueId,
+                        count(*) as rowCount,
+                        min(price_date) as startDate,
+                        max(price_date) as endDate
+                    from ft_historical_prices
+                    group by symbol
+                ),
+                profile_symbols as (
+                    select
+                        symbol,
+                        max(ft_issue_id) as ftIssueId,
+                        count(*) as profileRowCount
+                    from ft_profile_investment
+                    group by symbol
+                ),
+                risk_symbols as (
+                    select
+                        symbol,
+                        max(ft_issue_id) as ftIssueId,
+                        count(*) as riskRowCount
+                    from ft_risk_measures
+                    group by symbol
+                ),
+                holdings_symbols as (
+                    select
+                        symbol,
+                        max(ft_issue_id) as ftIssueId,
+                        count(*) as holdingsRowCount
+                    from ft_top_holdings
+                    group by symbol
+                ),
+                display_names as (
+                    select symbol, max(value) as displayName
+                    from ft_profile_investment
+                    where section = 'metadata' and field = 'FT display name' and value is not null and value <> ''
+                    group by symbol
+                )
+                select
+                    k.symbol,
+                    coalesce(p.ftIssueId, q.ftIssueId, r.ftIssueId, h.ftIssueId, '') as ftIssueId,
+                    coalesce(d.displayName, '') as displayName,
+                    coalesce(p.rowCount, 0) as rowCount,
+                    coalesce(q.profileRowCount, 0) as profileRowCount,
+                    coalesce(r.riskRowCount, 0) as riskRowCount,
+                    coalesce(h.holdingsRowCount, 0) as holdingsRowCount,
+                    coalesce(p.startDate, '') as startDate,
+                    coalesce(p.endDate, '') as endDate
+                from symbol_keys k
+                left join price_symbols p on upper(p.symbol) = upper(k.symbol)
+                left join profile_symbols q on upper(q.symbol) = upper(k.symbol)
+                left join risk_symbols r on upper(r.symbol) = upper(k.symbol)
+                left join holdings_symbols h on upper(h.symbol) = upper(k.symbol)
+                left join display_names d on upper(d.symbol) = upper(k.symbol)
+                order by k.symbol
+                """
+            )
+        ]
+        for item in symbols:
+            item["displayLabel"] = f"{item['symbol']} - {item['displayName']}" if item.get("displayName") else item.get("symbol", "")
+
+        prices = [
+            row_dict(row)
+            for row in conn.execute(
+                """
+                select
+                    symbol,
+                    price_date as date,
+                    open,
+                    high,
+                    low,
+                    close,
+                    volume,
+                    source,
+                    fetched_at as fetchedAt
+                from ft_historical_prices
+                order by symbol, price_date desc
+                """
+            )
+        ]
+        profile = [
+            row_dict(row)
+            for row in conn.execute(
+                """
+                select
+                    symbol,
+                    section,
+                    field,
+                    value,
+                    source,
+                    fetched_at as fetchedAt
+                from ft_profile_investment
+                order by symbol,
+                    case section when 'metadata' then 0 when 'profile' then 1 when 'investment' then 2 else 3 end,
+                    field
+                """
+            )
+        ]
+        risk = [
+            row_dict(row)
+            for row in conn.execute(
+                """
+                select
+                    symbol,
+                    period,
+                    metric,
+                    fund_value as fundValue,
+                    category_average as categoryAverage,
+                    benchmark_used as benchmarkUsed,
+                    as_of_date as asOfDate,
+                    source,
+                    fetched_at as fetchedAt
+                from ft_risk_measures
+                order by symbol,
+                    case period when '1 year' then 1 when '3 year' then 2 when '5 years' then 3 else 4 end,
+                    metric
+                """
+            )
+        ]
+        holdings = [
+            row_dict(row)
+            for row in conn.execute(
+                """
+                select
+                    symbol,
+                    rank,
+                    holding_name as holdingName,
+                    holding_symbol as holdingSymbol,
+                    one_year_change as oneYearChange,
+                    portfolio_weight as portfolioWeight,
+                    long_allocation as longAllocation,
+                    top10_portfolio_percent as top10PortfolioPercent,
+                    as_of_date as asOfDate,
+                    source,
+                    fetched_at as fetchedAt
+                from ft_top_holdings
+                order by symbol, rank
+                """
+            )
+        ]
+
+    selected_symbol = symbols[0]["symbol"] if symbols else ""
+    rows = [row for row in prices if row.get("symbol") == selected_symbol]
+    payload = {
+        "generated_at": utc_now(),
+        "source_database": str(db_path),
+        "counts": {
+            "symbols": len(symbols),
+            "price_rows": len(prices),
+            "profile_rows": len(profile),
+            "risk_rows": len(risk),
+            "holding_rows": len(holdings),
+        },
+        "symbols": symbols,
+        "selectedSymbol": selected_symbol,
+        "selectedDisplayName": next((item.get("displayName", "") for item in symbols if item.get("symbol") == selected_symbol), ""),
+        "selectedDisplayLabel": next((item.get("displayLabel", "") for item in symbols if item.get("symbol") == selected_symbol), selected_symbol),
+        "rows": rows,
+        "prices": prices,
+        "profile": profile,
+        "risk": risk,
+        "holdings": holdings,
+        "stats": [],
+        "source": "Google Drive JSON: ft_historical_prices_database.json",
+    }
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"output_path": str(output_path), **payload["counts"]}
+
+
 def sync_historical_prices(
     symbol: str,
     start_date: str,
@@ -930,7 +1124,19 @@ def main() -> int:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--qualitative-only", action="store_true", help="Fetch summary/profile and risk data without historical prices")
+    parser.add_argument("--export-json", action="store_true", help="Export the SQLite database to a Drive-friendly JSON file")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT_ROOT / "exports" / "ft_historical_prices_database.json",
+        help="Output path for --export-json",
+    )
     args = parser.parse_args()
+
+    if args.export_json:
+        result = export_database_json(args.db_path, args.output)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
 
     if args.qualitative_only:
         result = sync_qualitative_data(args.symbol, args.output_root, args.db_path)
