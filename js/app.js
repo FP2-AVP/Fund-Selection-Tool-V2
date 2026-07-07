@@ -20,6 +20,8 @@ const INCOME_FUND_DIVIDEND_DB_FALLBACK_FILES = [
   INCOME_FUND_DIVIDEND_DB_FILE,
   'Dividend Database/exports/dividend_history_database.json',
 ];
+const INCOME_FUND_DIVIDEND_DRIVE_FOLDER_ID = '1SBJshoukb5O9hdTawTtexVQzo4oLfW3u';
+const INCOME_FUND_DIVIDEND_DB_FILE_NAME = 'dividend_history_database.json';
 
 /* ── Application State ── */
 const State = {
@@ -2163,15 +2165,26 @@ function incomeFundPolicyLabel(value) {
   return value === 'Redemption' ? 'Auto Redeem' : value;
 }
 
+function incomeFundDividendApiUrl() {
+  return String(CONFIG.INCOME_FUND_DIVIDEND_API_WEB_APP_URL || '').trim();
+}
+
+function incomeFundDividendApiKey() {
+  return String(CONFIG.INCOME_FUND_DIVIDEND_API_SECRET_KEY || '').trim();
+}
+
 function truthySheetValue(value) {
   return /^(true|yes|y|1|selected|ติ๊ก|เลือก)$/i.test(String(value || '').trim());
 }
 
 async function loadIncomeFundDividendDatabase(force = false) {
   if (!force && State.incomeFundDividendDatabase) return State.incomeFundDividendDatabase;
+  const apiUrl = incomeFundDividendApiUrl();
+  const apiKey = incomeFundDividendApiKey();
   const configuredUrl = String(CONFIG.INCOME_FUND_DIVIDEND_DB_URL || '').trim();
   const candidates = [...new Set([
     configuredUrl,
+    apiUrl ? `${apiUrl}?action=database&fileName=${encodeURIComponent(INCOME_FUND_DIVIDEND_DB_FILE_NAME)}&folderId=${encodeURIComponent(INCOME_FUND_DIVIDEND_DRIVE_FOLDER_ID)}${apiKey ? `&key=${encodeURIComponent(apiKey)}` : ''}` : '',
     ...INCOME_FUND_DIVIDEND_DB_FALLBACK_FILES,
   ].filter(Boolean))];
   let lastError = null;
@@ -2193,6 +2206,49 @@ async function loadIncomeFundDividendDatabase(force = false) {
   }
 
   throw new Error(`โหลด Dividend History Database ไม่ได้: ${lastError?.message || 'ไม่พบไฟล์'}`);
+}
+
+async function triggerIncomeFundDividendSync(funds = []) {
+  const apiUrl = incomeFundDividendApiUrl();
+  if (!apiUrl) {
+    throw new Error('ยังไม่ได้ตั้งค่า CONFIG.INCOME_FUND_DIVIDEND_API_WEB_APP_URL');
+  }
+  const url = new URL(apiUrl);
+  url.searchParams.set('action', 'sync');
+  url.searchParams.set('quarter', incomeFundSelectionQuarter());
+  url.searchParams.set('folderId', INCOME_FUND_DIVIDEND_DRIVE_FOLDER_ID);
+  url.searchParams.set('fileName', INCOME_FUND_DIVIDEND_DB_FILE_NAME);
+  if (incomeFundDividendApiKey()) url.searchParams.set('key', incomeFundDividendApiKey());
+
+  const payload = {
+    quarter: incomeFundSelectionQuarter(),
+    folderId: INCOME_FUND_DIVIDEND_DRIVE_FOLDER_ID,
+    fileName: INCOME_FUND_DIVIDEND_DB_FILE_NAME,
+    funds: funds.map(fund => ({
+      code: fund.code,
+      projId: fund.projId,
+      policy: fund.policy,
+    })).filter(fund => fund.code || fund.projId),
+  };
+
+  const resp = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+    cache: 'no-store',
+    redirect: 'follow',
+  });
+  const text = await resp.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(text || `Dividend sync API HTTP ${resp.status}`);
+  }
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || data.message || `Dividend sync API HTTP ${resp.status}`);
+  }
+  return data;
 }
 
 function compactIsoDate(value) {
@@ -15387,6 +15443,7 @@ const Pages = {
     const dividendIndex = buildIncomeDividendIndex(dividendDb);
     const filters = State.incomeFund2Filters;
     const sortState = State.incomeFund2Sort;
+    let dividendSyncRunning = false;
 
     const rows = selectedFunds.map(fund => {
       const historyRows = dividendIndex.get(fund.key) || dividendIndex.get(normalizeFundKey(fund.code)) || [];
@@ -15471,6 +15528,10 @@ const Pages = {
                 ${opt('Finnomena', 'Finnomena')}
               </select>
             </div>
+            <button class="btn btn-ghost btn-sm" id="income-focus-sync-dividend"
+              title="เรียก Apps Script เพื่อ trigger GitHub Actions/Python และอัปเดตไฟล์ Dividend History Database">
+              ดึงข้อมูลปันผล
+            </button>
             <button class="btn btn-ghost btn-sm" id="income-focus-refresh">รีเฟรช Selection</button>
           </div>
           <div class="sf-meta">
@@ -15525,6 +15586,27 @@ const Pages = {
         render();
       });
       $('#income-focus-refresh', area)?.addEventListener('click', () => Pages.incomeFundFocus(area, pageKey));
+      const syncBtn = $('#income-focus-sync-dividend', area);
+      if (syncBtn) {
+        syncBtn.disabled = dividendSyncRunning;
+        syncBtn.textContent = dividendSyncRunning ? 'กำลังสั่งดึงข้อมูล...' : 'ดึงข้อมูลปันผล';
+        syncBtn.addEventListener('click', async () => {
+          if (dividendSyncRunning) return;
+          dividendSyncRunning = true;
+          syncBtn.disabled = true;
+          syncBtn.textContent = 'กำลังสั่งดึงข้อมูล...';
+          try {
+            const result = await triggerIncomeFundDividendSync(rows);
+            toast(result.message || 'สั่งดึงข้อมูลปันผลแล้ว รอ GitHub Actions ทำงานเสร็จแล้วค่อยรีเฟรช', 'success', 6500);
+          } catch (err) {
+            toast(err.message || String(err), 'error', 8000);
+          } finally {
+            dividendSyncRunning = false;
+            syncBtn.disabled = false;
+            syncBtn.textContent = 'ดึงข้อมูลปันผล';
+          }
+        });
+      }
       $$('.sf-sort', area).forEach(el => {
         el.addEventListener('click', () => {
           toggleNamedSort(sortState, el.dataset.sortKey);
