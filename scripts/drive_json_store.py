@@ -18,6 +18,7 @@ def credentials_from_env() -> Any:
 
     raw_json = (
         os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_UPLOAD", "").strip()
+        or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT", "").strip()
         or os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     )
     if raw_json:
