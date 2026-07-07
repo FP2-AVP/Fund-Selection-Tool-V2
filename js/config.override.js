@@ -21,6 +21,7 @@ if (typeof CONFIG !== 'undefined') {
   CONFIG.MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
   CONFIG.FIXED_INCOME_FACTORS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzHr34Gg48W9awG2Hde3P_XOxGUVLf2k_W-ySRWt-2IaIa7VOD6IsYfm-LmfhaYSwRn/exec';
   CONFIG.FIXED_INCOME_FACTORS_API_SECRET_KEY = 'change-this-fixed-income-factors-api-key';
+  CONFIG.INCOME_FUND_DIVIDEND_DB_URL = '';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */
   const FILE = {

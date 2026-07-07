@@ -16,6 +16,10 @@ const INCOME_FUND_SELECTION_SHEET_ID = '1Qe3B4nEz9brLRVSMZcTxilmNmfGLs3K3F5DAZ5m
 const INCOME_FUND_SELECTION_TAB = 'Income Fund Selection';
 const INCOME_FUND_SELECTION_HEADERS = ['Quarter', 'Fund Code', 'proj_id', 'fund_class_name', 'proj_abbr_name', 'Selected', 'Updated At', 'Updated By'];
 const INCOME_FUND_DIVIDEND_DB_FILE = 'Dividend%20Database/exports/dividend_history_database.json';
+const INCOME_FUND_DIVIDEND_DB_FALLBACK_FILES = [
+  INCOME_FUND_DIVIDEND_DB_FILE,
+  'Dividend Database/exports/dividend_history_database.json',
+];
 
 /* ── Application State ── */
 const State = {
@@ -2085,29 +2089,60 @@ async function fetchIncomeFundUniverseRows(pageKey) {
 
 async function loadIncomeFundSecMetadata(force = false) {
   if (!force && State.incomeFundSecMetadataByCode) return State.incomeFundSecMetadataByCode;
+  const map = new Map();
+  const remember = (key, meta) => {
+    const normalized = normalizeFundKey(key);
+    if (!normalized || map.has(normalized)) return;
+    map.set(normalized, {
+      projId: String(meta?.projId || '').trim(),
+      fundClassName: String(meta?.fundClassName || '').trim(),
+      projAbbrName: String(meta?.projAbbrName || '').trim(),
+      matchSource: String(meta?.matchSource || '').trim(),
+    });
+  };
+
   try {
     const resp = await fetch('outputs/dividend_by_proj_id_all.json', { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const payload = await resp.json();
     const items = Array.isArray(payload?.items) ? payload.items : [];
-    const map = new Map();
     items.forEach(item => {
-      const code = normalizeFundKey(item?.fund_code);
-      if (!code || map.has(code)) return;
-      map.set(code, {
+      remember(item?.fund_code, {
         projId: String(item?.proj_id || '').trim(),
         fundClassName: String(item?.sec_fund_class_name || '').trim(),
         projAbbrName: String(item?.sec_proj_abbr_name || '').trim(),
         matchSource: String(item?.match_source || '').trim(),
       });
     });
-    State.incomeFundSecMetadataByCode = map;
-    return map;
   } catch (err) {
-    console.warn('Income Fund SEC metadata unavailable:', err);
-    State.incomeFundSecMetadataByCode = new Map();
-    return State.incomeFundSecMetadataByCode;
+    console.warn('Income Fund SEC metadata output file unavailable:', err);
   }
+
+  try {
+    const secRows = await fetchCached('master-placeholder-4');
+    const headers = secRows[0] || [];
+    const idx = {
+      projId: findColumnIndex(headers, ['proj_id', 'Project ID']),
+      fundClassName: findColumnIndex(headers, ['fund_class_name', 'class_abbr_name', 'Fund Class Name']),
+      projAbbrName: findColumnIndex(headers, ['proj_abbr_name', 'Project Abbr Name']),
+    };
+
+    secRows.slice(1).forEach(row => {
+      const meta = {
+        projId: rowValue(row, idx.projId),
+        fundClassName: rowValue(row, idx.fundClassName),
+        projAbbrName: rowValue(row, idx.projAbbrName),
+        matchSource: 'Data For SEC API',
+      };
+      remember(meta.fundClassName, meta);
+      remember(meta.projAbbrName, meta);
+    });
+  } catch (err) {
+    console.warn('Income Fund SEC metadata Drive JSON unavailable:', err);
+  }
+
+  State.incomeFundSecMetadataByCode = map;
+  return State.incomeFundSecMetadataByCode;
 }
 
 function incomeFundSecMetadata(code) {
@@ -2134,16 +2169,30 @@ function truthySheetValue(value) {
 
 async function loadIncomeFundDividendDatabase(force = false) {
   if (!force && State.incomeFundDividendDatabase) return State.incomeFundDividendDatabase;
-  const resp = await fetch(INCOME_FUND_DIVIDEND_DB_FILE, { cache: 'no-store' });
-  if (!resp.ok) {
-    throw new Error(`โหลด Dividend History Database ไม่ได้ (${resp.status})`);
+  const configuredUrl = String(CONFIG.INCOME_FUND_DIVIDEND_DB_URL || '').trim();
+  const candidates = [...new Set([
+    configuredUrl,
+    ...INCOME_FUND_DIVIDEND_DB_FALLBACK_FILES,
+  ].filter(Boolean))];
+  let lastError = null;
+
+  for (const url of candidates) {
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`${url} (${resp.status})`);
+      const payload = await resp.json();
+      if (!Array.isArray(payload?.dividend_history)) {
+        throw new Error(`${url} format ไม่ถูกต้อง`);
+      }
+      State.incomeFundDividendDatabase = payload;
+      return payload;
+    } catch (err) {
+      lastError = err;
+      console.warn('Income Fund dividend database unavailable:', err);
+    }
   }
-  const payload = await resp.json();
-  if (!Array.isArray(payload?.dividend_history)) {
-    throw new Error('Dividend History Database format ไม่ถูกต้อง');
-  }
-  State.incomeFundDividendDatabase = payload;
-  return payload;
+
+  throw new Error(`โหลด Dividend History Database ไม่ได้: ${lastError?.message || 'ไม่พบไฟล์'}`);
 }
 
 function compactIsoDate(value) {
@@ -15312,7 +15361,8 @@ const Pages = {
     setLoading(area, 'กำลังโหลด Focus Group จาก Income Fund...');
 
     let rawRows;
-    let dividendDb;
+    let dividendDb = { dividend_history: [] };
+    let dividendDbWarning = '';
     try {
       rawRows = await fetchIncomeFundUniverseRows(pageKey);
       await Promise.all([
@@ -15320,10 +15370,15 @@ const Pages = {
         loadIncomeFundSecMetadata(),
         loadIncomeFundSelection(true),
       ]);
-      dividendDb = await loadIncomeFundDividendDatabase(true);
     } catch (e) {
       setError(area, e.message, pageKey);
       return;
+    }
+
+    try {
+      dividendDb = await loadIncomeFundDividendDatabase(true);
+    } catch (e) {
+      dividendDbWarning = e.message || String(e);
     }
 
     const allFunds = applyFundOverrides(buildSelectedFundsCatalog(rawRows))
@@ -15426,6 +15481,7 @@ const Pages = {
             <span class="badge badge-success">SEC ${sourceCounts.SEC.toLocaleString()}</span>
             <span class="badge badge-success">Finnomena ${sourceCounts.Finnomena.toLocaleString()}</span>
             ${getPageDataSourceBadge(pageKey) ? `<span class="badge badge-data-origin">${esc(getPageDataSourceBadge(pageKey))}</span>` : ''}
+            ${dividendDbWarning ? `<span class="badge badge-warning">${esc(dividendDbWarning)}</span>` : ''}
           </div>
           ${rows.length ? `
             <div class="table-wrapper">
