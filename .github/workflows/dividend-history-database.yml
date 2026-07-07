@@ -15,6 +15,14 @@ on:
         description: "Output JSON file name"
         required: true
         default: "dividend_history_database.json"
+      app_script_url:
+        description: "Apps Script web app URL for saving the output JSON to Drive"
+        required: false
+        default: ""
+      app_script_key:
+        description: "Apps Script API key"
+        required: false
+        default: ""
       sync_sec:
         description: "Fetch SEC dividend history"
         required: true
@@ -77,12 +85,19 @@ jobs:
         run: |
           python scripts/dividend_history_store.py sync-finnomena --workers 12
 
-      - name: Export and upload dividend database JSON
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_EXPORT }}
+      - name: Export dividend database JSON
         run: |
-          python scripts/dividend_history_store.py upload-json \
-            --drive-folder-id "${{ inputs.drive_folder_id }}" \
+          python scripts/dividend_history_store.py export-json \
+            --output "Dividend Database/exports/${{ inputs.file_name }}"
+
+      - name: Upload dividend database JSON via Apps Script
+        if: ${{ inputs.app_script_url != '' }}
+        run: |
+          python scripts/upload_dividend_database_to_apps_script.py \
+            --url "${{ inputs.app_script_url }}" \
+            --key "${{ inputs.app_script_key }}" \
+            --input "Dividend Database/exports/${{ inputs.file_name }}" \
+            --folder-id "${{ inputs.drive_folder_id }}" \
             --file-name "${{ inputs.file_name }}"
 
       - name: Upload JSON artifact
