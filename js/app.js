@@ -2078,11 +2078,8 @@ async function fetchIncomeFundListRows(pageKey) {
 
 async function fetchIncomeFundUniverseRows(pageKey) {
   ensureExtendedPageConfigs();
-  const cfg = CONFIG.PAGES['select-fund'];
-  const quarter = State.currentQuarter || cfg?.tabName || '2026-Q1';
-  const localFile = resolveQuarterLocalFile(cfg?.localFile, cfg?.tabName, quarter);
-  const rows = await fetchLocalRows(localFile);
-  State._pageDataSource[pageKey] = `Local JSON: Fund Key Performance AVP (${quarter})`;
+  const rows = await fetchCached('select-fund');
+  State._pageDataSource[pageKey] = State._pageDataSource['select-fund'] || 'Fund Key Performance AVP';
   return rows;
 }
 
