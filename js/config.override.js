@@ -24,7 +24,7 @@ if (typeof CONFIG !== 'undefined') {
   CONFIG.INCOME_FUND_DIVIDEND_DB_URL = '';
   CONFIG.INCOME_FUND_DIVIDEND_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxaj7IgZ5h3dbL56ekA848PYvUnVhSh9u6OYcYhIr-PChoKxKgCD51OWQuGov4yWqJAjA/exec';
   CONFIG.INCOME_FUND_DIVIDEND_API_SECRET_KEY = 'change-this-income-dividend-api-key';
-  CONFIG.FT_HISTORICAL_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyGarTelIjKWv9nyigiCOPz1_5-cJeE8NPpfFl8jbnN_-lAjFZUXbUp2QMDOH-ZQ2Os/exec';
+  CONFIG.FT_HISTORICAL_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyTCY_p-xUIxbTGrhNM0jlv5aGT87e7Zxei0t_jbvUS_69aJ4S7I-MCn6WMGjNpcs1S/exec';
   CONFIG.FT_HISTORICAL_API_SECRET_KEY = 'change-this-ft-historical-api-key';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */
