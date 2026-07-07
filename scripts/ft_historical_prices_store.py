@@ -985,6 +985,44 @@ def export_database_json(db_path: Path = DEFAULT_DB_PATH, output_path: Path | No
 
     selected_symbol = symbols[0]["symbol"] if symbols else ""
     rows = [row for row in prices if row.get("symbol") == selected_symbol]
+    symbol_export_dir = output_path.parent / "symbols"
+    symbol_export_dir.mkdir(parents=True, exist_ok=True)
+    symbol_files: list[dict[str, Any]] = []
+    for symbol_item in symbols:
+        symbol = symbol_item.get("symbol", "")
+        slug = slug_symbol(symbol)
+        symbol_prices = [row for row in prices if row.get("symbol") == symbol]
+        symbol_profile = [row for row in profile if row.get("symbol") == symbol]
+        symbol_risk = [row for row in risk if row.get("symbol") == symbol]
+        symbol_holdings = [row for row in holdings if row.get("symbol") == symbol]
+        symbol_payload = {
+            "generated_at": utc_now(),
+            "source_database": str(db_path),
+            "symbol": symbol,
+            "symbolSlug": slug,
+            "metadata": symbol_item,
+            "counts": {
+                "price_rows": len(symbol_prices),
+                "profile_rows": len(symbol_profile),
+                "risk_rows": len(symbol_risk),
+                "holding_rows": len(symbol_holdings),
+            },
+            "prices": symbol_prices,
+            "profile": symbol_profile,
+            "risk": symbol_risk,
+            "holdings": symbol_holdings,
+            "source": f"Google Drive JSON: exports/symbols/{slug}.json",
+        }
+        symbol_path = symbol_export_dir / f"{slug}.json"
+        symbol_path.write_text(json.dumps(symbol_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        symbol_files.append({
+            "symbol": symbol,
+            "symbolSlug": slug,
+            "fileName": f"{slug}.json",
+            "relativePath": f"exports/symbols/{slug}.json",
+            "counts": symbol_payload["counts"],
+        })
+
     payload = {
         "generated_at": utc_now(),
         "source_database": str(db_path),
@@ -996,6 +1034,7 @@ def export_database_json(db_path: Path = DEFAULT_DB_PATH, output_path: Path | No
             "holding_rows": len(holdings),
         },
         "symbols": symbols,
+        "symbolFiles": symbol_files,
         "selectedSymbol": selected_symbol,
         "selectedDisplayName": next((item.get("displayName", "") for item in symbols if item.get("symbol") == selected_symbol), ""),
         "selectedDisplayLabel": next((item.get("displayLabel", "") for item in symbols if item.get("symbol") == selected_symbol), selected_symbol),
