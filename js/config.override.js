@@ -17,6 +17,8 @@ if (typeof CONFIG !== 'undefined') {
 
   CONFIG.DATA_SOURCE = 'google_first';
   CONFIG.GITHUB_TOKEN = '';
+  CONFIG.MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzr-YEiBuxy2ZH4h7-oIlfV1OH6lHoWoFVR6J-HKmK0GYIgpySRA8lCJRtvzyEvcXsdQA/exec';
+  CONFIG.MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */
   const FILE = {
