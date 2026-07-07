@@ -146,6 +146,7 @@ const State = {
     endDate: '',
     symbol: '',
   },
+  ftHistoricalDatabase: null,
 	  masterAllocations: { items: {}, updatedAt: null },
 	};
 
@@ -2309,6 +2310,95 @@ async function triggerFtHistoricalSync(payload = {}) {
     throw new Error(data.error || data.message || `FT sync API HTTP ${resp.status}`);
   }
   return data;
+}
+
+function ftSymbolBase(value) {
+  return String(value || '').trim().split(':')[0].toUpperCase();
+}
+
+function ftSymbolSlug(value) {
+  return String(value || '').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
+}
+
+function normalizeFtDatabasePayload(payload = {}) {
+  const prices = Array.isArray(payload.prices) ? payload.prices : [];
+  const selectedRows = Array.isArray(payload.rows) ? payload.rows : [];
+  return {
+    ...payload,
+    prices: prices.length ? prices : selectedRows,
+    rows: selectedRows.length ? selectedRows : prices,
+    profile: Array.isArray(payload.profile) ? payload.profile : [],
+    risk: Array.isArray(payload.risk) ? payload.risk : [],
+    holdings: Array.isArray(payload.holdings) ? payload.holdings : [],
+    symbols: Array.isArray(payload.symbols) ? payload.symbols : [],
+    source: payload.source || `Google Drive: ${FT_HISTORICAL_DB_FILE_NAME}`,
+  };
+}
+
+async function loadFtHistoricalDatabase(force = false) {
+  if (!force && State.ftHistoricalDatabase) return State.ftHistoricalDatabase;
+  const apiUrl = ftHistoricalApiUrl();
+  if (!apiUrl) throw new Error('ยังไม่ได้ตั้งค่า CONFIG.FT_HISTORICAL_API_WEB_APP_URL');
+  const url = new URL(apiUrl);
+  url.searchParams.set('action', 'database');
+  url.searchParams.set('folderId', FT_HISTORICAL_DRIVE_FOLDER_ID);
+  url.searchParams.set('fileName', FT_HISTORICAL_DB_FILE_NAME);
+  if (ftHistoricalApiKey()) url.searchParams.set('key', ftHistoricalApiKey());
+  const resp = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || data.message || `โหลด FT database จาก Drive ไม่สำเร็จ (${resp.status})`);
+  }
+  const payload = normalizeFtDatabasePayload(data);
+  State.ftHistoricalDatabase = payload;
+  return payload;
+}
+
+async function loadFtHistoricalPayloadForPage(limit = 5000) {
+  if (ftHistoricalApiUrl()) {
+    return loadFtHistoricalDatabase();
+  }
+  const resp = await fetch(`/api/ft-historical-prices?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
+  const payload = await resp.json().catch(() => ({}));
+  if (resp.status === 404) {
+    throw new Error('ไม่พบ API /api/ft-historical-prices และยังไม่ได้ตั้งค่า Apps Script สำหรับ FT');
+  }
+  if (!resp.ok || payload.ok === false) throw new Error(payload.error || `โหลดข้อมูลไม่สำเร็จ (${resp.status})`);
+  return normalizeFtDatabasePayload(payload);
+}
+
+function findFtSymbolMatch(payload, lookupValue) {
+  const value = String(lookupValue || '').trim();
+  if (!value) return '';
+  const upper = value.toUpperCase();
+  const base = ftSymbolBase(value);
+  const slug = ftSymbolSlug(value);
+  const symbols = payload?.symbols || [];
+  const match = symbols.find(item => {
+    const symbol = String(item.symbol || '').trim();
+    return symbol.toUpperCase() === upper
+      || ftSymbolBase(symbol) === base
+      || ftSymbolSlug(symbol) === slug;
+  });
+  return match?.symbol || '';
+}
+
+function getFtQualitativeFromPayload(payload, lookupValue) {
+  const symbol = findFtSymbolMatch(payload, lookupValue);
+  if (!symbol) return null;
+  const profile = (payload.profile || []).filter(row => String(row.symbol || '').trim().toUpperCase() === symbol.toUpperCase());
+  const risk = (payload.risk || []).filter(row => String(row.symbol || '').trim().toUpperCase() === symbol.toUpperCase());
+  const holdings = (payload.holdings || []).filter(row => String(row.symbol || '').trim().toUpperCase() === symbol.toUpperCase());
+  const profileMap = Object.fromEntries(profile.map(row => [row.field, row.value]));
+  const meta = (payload.symbols || []).find(item => String(item.symbol || '').trim().toUpperCase() === symbol.toUpperCase()) || {};
+  return {
+    symbol,
+    displayName: meta.displayName || profileMap['FT display name'] || '',
+    profile,
+    profileMap,
+    risk,
+    holdings,
+  };
 }
 
 function compactIsoDate(value) {
@@ -16086,7 +16176,7 @@ const Pages = {
 
   async upsideDownsideCapture(area) {
     const pageKey = 'upside-downside-capture';
-    setLoading(area, 'กำลังโหลดข้อมูล Historical Prices จาก SQLite...');
+    setLoading(area, 'กำลังโหลดข้อมูล Historical Prices จาก Google Drive JSON...');
 
     const pct = (value) => Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : '-';
     const num = (value, digits = 2) => Number.isFinite(value) ? Number(value).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }) : '-';
@@ -16094,32 +16184,51 @@ const Pages = {
 
     let payload;
     try {
-      const resp = await fetch('/api/ft-historical-prices?limit=5000', { cache: 'no-store' });
-      payload = await resp.json().catch(() => ({}));
-      if (resp.status === 404) {
-        throw new Error('ไม่พบ API /api/ft-historical-prices กรุณา restart fund_server.py แล้วเปิดผ่าน http://localhost:8080');
-      }
-      if (!resp.ok || payload.ok === false) throw new Error(payload.error || `โหลดข้อมูลไม่สำเร็จ (${resp.status})`);
+      payload = await loadFtHistoricalPayloadForPage(5000);
     } catch (err) {
       area.innerHTML = `
         <div class="card">
           <div class="state-box">
             <div class="state-icon">!</div>
-            <strong>ยังโหลดข้อมูล FT จาก SQLite ไม่ได้</strong>
-            <p>${esc(err.message || 'กรุณาเปิดผ่าน local server fund_server.py แล้วลองใหม่')}</p>
+            <strong>ยังโหลดข้อมูล FT จาก Google Drive JSON ไม่ได้</strong>
+            <p>${esc(err.message || 'กรุณาตรวจว่า ft_historical_prices_database.json ถูกสร้างใน Drive แล้ว')}</p>
           </div>
         </div>`;
       return;
     }
 
     const symbols = payload.symbols || [];
-    const rows = payload.rows || [];
+    const rows = payload.prices || payload.rows || [];
     const profileRows = payload.profile || [];
-    const stat = (payload.stats || [])[0] || {};
     const symbolItems = symbols.filter(item => item.symbol);
     const symbolOptions = symbolItems.map(item => item.symbol);
     const symbolMetaBySymbol = new Map(symbolItems.map(item => [item.symbol, item]));
     const defaultSymbol = payload.selectedSymbol || symbolOptions[0] || '';
+    const selectedRowsForStats = rows
+      .filter(row => row.symbol === defaultSymbol && row.date && Number.isFinite(Number(row.close)))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const computedReturns = [];
+    let prevClose = null;
+    selectedRowsForStats.forEach(row => {
+      const close = Number(row.close);
+      if (prevClose && close) computedReturns.push((close / prevClose) - 1);
+      if (close) prevClose = close;
+    });
+    const positiveReturns = computedReturns.filter(value => value > 0);
+    const negativeReturns = computedReturns.filter(value => value < 0);
+    const firstClose = selectedRowsForStats[0]?.close;
+    const lastClose = selectedRowsForStats[selectedRowsForStats.length - 1]?.close;
+    const stat = (payload.stats || []).find(item => item.symbol === defaultSymbol) || {
+      rowCount: selectedRowsForStats.length,
+      startDate: selectedRowsForStats[0]?.date || '',
+      endDate: selectedRowsForStats[selectedRowsForStats.length - 1]?.date || '',
+      cumulativeReturn: firstClose && lastClose ? (Number(lastClose) / Number(firstClose)) - 1 : null,
+      dailyReturnCount: computedReturns.length,
+      upDays: positiveReturns.length,
+      downDays: negativeReturns.length,
+      avgUpDayReturn: positiveReturns.length ? positiveReturns.reduce((sum, value) => sum + value, 0) / positiveReturns.length : null,
+      avgDownDayReturn: negativeReturns.length ? negativeReturns.reduce((sum, value) => sum + value, 0) / negativeReturns.length : null,
+    };
     const symbolLabel = (symbol) => symbolMetaBySymbol.get(symbol)?.displayLabel || symbol || '-';
     const symbolSelectOptions = (selectedSymbol = defaultSymbol) => symbolOptions
       .map(symbol => `<option value="${esc(symbol)}"${symbol === selectedSymbol ? ' selected' : ''}>${esc(symbolLabel(symbol))}</option>`)
@@ -16357,7 +16466,11 @@ const Pages = {
     `;
 
     const symbolRowsCache = new Map();
-    if (defaultSymbol) symbolRowsCache.set(defaultSymbol, localPriceRows);
+    symbolOptions.forEach(symbol => {
+      const priceRows = localPriceRows.filter(row => row.symbol === symbol);
+      if (priceRows.length) symbolRowsCache.set(symbol, priceRows);
+    });
+    if (defaultSymbol && !symbolRowsCache.has(defaultSymbol)) symbolRowsCache.set(defaultSymbol, localPriceRows);
 
     const lookupClose = async (symbol, dateValue) => {
       if (!symbol || !dateValue) return null;
@@ -16889,27 +17002,25 @@ const Pages = {
 
     let ftSymbolItems = [];
     try {
-      const resp = await fetch('/api/ft-historical-prices?limit=1', { cache: 'no-store' });
-      const payload = await resp.json().catch(() => ({}));
-      if (resp.ok && payload.ok !== false) {
-        ftSymbolItems = (payload.symbols || [])
-          .filter(item => {
-            if (!item.symbol) return false;
-            if (Object.prototype.hasOwnProperty.call(item, 'profileRowCount')) {
-              return Number(item.profileRowCount || 0) > 0;
-            }
-            return Boolean(item.displayName || item.displayLabel || item.symbol);
-          })
-          .map(item => ({
-            symbol: String(item.symbol || '').trim(),
-            label: String(item.displayLabel || item.symbol || '').trim(),
-            displayName: String(item.displayName || '').trim(),
-            profileRowCount: Object.prototype.hasOwnProperty.call(item, 'profileRowCount')
-              ? Number(item.profileRowCount || 0)
-              : null,
-            riskRowCount: Number(item.riskRowCount || 0),
-          }));
-      }
+      const payload = await loadFtHistoricalPayloadForPage(1);
+      ftSymbolItems = (payload.symbols || [])
+        .filter(item => {
+          if (!item.symbol) return false;
+          if (Object.prototype.hasOwnProperty.call(item, 'profileRowCount')) {
+            return Number(item.profileRowCount || 0) > 0 || Number(item.holdingsRowCount || 0) > 0;
+          }
+          return Boolean(item.displayName || item.displayLabel || item.symbol);
+        })
+        .map(item => ({
+          symbol: String(item.symbol || '').trim(),
+          label: String(item.displayLabel || item.symbol || '').trim(),
+          displayName: String(item.displayName || '').trim(),
+          profileRowCount: Object.prototype.hasOwnProperty.call(item, 'profileRowCount')
+            ? Number(item.profileRowCount || 0)
+            : null,
+          riskRowCount: Number(item.riskRowCount || 0),
+          holdingsRowCount: Number(item.holdingsRowCount || 0),
+        }));
     } catch (_) {}
     const ftSymbolMeta = new Map(ftSymbolItems.map(item => [item.symbol, item]));
 
@@ -17384,6 +17495,10 @@ const Pages = {
       const cleanSymbol = String(symbol || '').trim();
       if (!cleanSymbol) return null;
       try {
+        if (ftHistoricalApiUrl()) {
+          const payload = await loadFtHistoricalDatabase();
+          return getFtQualitativeFromPayload(payload, cleanSymbol);
+        }
         const resp = await fetch(`/api/ft-historical-prices?symbol=${encodeURIComponent(cleanSymbol)}&limit=1`, { cache: 'no-store' });
         const payload = await resp.json().catch(() => ({}));
         if (!resp.ok || payload.ok === false) return null;
@@ -17489,7 +17604,7 @@ const Pages = {
       if (statusEl) {
         statusEl.style.background = 'var(--primary-faint)';
         statusEl.style.color = 'var(--primary)';
-        statusEl.textContent = `กำลังอ่าน FT qualitative จาก Local (${fundList.length} กองทุน)...`;
+        statusEl.textContent = `กำลังอ่าน FT qualitative จาก ${ftHistoricalApiUrl() ? 'Google Drive JSON' : 'Local'} (${fundList.length} กองทุน)...`;
       }
       const ftCalls = await Promise.allSettled(fundList.map(f => loadFtQualitative(f.isin)));
       const liveData = fundList.map((fund, index) => {
@@ -17504,8 +17619,8 @@ const Pages = {
         statusEl.style.background = allOk ? '#f0fdf4' : '#fef3c7';
         statusEl.style.color = allOk ? '#15803d' : '#92400e';
         statusEl.textContent = allOk
-          ? `อ่านข้อมูล Local FT qualitative สำเร็จครบทุกกองทุน (${ftOkCount}/${fundList.length})`
-          : `อ่านข้อมูล Local FT qualitative ได้ ${ftOkCount}/${fundList.length} กองทุน`;
+          ? `อ่านข้อมูล FT qualitative สำเร็จครบทุกกองทุน (${ftOkCount}/${fundList.length})`
+          : `อ่านข้อมูล FT qualitative ได้ ${ftOkCount}/${fundList.length} กองทุน`;
       }
       saveV3State({
         selections: getSelections(),
