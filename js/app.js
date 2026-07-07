@@ -148,6 +148,8 @@ const JSON_EXPORT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwV-OUq
 const JSON_EXPORT_SECRET_KEY = 'sheets-to-drive-json';
 const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzcOc5s3SYM2gkw3trpO43Jp0wwTasOIU8Mns4LJ-YQveE2cq5LXX98G0NVW7qHohGFKA/exec';
 const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
+const MASTER_ALLOCATIONS_API_WEB_APP_URL = '';
+const MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
 
 const JSON_STORE = {
   rootName: 'JSON Files',
@@ -2921,8 +2923,8 @@ async function deleteFundOverride(key) {
 
 async function loadMasterAllocations(force = false) {
   if (!force && State.masterAllocationsLoaded) return State.masterAllocations;
+  const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
   try {
-    const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
     const resp = await fetch(`/api/master-allocations?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
@@ -2934,21 +2936,35 @@ async function loadMasterAllocations(force = false) {
     State.masterAllocationsLoaded = true;
     State.masterAllocationsLoadError = '';
   } catch (err) {
-    State.masterAllocations = State.masterAllocations || { items: {}, updatedAt: null };
-    State.masterAllocationsLoadError = err.message || String(err);
+    try {
+      State.masterAllocations = await loadMasterAllocationsStaticOrRemote(quarter);
+      State.masterAllocationsLoaded = true;
+      State.masterAllocationsLoadError = '';
+    } catch (fallbackErr) {
+      State.masterAllocations = State.masterAllocations || { items: {}, updatedAt: null };
+      State.masterAllocationsLoadError = fallbackErr.message || err.message || String(err);
+    }
   }
   return State.masterAllocations;
 }
 
 async function saveMasterAllocation(item) {
-  const resp = await fetch('/api/master-allocations', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(item),
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data.ok === false) {
-    throw new Error(data.error || `บันทึก mapping ไม่สำเร็จ (${resp.status})`);
+  let data;
+  try {
+    const resp = await fetch('/api/master-allocations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(item),
+    });
+    data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok === false) {
+      throw new Error(data.error || `บันทึก mapping ไม่สำเร็จ (${resp.status})`);
+    }
+  } catch (err) {
+    if (!hasMasterAllocationsApi()) {
+      throw new Error(`${err.message || err} · GitHub Pages ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนบันทึก Mapping`);
+    }
+    data = await masterAllocationsApiRequest('save', { item });
   }
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
@@ -2957,13 +2973,153 @@ async function saveMasterAllocation(item) {
 
 async function deleteMasterAllocation(key) {
   const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
-  const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}?quarter=${encodeURIComponent(quarter)}`, { method: 'DELETE' });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data.ok === false) {
-    throw new Error(data.error || `ลบ mapping ไม่สำเร็จ (${resp.status})`);
+  let data;
+  try {
+    const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}?quarter=${encodeURIComponent(quarter)}`, { method: 'DELETE' });
+    data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok === false) {
+      throw new Error(data.error || `ลบ mapping ไม่สำเร็จ (${resp.status})`);
+    }
+  } catch (err) {
+    if (!hasMasterAllocationsApi()) {
+      throw new Error(`${err.message || err} · GitHub Pages ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนลบ Mapping`);
+    }
+    data = await masterAllocationsApiRequest('delete', { quarter, key });
   }
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
+  return data;
+}
+
+function hasMasterAllocationsApi() {
+  return Boolean(masterAllocationsApiUrl());
+}
+
+function masterAllocationsApiUrl() {
+  return String(CONFIG.MASTER_ALLOCATIONS_API_WEB_APP_URL || MASTER_ALLOCATIONS_API_WEB_APP_URL || '').trim();
+}
+
+function masterAllocationsApiKey() {
+  return String(CONFIG.MASTER_ALLOCATIONS_API_SECRET_KEY || MASTER_ALLOCATIONS_API_SECRET_KEY || '').trim();
+}
+
+function masterAllocationsFileForQuarter(quarter) {
+  const normalized = String(quarter || '2026-Q1').trim().toUpperCase();
+  const year = /^\d{4}-Q[1-4]$/.test(normalized) ? normalized.slice(0, 4) : '2026';
+  return `Data/${year}/${normalized}/overrides/fund_master_allocations.json`;
+}
+
+async function loadMasterAllocationsStaticOrRemote(quarter) {
+  if (hasMasterAllocationsApi()) {
+    const data = await masterAllocationsApiRequest('get', { quarter });
+    return {
+      items: data.items || data.data?.items || {},
+      updatedAt: data.updatedAt || data.data?.updatedAt || null,
+      source: data.source || data.drive?.fileName || 'Google Drive',
+    };
+  }
+
+  const path = masterAllocationsFileForQuarter(quarter);
+  const resp = await fetch(path, { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  return {
+    items: data.items || {},
+    updatedAt: data.updatedAt || null,
+    source: path,
+  };
+}
+
+function masterAllocationsApiJsonp(params) {
+  return new Promise((resolve, reject) => {
+    const callbackName = `__masterAllocApiCallback_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const script = document.createElement('script');
+    const cleanup = () => {
+      delete window[callbackName];
+      script.remove();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Master Allocations API request timeout'));
+    }, 30000);
+    window[callbackName] = (data) => {
+      clearTimeout(timer);
+      cleanup();
+      resolve(data || {});
+    };
+    const url = new URL(masterAllocationsApiUrl());
+    Object.entries({
+      key: masterAllocationsApiKey(),
+      callback: callbackName,
+      ...params,
+    }).forEach(([paramKey, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(paramKey, value);
+      }
+    });
+    script.onerror = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('Master Allocations API script failed to load'));
+    };
+    script.src = url.toString();
+    document.head.appendChild(script);
+  });
+}
+
+async function masterAllocationsApiFetch(params) {
+  const url = new URL(masterAllocationsApiUrl());
+  Object.entries({
+    key: masterAllocationsApiKey(),
+    ...params,
+  }).forEach(([paramKey, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(paramKey, value);
+    }
+  });
+  const res = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Master Allocations API HTTP ${res.status}`);
+  return JSON.parse(text);
+}
+
+async function masterAllocationsCompressedPayload(payload) {
+  const text = JSON.stringify(payload || {});
+  if (!('CompressionStream' in window)) return { payload: text };
+  const stream = new Blob([text], { type: 'application/json' }).stream().pipeThrough(new CompressionStream('gzip'));
+  const buffer = await new Response(stream).arrayBuffer();
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return {
+    payloadGzipB64: btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''),
+  };
+}
+
+async function masterAllocationsApiRequest(action, payload = {}) {
+  const quarter = payload.quarter || State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+  const params = { action, quarter };
+  if (action === 'save') {
+    Object.assign(params, await masterAllocationsCompressedPayload({
+      action,
+      key: masterAllocationsApiKey(),
+      item: payload.item,
+    }));
+  } else if (action === 'delete') {
+    params.keyToDelete = payload.key;
+  }
+
+  let data;
+  try {
+    data = await masterAllocationsApiFetch(params);
+  } catch {
+    data = await masterAllocationsApiJsonp(params);
+  }
+  if (data.ok === false) {
+    throw new Error(data.error || `Master Allocations API ${action} failed`);
+  }
   return data;
 }
 
