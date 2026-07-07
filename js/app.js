@@ -148,7 +148,7 @@ const JSON_EXPORT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwV-OUq
 const JSON_EXPORT_SECRET_KEY = 'sheets-to-drive-json';
 const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzcOc5s3SYM2gkw3trpO43Jp0wwTasOIU8Mns4LJ-YQveE2cq5LXX98G0NVW7qHohGFKA/exec';
 const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
-const MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzr-YEiBuxy2ZH4h7-oIlfV1OH6lHoWoFVR6J-HKmK0GYIgpySRA8lCJRtvzyEvcXsdQA/exec';
+const MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxzNvGzKo8YGBPyDx8XOqb73hXTx_NetuBLTB4npMae9Jg1KM2HYZmaccds4e0koPMxqA/exec';
 const MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
 
 const JSON_STORE = {
