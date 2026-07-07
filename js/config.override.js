@@ -22,7 +22,7 @@ if (typeof CONFIG !== 'undefined') {
   CONFIG.FIXED_INCOME_FACTORS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzHr34Gg48W9awG2Hde3P_XOxGUVLf2k_W-ySRWt-2IaIa7VOD6IsYfm-LmfhaYSwRn/exec';
   CONFIG.FIXED_INCOME_FACTORS_API_SECRET_KEY = 'change-this-fixed-income-factors-api-key';
   CONFIG.INCOME_FUND_DIVIDEND_DB_URL = '';
-  CONFIG.INCOME_FUND_DIVIDEND_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwVvbFwiPBXdRn1huGUPwWYqQ7O6B-s2uVLFKju4pQe4g-VQa-LSVU-6Wd17rrpMYSzGg/exec';
+  CONFIG.INCOME_FUND_DIVIDEND_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxlnHxzqdr-6dATwWPuD8LZivOvGe6ExaxPB0EE1TeYwtO2jUKOSD9zN8rv9K8l8-lkOg/exec';
   CONFIG.INCOME_FUND_DIVIDEND_API_SECRET_KEY = 'change-this-income-dividend-api-key';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */

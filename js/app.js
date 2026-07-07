@@ -88,6 +88,7 @@ const State = {
   incomeFundSelectionLoaded: false,
   incomeFundSelectionSaving: false,
   incomeFundDividendDatabase: null,
+  incomeFundDividendGithubToken: '',
   selectedFunds: {},         // fundCode -> metadata for cross-page filtering
   highlights:   {},           // fundCode → colorIndex (0-4), persists across pages
   _cache:       {},
@@ -2208,7 +2209,7 @@ async function loadIncomeFundDividendDatabase(force = false) {
   throw new Error(`โหลด Dividend History Database ไม่ได้: ${lastError?.message || 'ไม่พบไฟล์'}`);
 }
 
-async function triggerIncomeFundDividendSync(funds = []) {
+async function triggerIncomeFundDividendSync(funds = [], options = {}) {
   const apiUrl = incomeFundDividendApiUrl();
   if (!apiUrl) {
     throw new Error('ยังไม่ได้ตั้งค่า CONFIG.INCOME_FUND_DIVIDEND_API_WEB_APP_URL');
@@ -2224,6 +2225,7 @@ async function triggerIncomeFundDividendSync(funds = []) {
     quarter: incomeFundSelectionQuarter(),
     folderId: INCOME_FUND_DIVIDEND_DRIVE_FOLDER_ID,
     fileName: INCOME_FUND_DIVIDEND_DB_FILE_NAME,
+    githubToken: String(options.githubToken || '').trim(),
     funds: funds.map(fund => ({
       code: fund.code,
       projId: fund.projId,
@@ -15528,6 +15530,10 @@ const Pages = {
                 ${opt('Finnomena', 'Finnomena')}
               </select>
             </div>
+            <div class="sf-search" style="max-width:360px">
+              <input class="search-input" id="income-focus-github-token" type="password"
+                placeholder="GitHub token สำหรับรัน Actions" value="${esc(State.incomeFundDividendGithubToken)}" autocomplete="off">
+            </div>
             <button class="btn btn-ghost btn-sm" id="income-focus-sync-dividend"
               title="เรียก Apps Script เพื่อ trigger GitHub Actions/Python และอัปเดตไฟล์ Dividend History Database">
               ดึงข้อมูลปันผล
@@ -15585,6 +15591,9 @@ const Pages = {
         filters.source = e.target.value;
         render();
       });
+      $('#income-focus-github-token', area)?.addEventListener('input', e => {
+        State.incomeFundDividendGithubToken = e.target.value.trim();
+      });
       $('#income-focus-refresh', area)?.addEventListener('click', () => Pages.incomeFundFocus(area, pageKey));
       const syncBtn = $('#income-focus-sync-dividend', area);
       if (syncBtn) {
@@ -15596,7 +15605,9 @@ const Pages = {
           syncBtn.disabled = true;
           syncBtn.textContent = 'กำลังสั่งดึงข้อมูล...';
           try {
-            const result = await triggerIncomeFundDividendSync(rows);
+            const githubToken = $('#income-focus-github-token', area)?.value?.trim() || '';
+            State.incomeFundDividendGithubToken = githubToken;
+            const result = await triggerIncomeFundDividendSync(rows, { githubToken });
             toast(result.message || 'สั่งดึงข้อมูลปันผลแล้ว รอ GitHub Actions ทำงานเสร็จแล้วค่อยรีเฟรช', 'success', 6500);
           } catch (err) {
             toast(err.message || String(err), 'error', 8000);
