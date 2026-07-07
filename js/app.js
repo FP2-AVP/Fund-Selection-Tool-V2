@@ -150,6 +150,8 @@ const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzcOc5s3S
 const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
 const MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxzNvGzKo8YGBPyDx8XOqb73hXTx_NetuBLTB4npMae9Jg1KM2HYZmaccds4e0koPMxqA/exec';
 const MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
+const FIXED_INCOME_FACTORS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzHr34Gg48W9awG2Hde3P_XOxGUVLf2k_W-ySRWt-2IaIa7VOD6IsYfm-LmfhaYSwRn/exec';
+const FIXED_INCOME_FACTORS_API_SECRET_KEY = 'change-this-fixed-income-factors-api-key';
 
 const JSON_STORE = {
   rootName: 'JSON Files',
@@ -3125,6 +3127,7 @@ async function masterAllocationsApiRequest(action, payload = {}) {
 
 async function loadFixedIncomeFactorsOverrides(force = false) {
   if (!force && State.fixedIncomeFactorsOverridesLoaded) return State.fixedIncomeFactorsOverrides;
+  const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
   try {
     const resp = await fetch('/api/fixed-income-factors-overrides', { cache: 'no-store' });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -3137,25 +3140,170 @@ async function loadFixedIncomeFactorsOverrides(force = false) {
     State.fixedIncomeFactorsOverridesLoaded = true;
     State.fixedIncomeFactorsOverridesLoadError = '';
   } catch (err) {
-    State.fixedIncomeFactorsOverrides = State.fixedIncomeFactorsOverrides || { items: {}, updatedAt: null };
-    State.fixedIncomeFactorsOverridesLoadError = err.message || String(err);
+    try {
+      State.fixedIncomeFactorsOverrides = await loadFixedIncomeFactorsOverridesStaticOrRemote(quarter);
+      State.fixedIncomeFactorsOverridesLoaded = true;
+      State.fixedIncomeFactorsOverridesLoadError = '';
+    } catch (fallbackErr) {
+      State.fixedIncomeFactorsOverrides = State.fixedIncomeFactorsOverrides || { items: {}, updatedAt: null };
+      State.fixedIncomeFactorsOverridesLoadError = fallbackErr.message || err.message || String(err);
+    }
   }
   return State.fixedIncomeFactorsOverrides;
 }
 
 async function saveFixedIncomeFactorsOverrides(items) {
-  const resp = await fetch('/api/fixed-income-factors-overrides', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items, replace: true }),
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok || data.ok === false) {
-    throw new Error(data.error || `บันทึก override ไม่สำเร็จ (${resp.status})`);
+  let data;
+  try {
+    const resp = await fetch('/api/fixed-income-factors-overrides', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items, replace: true }),
+    });
+    data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok === false) {
+      throw new Error(data.error || `บันทึก override ไม่สำเร็จ (${resp.status})`);
+    }
+  } catch (err) {
+    if (!hasFixedIncomeFactorsApi()) {
+      throw new Error(`${err.message || err} · GitHub Pages ต้องตั้งค่า FIXED_INCOME_FACTORS_API_WEB_APP_URL ก่อนบันทึก Override`);
+    }
+    data = await fixedIncomeFactorsApiRequest('save', { items, replace: true });
   }
   State.fixedIncomeFactorsOverridesLoaded = false;
   await loadFixedIncomeFactorsOverrides(true);
   return data.items;
+}
+
+function hasFixedIncomeFactorsApi() {
+  return Boolean(fixedIncomeFactorsApiUrl());
+}
+
+function fixedIncomeFactorsApiUrl() {
+  return String(CONFIG.FIXED_INCOME_FACTORS_API_WEB_APP_URL || FIXED_INCOME_FACTORS_API_WEB_APP_URL || '').trim();
+}
+
+function fixedIncomeFactorsApiKey() {
+  return String(CONFIG.FIXED_INCOME_FACTORS_API_SECRET_KEY || FIXED_INCOME_FACTORS_API_SECRET_KEY || '').trim();
+}
+
+function fixedIncomeFactorsFileForQuarter(quarter) {
+  const normalized = String(quarter || '2026-Q1').trim().toUpperCase();
+  const year = /^\d{4}-Q[1-4]$/.test(normalized) ? normalized.slice(0, 4) : '2026';
+  return `Data/${year}/${normalized}/overrides/fixed_income_factors_overrides.json`;
+}
+
+async function loadFixedIncomeFactorsOverridesStaticOrRemote(quarter) {
+  if (hasFixedIncomeFactorsApi()) {
+    const data = await fixedIncomeFactorsApiRequest('get', { quarter });
+    return {
+      items: data.items || data.data?.items || {},
+      updatedAt: data.updatedAt || data.data?.updatedAt || null,
+      source: data.source || data.drive?.fileName || 'Google Drive',
+    };
+  }
+
+  const path = fixedIncomeFactorsFileForQuarter(quarter);
+  const resp = await fetch(path, { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  return {
+    items: data.items || {},
+    updatedAt: data.updatedAt || null,
+    source: path,
+  };
+}
+
+function fixedIncomeFactorsApiJsonp(params) {
+  return new Promise((resolve, reject) => {
+    const callbackName = `__fixedIncomeFactorsApiCallback_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const script = document.createElement('script');
+    const cleanup = () => {
+      delete window[callbackName];
+      script.remove();
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Fixed Income Factors API request timeout'));
+    }, 30000);
+    window[callbackName] = (data) => {
+      clearTimeout(timer);
+      cleanup();
+      resolve(data || {});
+    };
+    const url = new URL(fixedIncomeFactorsApiUrl());
+    Object.entries({
+      key: fixedIncomeFactorsApiKey(),
+      callback: callbackName,
+      ...params,
+    }).forEach(([paramKey, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(paramKey, value);
+      }
+    });
+    script.onerror = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error('Fixed Income Factors API script failed to load'));
+    };
+    script.src = url.toString();
+    document.head.appendChild(script);
+  });
+}
+
+async function fixedIncomeFactorsApiFetch(params) {
+  const url = new URL(fixedIncomeFactorsApiUrl());
+  Object.entries({
+    key: fixedIncomeFactorsApiKey(),
+    ...params,
+  }).forEach(([paramKey, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(paramKey, value);
+    }
+  });
+  const res = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Fixed Income Factors API HTTP ${res.status}`);
+  return JSON.parse(text);
+}
+
+async function fixedIncomeFactorsCompressedPayload(payload) {
+  const text = JSON.stringify(payload || {});
+  if (!('CompressionStream' in window)) return { payload: text };
+  const stream = new Blob([text], { type: 'application/json' }).stream().pipeThrough(new CompressionStream('gzip'));
+  const buffer = await new Response(stream).arrayBuffer();
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return {
+    payloadGzipB64: btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''),
+  };
+}
+
+async function fixedIncomeFactorsApiRequest(action, payload = {}) {
+  const quarter = payload.quarter || State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+  const params = { action, quarter };
+  if (action === 'save') {
+    Object.assign(params, await fixedIncomeFactorsCompressedPayload({
+      action,
+      key: fixedIncomeFactorsApiKey(),
+      items: payload.items,
+      replace: payload.replace !== false,
+    }));
+  }
+
+  let data;
+  try {
+    data = await fixedIncomeFactorsApiFetch(params);
+  } catch {
+    data = await fixedIncomeFactorsApiJsonp(params);
+  }
+  if (data.ok === false) {
+    throw new Error(data.error || `Fixed Income Factors API ${action} failed`);
+  }
+  return data;
 }
 
 async function ensureSelectedFundsCatalog() {
