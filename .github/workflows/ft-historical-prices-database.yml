@@ -81,6 +81,11 @@ jobs:
           echo "start_date=${{ inputs.start_date }}"
           echo "end_date=${{ inputs.end_date }}"
 
+      - name: Prepare clean FT output folder
+        run: |
+          rm -rf Data/ft_historical_prices
+          mkdir -p Data/ft_historical_prices
+
       - name: Sync FT historical prices
         if: ${{ inputs.run_prices == 'true' }}
         run: |
@@ -111,6 +116,15 @@ jobs:
             --input "Data/ft_historical_prices/exports/${{ inputs.file_name }}" \
             --folder-id "${{ inputs.drive_folder_id }}" \
             --file-name "${{ inputs.file_name }}"
+
+      - name: Upload FT SQLite CSV and raw artifacts via Apps Script
+        if: ${{ inputs.app_script_url != '' }}
+        run: |
+          python scripts/upload_ft_historical_artifacts_to_apps_script.py \
+            --url "${{ inputs.app_script_url }}" \
+            --key "${{ inputs.app_script_key }}" \
+            --root "Data/ft_historical_prices" \
+            --folder-id "${{ inputs.drive_folder_id }}"
 
       - name: Upload JSON artifact
         uses: actions/upload-artifact@v4
