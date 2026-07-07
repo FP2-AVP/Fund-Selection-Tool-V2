@@ -22,6 +22,8 @@ const INCOME_FUND_DIVIDEND_DB_FALLBACK_FILES = [
 ];
 const INCOME_FUND_DIVIDEND_DRIVE_FOLDER_ID = '1SBJshoukb5O9hdTawTtexVQzo4oLfW3u';
 const INCOME_FUND_DIVIDEND_DB_FILE_NAME = 'dividend_history_database.json';
+const FT_HISTORICAL_DRIVE_FOLDER_ID = '1Locig3aW7hVs0SxCoeFpa76OJ0XcF1rg';
+const FT_HISTORICAL_DB_FILE_NAME = 'ft_historical_prices_database.json';
 
 /* ── Application State ── */
 const State = {
@@ -159,6 +161,8 @@ const MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/A
 const MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
 const FIXED_INCOME_FACTORS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzHr34Gg48W9awG2Hde3P_XOxGUVLf2k_W-ySRWt-2IaIa7VOD6IsYfm-LmfhaYSwRn/exec';
 const FIXED_INCOME_FACTORS_API_SECRET_KEY = 'change-this-fixed-income-factors-api-key';
+const FT_HISTORICAL_API_WEB_APP_URL = '';
+const FT_HISTORICAL_API_SECRET_KEY = 'change-this-ft-historical-api-key';
 
 const JSON_STORE = {
   rootName: 'JSON Files',
@@ -2249,6 +2253,60 @@ async function triggerIncomeFundDividendSync(funds = [], options = {}) {
   }
   if (!resp.ok || data.ok === false) {
     throw new Error(data.error || data.message || `Dividend sync API HTTP ${resp.status}`);
+  }
+  return data;
+}
+
+function ftHistoricalApiUrl() {
+  return String(CONFIG.FT_HISTORICAL_API_WEB_APP_URL || FT_HISTORICAL_API_WEB_APP_URL || '').trim();
+}
+
+function ftHistoricalApiKey() {
+  return String(CONFIG.FT_HISTORICAL_API_SECRET_KEY || FT_HISTORICAL_API_SECRET_KEY || '').trim();
+}
+
+async function triggerFtHistoricalSync(payload = {}) {
+  const apiUrl = ftHistoricalApiUrl();
+  if (!apiUrl) {
+    throw new Error('ยังไม่ได้ตั้งค่า CONFIG.FT_HISTORICAL_API_WEB_APP_URL');
+  }
+  const url = new URL(apiUrl);
+  url.searchParams.set('action', 'sync');
+  url.searchParams.set('folderId', FT_HISTORICAL_DRIVE_FOLDER_ID);
+  url.searchParams.set('fileName', FT_HISTORICAL_DB_FILE_NAME);
+  if (ftHistoricalApiKey()) url.searchParams.set('key', ftHistoricalApiKey());
+
+  const body = {
+    action: 'sync',
+    key: ftHistoricalApiKey(),
+    quarter: State.currentQuarter || '2026-Q1',
+    folderId: FT_HISTORICAL_DRIVE_FOLDER_ID,
+    fileName: FT_HISTORICAL_DB_FILE_NAME,
+    url: String(payload.url || '').trim(),
+    symbol: String(payload.symbol || '').trim(),
+    startDate: String(payload.startDate || '').trim(),
+    endDate: String(payload.endDate || '').trim(),
+    runPrices: payload.runPrices === false ? 'false' : 'true',
+    runQualitative: payload.runQualitative === false ? 'false' : 'true',
+    githubToken: String(payload.githubToken || '').trim(),
+  };
+
+  const resp = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+    redirect: 'follow',
+  });
+  const text = await resp.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(text || `FT sync API HTTP ${resp.status}`);
+  }
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || data.message || `FT sync API HTTP ${resp.status}`);
   }
   return data;
 }
@@ -15881,6 +15939,28 @@ const Pages = {
         runBtn.textContent = 'กำลังดึงข้อมูล...';
       }
       try {
+        let result = {};
+        if (ftHistoricalApiUrl()) {
+          const data = await triggerFtHistoricalSync({
+            ...payload,
+            runPrices: true,
+            runQualitative: true,
+          });
+          result = data.result || data;
+          if (resultSummary) {
+            resultSummary.textContent = data.message || `สั่ง GitHub Actions ให้ดึงราคา ${payload.symbol} แล้ว`;
+          }
+          if (resultDetail) {
+            resultDetail.innerHTML = `
+              <div><span>Workflow</span><strong>${esc(result.workflow || 'ft-historical-prices-database.yml')}</strong></div>
+              <div><span>Drive Folder</span><strong>${esc(result.driveFolderId || FT_HISTORICAL_DRIVE_FOLDER_ID)}</strong></div>
+              <div><span>ไฟล์ปลายทาง</span><strong>${esc(result.fileName || FT_HISTORICAL_DB_FILE_NAME)}</strong></div>
+              <div><span>สถานะ</span><strong>รอ GitHub Actions ทำงานเสร็จ แล้วไฟล์ JSON จะถูกอัปโหลดกลับเข้า Google Drive</strong></div>
+            `;
+          }
+          toast(data.message || 'สั่งดึงราคา FT ผ่าน GitHub Actions แล้ว', 'success', 6500);
+          return;
+        }
         const resp = await fetch('/api/ft-historical-prices', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -15888,7 +15968,7 @@ const Pages = {
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || data.ok === false) throw new Error(data.error || `FT sync failed (${resp.status})`);
-        const result = data.result || {};
+        result = data.result || {};
         if (resultSummary) {
           resultSummary.textContent = `${result.symbol || payload.symbol}: ${Number(result.totalRows || 0).toLocaleString()} rows · ${result.startDate || payload.startDate} ถึง ${result.endDate || payload.endDate}`;
         }
@@ -15935,6 +16015,30 @@ const Pages = {
         runBtn.textContent = 'กำลังดึงข้อมูล...';
       }
       try {
+        let result = {};
+        if (ftHistoricalApiUrl()) {
+          const data = await triggerFtHistoricalSync({
+            ...payload,
+            startDate: $('#ft-start-date', area)?.value || '',
+            endDate: $('#ft-end-date', area)?.value || '',
+            runPrices: true,
+            runQualitative: true,
+          });
+          result = data.result || data;
+          if (resultSummary) {
+            resultSummary.textContent = data.message || `สั่ง GitHub Actions ให้ดึงข้อมูลเชิงคุณภาพ ${payload.symbol} แล้ว`;
+          }
+          if (resultDetail) {
+            resultDetail.innerHTML = `
+              <div><span>Workflow</span><strong>${esc(result.workflow || 'ft-historical-prices-database.yml')}</strong></div>
+              <div><span>Drive Folder</span><strong>${esc(result.driveFolderId || FT_HISTORICAL_DRIVE_FOLDER_ID)}</strong></div>
+              <div><span>ไฟล์ปลายทาง</span><strong>${esc(result.fileName || FT_HISTORICAL_DB_FILE_NAME)}</strong></div>
+              <div><span>สถานะ</span><strong>รอ GitHub Actions ทำงานเสร็จ แล้วไฟล์ JSON จะถูกอัปโหลดกลับเข้า Google Drive</strong></div>
+            `;
+          }
+          toast(data.message || 'สั่งดึงข้อมูลเชิงคุณภาพ FT ผ่าน GitHub Actions แล้ว', 'success', 6500);
+          return;
+        }
         const resp = await fetch('/api/ft-qualitative-data', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -15942,7 +16046,7 @@ const Pages = {
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || data.ok === false) throw new Error(data.error || `FT qualitative sync failed (${resp.status})`);
-        const result = data.result || {};
+        result = data.result || {};
         if (resultSummary) {
           const name = result.displayName ? ` · ${result.displayName}` : '';
           resultSummary.textContent = `${result.symbol || payload.symbol}${name}: profile ${Number(result.profileRows || 0).toLocaleString()} fields · risk ${Number(result.riskRows || 0).toLocaleString()} rows · holdings ${Number(result.holdingsRows || 0).toLocaleString()} rows`;
