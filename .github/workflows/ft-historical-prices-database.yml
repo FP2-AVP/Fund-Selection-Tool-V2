@@ -86,6 +86,17 @@ jobs:
           rm -rf Data/ft_historical_prices
           mkdir -p Data/ft_historical_prices
 
+      - name: Download existing FT SQLite from Google Drive
+        if: ${{ inputs.app_script_url != '' }}
+        run: |
+          python scripts/download_ft_historical_artifact_from_apps_script.py \
+            --url "${{ inputs.app_script_url }}" \
+            --key "${{ inputs.app_script_key }}" \
+            --folder-id "${{ inputs.drive_folder_id }}" \
+            --relative-path "ft_historical_prices.sqlite" \
+            --output "Data/ft_historical_prices/ft_historical_prices.sqlite" \
+            --optional
+
       - name: Sync FT historical prices
         if: ${{ inputs.run_prices == 'true' }}
         run: |
