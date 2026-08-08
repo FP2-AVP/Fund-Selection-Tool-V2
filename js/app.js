@@ -2285,10 +2285,14 @@ async function triggerFtHistoricalSync(payload = {}) {
     fileName: FT_HISTORICAL_DB_FILE_NAME,
     url: String(payload.url || '').trim(),
     symbol: String(payload.symbol || '').trim(),
+    symbols: String(payload.symbols || '').trim(),
+    allSymbolsFromDb: payload.allSymbolsFromDb === true ? 'true' : 'false',
     startDate: String(payload.startDate || '').trim(),
     endDate: String(payload.endDate || '').trim(),
     runPrices: payload.runPrices === false ? 'false' : 'true',
     runQualitative: payload.runQualitative === false ? 'false' : 'true',
+    continueOnError: payload.continueOnError === false ? 'false' : 'true',
+    sleepSeconds: String(payload.sleepSeconds ?? '1').trim(),
     githubToken: String(payload.githubToken || '').trim(),
   };
 
@@ -4304,6 +4308,11 @@ function buildTop10CompareExportPayload(title, source, entries = []) {
 
 function buildTop10V3ExportPayload(title, source, funds = []) {
   const rows = Array.isArray(funds) ? funds : [];
+  const top10PortfolioPercent = (fund) => {
+    const holdings = Array.isArray(fund?._topHoldings) ? fund._topHoldings : [];
+    const found = holdings.find(item => item?.top10PortfolioPercent);
+    return found?.top10PortfolioPercent || '';
+  };
   const headers = [
     'Fund',
     'ISIN',
@@ -4317,6 +4326,7 @@ function buildTop10V3ExportPayload(title, source, funds = []) {
     'Initial Charge',
     'Max Annual Charge',
     'Exit Charge',
+    'Top 10 % Portfolio',
     'FT Sharpe 3Y',
     'FT Std Dev 3Y',
     'FT Alpha 3Y',
@@ -4349,6 +4359,7 @@ function buildTop10V3ExportPayload(title, source, funds = []) {
       top10Text(firstProfile(['Initial charge', 'Front end load']) || fund?._feesInitial),
       top10Text(firstProfile(['Max annual charge']) || fund?._feesMaxAnnual),
       top10Text(firstProfile(['Exit charge']) || fund?._feesExit),
+      top10Text(top10PortfolioPercent(fund)),
       top10Text(riskValue('Sharpe ratio')),
       top10Text(riskValue('Standard deviation')),
       top10Text(riskValue('Alpha')),
@@ -15868,6 +15879,173 @@ const Pages = {
       }
       return ranges;
     };
+    const int = (value) => Number.isFinite(Number(value)) ? Number(value).toLocaleString() : '-';
+    const symbolDisplayName = (item = {}) => item.displayName || item.name || item.fundName || '';
+    const symbolDisplayLabel = (item = {}) => item.displayLabel || [item.symbol, symbolDisplayName(item)].filter(Boolean).join(' · ') || item.symbol || '-';
+    const normalizeFtIsin = (value = '') => String(value || '').split(':')[0].replace(/\s+/g, '').trim().toUpperCase();
+    const normalizeFtName = (value = '') => String(value || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const addFtSymbolAvpMatch = (lookup, key, fund) => {
+      if (!key || !fund?.code) return;
+      const existing = lookup.get(key) || { codes: new Set(), categories: new Set() };
+      existing.codes.add(String(fund.code || '').trim());
+      if (fund.category) existing.categories.add(String(fund.category || '').trim());
+      lookup.set(key, existing);
+    };
+    const addFtSymbolAvpIsinMatch = (lookup, isin, fund) => {
+      const key = normalizeFtIsin(isin);
+      addFtSymbolAvpMatch(lookup, key, fund);
+    };
+    const buildFtSymbolAvpLookup = async () => {
+      try {
+        const rawRows = await fetchCached('select-fund');
+        await Promise.all([
+          loadFundOverrides(),
+          loadMasterAllocations(),
+        ]);
+        const funds = applyFundOverrides(buildSelectedFundsCatalog(rawRows));
+        const byIsin = new Map();
+        const byName = new Map();
+        funds.forEach(fund => {
+          addFtSymbolAvpIsinMatch(byIsin, fund.masterId, fund);
+          addFtSymbolAvpMatch(byName, normalizeFtName(fund.masterName), fund);
+          const saved = State.masterAllocations?.items?.[fund.key];
+          const allocations = Array.isArray(saved?.allocations) ? saved.allocations : [];
+          allocations.forEach(allocation => {
+            addFtSymbolAvpIsinMatch(byIsin, allocation.masterId, fund);
+            addFtSymbolAvpMatch(byName, normalizeFtName(allocation.masterName), fund);
+          });
+        });
+        return { byIsin, byName };
+      } catch {
+        return { byIsin: new Map(), byName: new Map() };
+      }
+    };
+    const renderAvailableSymbols = async (force = false) => {
+      const card = $('#ft-available-symbols-card', area);
+      const body = $('#ft-available-symbols-body', area);
+      const summary = $('#ft-available-symbols-summary', area);
+      const refreshBtn = $('#ft-refresh-symbols', area);
+      if (!card || !body) return;
+      const sortState = State.reportSorts['robustness-ft-import-symbols'] || (State.reportSorts['robustness-ft-import-symbols'] = { key: '', dir: 'asc' });
+      const sortHeader = (key, label) =>
+        `<th class="ft-symbol-sort ${sortState.key === key ? 'is-active' : ''}" data-ft-symbol-sort="${esc(key)}">${renderSortLabel(label, sortState.key === key, sortState.dir)}</th>`;
+      if (refreshBtn) {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'กำลังรีเฟรช...';
+      }
+      body.innerHTML = '<div class="state-box compact">กำลังโหลด Available Symbols...</div>';
+      try {
+        if (force) State.ftHistoricalDatabase = null;
+        const [payload, avpLookup] = await Promise.all([
+          loadFtHistoricalPayloadForPage(5000),
+          buildFtSymbolAvpLookup(),
+        ]);
+        const symbols = (payload.symbols || []).filter(item => item.symbol);
+        if (summary) summary.textContent = symbols.length ? `พบ ${symbols.length.toLocaleString()} symbols ในฐานข้อมูล` : 'ยังไม่มี symbol ในฐานข้อมูล';
+        if (!symbols.length) {
+          body.innerHTML = '<div class="state-box compact">ยังไม่มีข้อมูล FT Historical Prices ให้ดึงราคาอย่างน้อย 1 symbol ก่อน</div>';
+          return;
+        }
+        const displayRows = symbols.map(item => {
+          const matched = avpLookup.byIsin.get(normalizeFtIsin(item.isin || item.symbol))
+            || avpLookup.byName.get(normalizeFtName(symbolDisplayName(item)));
+          const fundCodes = matched ? [...matched.codes].filter(Boolean) : [];
+          const categories = matched ? [...matched.categories].filter(Boolean) : [];
+          return {
+            fundCodes,
+            fundCodeText: fundCodes.join(', '),
+            category: categories.join(', '),
+            symbol: item.symbol || '',
+            name: symbolDisplayName(item) || '',
+            rows: Number(item.rowCount || item.rows || 0),
+            start: item.startDate || item.start || '',
+            end: item.endDate || item.end || '',
+          };
+        });
+        const sortableValue = (row, key) => ({
+          fundCode: row.fundCodeText,
+          category: row.category,
+          symbol: row.symbol,
+          name: row.name,
+          rows: row.rows,
+          start: row.start,
+          end: row.end,
+        })[key];
+        const sortedRows = sortState.key
+          ? [...displayRows].sort((a, b) => compareValues(sortableValue(a, sortState.key), sortableValue(b, sortState.key), sortState.dir))
+          : displayRows;
+        body.innerHTML = `
+          <div class="table-wrapper ft-symbol-table-wrap">
+            <table class="ft-symbol-table">
+              <colgroup>
+                <col class="ft-symbol-col-code">
+                <col class="ft-symbol-col-category">
+                <col class="ft-symbol-col-symbol">
+                <col class="ft-symbol-col-name">
+                <col class="ft-symbol-col-rows">
+                <col class="ft-symbol-col-date">
+                <col class="ft-symbol-col-date">
+              </colgroup>
+              <thead>
+                <tr>
+                  ${sortHeader('fundCode', 'Fund Code')}
+                  ${sortHeader('category', 'หมวดหมู่ AVP')}
+                  ${sortHeader('symbol', 'Symbol')}
+                  ${sortHeader('name', 'Name')}
+                  ${sortHeader('rows', 'Rows')}
+                  ${sortHeader('start', 'Start')}
+                  ${sortHeader('end', 'End')}
+                </tr>
+              </thead>
+              <tbody>
+                ${sortedRows.map(row => `
+                  <tr>
+                    <td class="td-code ft-symbol-code-cell">${row.fundCodes.length ? row.fundCodes.map(code => `<div>${esc(code)}</div>`).join('') : '-'}</td>
+                    <td class="ft-symbol-category-cell">${esc(row.category || '-')}</td>
+                    <td>${esc(row.symbol || '')}</td>
+                    <td>${esc(row.name || '-')}</td>
+                    <td class="td-num">${int(row.rows || 0)}</td>
+                    <td>${esc(row.start || '')}</td>
+                    <td>${esc(row.end || '')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          <style>
+            .ft-symbol-table{min-width:1180px;table-layout:fixed}
+            .ft-symbol-table-wrap{max-height:min(70vh, 720px)}
+            .ft-symbol-col-code{width:250px}
+            .ft-symbol-col-category{width:120px}
+            .ft-symbol-col-symbol{width:170px}
+            .ft-symbol-col-name{width:auto}
+            .ft-symbol-col-rows{width:90px}
+            .ft-symbol-col-date{width:120px}
+            .ft-symbol-sort{cursor:pointer;user-select:none}
+            .ft-symbol-sort:hover{background:#315d96}
+            .ft-symbol-sort.is-active{background:#f7d774;color:#4e3500;border-color:#d79a12}
+            .ft-symbol-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%}
+            .ft-symbol-code-cell{white-space:normal;line-height:1.45}
+            .ft-symbol-code-cell div{margin:2px 0}
+            .ft-symbol-category-cell{white-space:normal;line-height:1.3}
+          </style>
+        `;
+        $$('.ft-symbol-sort', body).forEach(el => {
+          el.addEventListener('click', () => {
+            toggleNamedSort(sortState, el.dataset.ftSymbolSort);
+            renderAvailableSymbols();
+          });
+        });
+      } catch (err) {
+        if (summary) summary.textContent = 'โหลดรายการ symbol ไม่สำเร็จ';
+        body.innerHTML = `<div class="state-box compact">${esc(err.message || 'โหลด Available Symbols ไม่สำเร็จ')}</div>`;
+      } finally {
+        if (refreshBtn) {
+          refreshBtn.disabled = false;
+          refreshBtn.textContent = '↻ รีเฟรชฐานข้อมูล';
+        }
+      }
+    };
 
     const renderPreview = () => {
       const url = $('#ft-url', area)?.value || '';
@@ -15879,13 +16057,11 @@ const Pages = {
       State.ftHistoricalImport = { url, startDate, endDate, symbol };
 
       const symbolEl = $('#ft-symbol-preview', area);
-      const commandEl = $('#ft-command-preview', area);
       const rangeEl = $('#ft-range-preview', area);
       const outputEl = $('#ft-output-preview', area);
       const statusEl = $('#ft-preview-status', area);
       const priceBtn = $('#ft-run-prices', area);
       const qualityBtn = $('#ft-run-qualitative', area);
-      const copyBtn = $('#ft-copy-command', area);
       const priceValid = Boolean(symbol && startDate && endDate && startDate <= endDate);
       const qualityValid = Boolean(symbol);
 
@@ -15898,17 +16074,9 @@ const Pages = {
       if (outputEl) {
         outputEl.innerHTML = `
           <div><strong>Price CSV</strong> Data/ft_historical_prices/prices/${esc(slug)}.csv</div>
-          <div><strong>Qualitative Snapshot</strong> Data/ft_historical_prices/qualitative/as_of_YYYY-MM-DD/${esc(slug)}/</div>
+          <div><strong>Qualitative Snapshot</strong> Data/ft_historical_prices/qualitative/YYYY-MM/as_of_YYYY-MM-DD/${esc(slug)}/</div>
           <div><strong>SQLite</strong> Data/ft_historical_prices/ft_historical_prices.sqlite</div>
         `;
-      }
-      if (commandEl) {
-        commandEl.textContent = symbol
-          ? [
-              `ราคา: python3 scripts/ft_historical_prices_store.py --symbol '${symbol}' --start-date ${startDate || 'YYYY-MM-DD'} --end-date ${endDate || 'YYYY-MM-DD'}`,
-              `ข้อมูลเชิงคุณภาพ: python3 scripts/ft_historical_prices_store.py --symbol '${symbol}' --qualitative-only`,
-            ].join('\n')
-          : 'ใส่ FT link หรือ symbol ให้ครบก่อน';
       }
       if (statusEl) {
         statusEl.className = qualityValid ? 'badge badge-primary' : 'badge badge-warning';
@@ -15916,7 +16084,6 @@ const Pages = {
       }
       if (priceBtn) priceBtn.disabled = !priceValid;
       if (qualityBtn) qualityBtn.disabled = !qualityValid;
-      if (copyBtn) copyBtn.disabled = !qualityValid;
     };
 
     area.innerHTML = `
@@ -15946,7 +16113,6 @@ const Pages = {
           <div class="toolbar">
             <button class="btn btn-primary" id="ft-run-prices" type="button">ดึงราคา Historical Prices</button>
             <button class="btn btn-secondary" id="ft-run-qualitative" type="button">ดึงข้อมูลเชิงคุณภาพ</button>
-            <button class="btn btn-secondary" id="ft-copy-command" type="button">คัดลอกคำสั่ง</button>
             <button class="btn btn-ghost" id="ft-reset-3y" type="button">ย้อนหลัง 3 ปี</button>
           </div>
         </section>
@@ -15966,16 +16132,6 @@ const Pages = {
         </section>
       </div>
 
-      <section class="card">
-        <div class="card-header">
-          <div>
-            <h3>Local Command</h3>
-            <p>ใช้คำสั่งนี้กับ script ที่เตรียมไว้เพื่อสร้าง CSV, SQLite และ raw JSON ใน Google Drive project</p>
-          </div>
-        </div>
-        <pre class="code-preview" id="ft-command-preview"></pre>
-      </section>
-
       <section class="card hidden" id="ft-result-card">
         <div class="card-header">
           <div>
@@ -15984,6 +16140,22 @@ const Pages = {
           </div>
         </div>
         <div class="kv-list" id="ft-result-detail"></div>
+      </section>
+
+      <section class="card" id="ft-available-symbols-card">
+        <div class="card-header">
+          <div>
+            <h3>Available Symbols</h3>
+            <p id="ft-available-symbols-summary">รายการสินทรัพย์ที่มีในฐานข้อมูล FT ตอนนี้</p>
+          </div>
+          <div class="toolbar">
+            <button class="btn btn-secondary btn-sm" id="ft-run-all-qualitative" type="button">ดึงเชิงคุณภาพทั้งหมด</button>
+            <button class="btn btn-secondary btn-sm" id="ft-refresh-symbols" type="button">↻ รีเฟรชฐานข้อมูล</button>
+          </div>
+        </div>
+        <div id="ft-available-symbols-body">
+          <div class="state-box compact">กำลังโหลด Available Symbols...</div>
+        </div>
       </section>
     `;
 
@@ -15996,13 +16168,72 @@ const Pages = {
       $('#ft-end-date', area).value = isoToday;
       renderPreview();
     });
-    $('#ft-copy-command', area)?.addEventListener('click', async () => {
-      const command = $('#ft-command-preview', area)?.textContent || '';
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(command);
-        toast('คัดลอกคำสั่งดึงข้อมูล FT แล้ว', 'success', 2200);
-      } else {
-        toast('เตรียมคำสั่งไว้ด้านล่างแล้ว', 'info', 2200);
+    $('#ft-refresh-symbols', area)?.addEventListener('click', () => {
+      renderAvailableSymbols(true);
+    });
+    $('#ft-run-all-qualitative', area)?.addEventListener('click', async () => {
+      const runBtn = $('#ft-run-all-qualitative', area);
+      const resultCard = $('#ft-result-card', area);
+      const resultSummary = $('#ft-result-summary', area);
+      const resultDetail = $('#ft-result-detail', area);
+      resultCard?.classList.remove('hidden');
+      if (runBtn) {
+        runBtn.disabled = true;
+        runBtn.textContent = 'กำลังสั่งดึง...';
+      }
+      if (resultSummary) resultSummary.textContent = 'กำลังดึงข้อมูลเชิงคุณภาพทุก symbol ในฐานข้อมูล...';
+      if (resultDetail) resultDetail.innerHTML = '';
+      try {
+        let result = {};
+        if (ftHistoricalApiUrl()) {
+          const data = await triggerFtHistoricalSync({
+            allSymbolsFromDb: true,
+            runPrices: false,
+            runQualitative: true,
+            continueOnError: true,
+            sleepSeconds: 1,
+          });
+          result = data.result || data;
+          if (resultSummary) resultSummary.textContent = data.message || 'สั่ง GitHub Actions ให้ดึงข้อมูลเชิงคุณภาพทั้งหมดแล้ว';
+          if (resultDetail) {
+            resultDetail.innerHTML = `
+              <div><span>Workflow</span><strong>${esc(result.workflow || 'ft-historical-prices-database.yml')}</strong></div>
+              <div><span>Drive Folder</span><strong>${esc(result.driveFolderId || FT_HISTORICAL_DRIVE_FOLDER_ID)}</strong></div>
+              <div><span>สถานะ</span><strong>รอ GitHub Actions ทำงานเสร็จ แล้วกดรีเฟรชฐานข้อมูล</strong></div>
+            `;
+          }
+          toast(data.message || 'สั่งดึงข้อมูลเชิงคุณภาพทั้งหมดผ่าน GitHub Actions แล้ว', 'success', 6500);
+          return;
+        }
+        const resp = await fetch('/api/ft-qualitative-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allSymbolsFromDb: true, continueOnError: true, sleepSeconds: 1 }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.ok === false) throw new Error(data.error || `FT qualitative batch failed (${resp.status})`);
+        result = data.result || {};
+        if (resultSummary) {
+          resultSummary.textContent = `ดึงข้อมูลเชิงคุณภาพทั้งหมดแล้ว: สำเร็จ ${Number(result.succeeded || 0).toLocaleString()} / ${Number(result.requested || 0).toLocaleString()} symbols`;
+        }
+        if (resultDetail) {
+          resultDetail.innerHTML = `
+            <div><span>สำเร็จ</span><strong>${Number(result.succeeded || 0).toLocaleString()}</strong></div>
+            <div><span>ไม่สำเร็จ</span><strong>${Number(result.failed || 0).toLocaleString()}</strong></div>
+            <div><span>ข้อผิดพลาด</span><div class="badge-row">${(result.errors || []).map(error => `<span class="badge badge-warning">${esc(error.symbol)}: ${esc(error.error)}</span>`).join('') || '<span class="badge">ไม่มี</span>'}</div></div>
+          `;
+        }
+        toast('ดึงข้อมูลเชิงคุณภาพทั้งหมดสำเร็จ', 'success', 2600);
+        renderAvailableSymbols(true);
+      } catch (err) {
+        if (resultSummary) resultSummary.textContent = err.message || 'ดึงข้อมูลเชิงคุณภาพทั้งหมดไม่สำเร็จ';
+        if (resultDetail) resultDetail.innerHTML = '<div><span>สถานะ</span><strong>ตรวจว่า local server/network พร้อม และมี symbol อยู่ในฐานข้อมูลแล้ว</strong></div>';
+        toast(err.message || 'ดึงข้อมูลเชิงคุณภาพทั้งหมดไม่สำเร็จ', 'error', 6000);
+      } finally {
+        if (runBtn) {
+          runBtn.disabled = false;
+          runBtn.textContent = 'ดึงเชิงคุณภาพทั้งหมด';
+        }
       }
     });
     $('#ft-run-prices', area)?.addEventListener('click', async () => {
@@ -16070,6 +16301,7 @@ const Pages = {
           `;
         }
         toast('ดึงข้อมูล FT สำเร็จ', 'success', 2600);
+        renderAvailableSymbols(true);
       } catch (err) {
         if (resultSummary) resultSummary.textContent = err.message || 'ดึงข้อมูล FT ไม่สำเร็จ';
         if (resultDetail) {
@@ -16155,6 +16387,7 @@ const Pages = {
           `;
         }
         toast('ดึงข้อมูลเชิงคุณภาพ FT สำเร็จ', 'success', 2600);
+        renderAvailableSymbols(true);
       } catch (err) {
         if (resultSummary) resultSummary.textContent = err.message || 'ดึงข้อมูลเชิงคุณภาพ FT ไม่สำเร็จ';
         if (resultDetail) {
@@ -16169,6 +16402,7 @@ const Pages = {
       }
     });
     renderPreview();
+    renderAvailableSymbols();
     State._pageDataSource[pageKey] = 'FT Markets historical prices';
     App._currentExport = null;
     App._currentTableExport = null;
@@ -17071,15 +17305,18 @@ const Pages = {
     // ── Default selections from existing universe ──
     const defaultThaiCodes = Array.isArray(savedV3State?.selections?.thai) && savedV3State.selections.thai.length
       ? savedV3State.selections.thai.slice(0, 7)
-      : thaiCodes.slice(0, 7).map(item => item.code);
+      : (isLocalFtPage
+          ? ftSymbolItems.slice(1, 8).map(item => item.symbol)
+          : thaiCodes.slice(0, 7).map(item => item.code));
     while (defaultThaiCodes.length < 7) defaultThaiCodes.push('');
     const savedFtSymbol = String(savedV3State?.selections?.iShare || '').trim();
     const selectedFtSymbol = ftSymbolMeta.has(savedFtSymbol) ? savedFtSymbol : '';
-    const ftSymbolOptions = ftSymbolItems.length
+    const buildFtSymbolOptions = (selectedSymbol = '') => ftSymbolItems.length
       ? ftSymbolItems.map(item => {
-        const riskLabel = item.riskRowCount ? ` · risk ${item.riskRowCount}` : '';
+          const riskLabel = item.riskRowCount ? ` · risk ${item.riskRowCount}` : '';
+          const holdingsLabel = item.holdingsRowCount ? ` · holdings ${item.holdingsRowCount}` : '';
           const profileLabel = item.profileRowCount == null ? '' : ` · profile ${item.profileRowCount}`;
-          return `<option value="${esc(item.symbol)}"${item.symbol === selectedFtSymbol ? ' selected' : ''}>${esc(item.label)}${profileLabel}${riskLabel}</option>`;
+          return `<option value="${esc(item.symbol)}"${item.symbol === selectedSymbol ? ' selected' : ''}>${esc(item.label)}${profileLabel}${riskLabel}${holdingsLabel}</option>`;
         }).join('')
       : '<option value="">ยังไม่มีข้อมูล FT qualitative ในเครื่อง</option>';
 
@@ -17094,13 +17331,18 @@ const Pages = {
     const iShareCard = selectorCard(0, fundColors[0], 'iShare Index',
       `<select id="v3-sel-0" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:0.92rem;font-weight:600;color:var(--primary-dark);background:#fff;cursor:pointer;">
         <option value="">-- เลือกจาก FT qualitative --</option>
-        ${ftSymbolOptions}
+        ${buildFtSymbolOptions(selectedFtSymbol)}
       </select>`
     );
 
     const thaiCards = defaultThaiCodes.map((def, i) => selectorCard(
       i + 1, fundColors[i + 1], `กองทุนไทย #${i + 1}`,
-      `<div style="position:relative;">
+      isLocalFtPage
+        ? `<select id="v3-sel-${i + 1}" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:0.92rem;font-weight:600;color:var(--primary-dark);background:#fff;cursor:pointer;">
+            <option value="">-- เลือกจาก FT qualitative --</option>
+            ${buildFtSymbolOptions(ftSymbolMeta.has(def) ? def : '')}
+          </select>`
+        : `<div style="position:relative;">
         <input id="v3-sel-${i + 1}" list="v3-thai-datalist" value="${esc(def)}"
           placeholder="${thaiCodes.length ? 'เลือกหรือพิมพ์ชื่อกองทุน...' : 'พิมพ์รหัสกองทุน...'}"
           autocomplete="off"
@@ -17271,6 +17513,11 @@ const Pages = {
         }
         return '';
       };
+      const top10PortfolioPercent = (f) => {
+        const holdings = Array.isArray(f?._topHoldings) ? f._topHoldings : [];
+        const found = holdings.find(item => item?.top10PortfolioPercent);
+        return found?.top10PortfolioPercent || '';
+      };
 
       if (masterThead) masterThead.innerHTML = `
         <tr style="background:#1a3c6e;color:#fff;font-size:0.86rem;">
@@ -17317,10 +17564,12 @@ const Pages = {
             if (!h) return `<td style="padding:8px 10px;text-align:center;font-size:0.86rem;color:#cbd5e1;">—</td>`;
             const name = h.companyName || h.name || '—';
             const wt   = h.weightText || (h.weight != null ? h.weight + '%' : '');
-            const combinedText = wt ? `${name} ${wt}` : name;
+            const holdingSymbol = h.symbol || h.holdingSymbol || '';
+            const combinedText = [name, holdingSymbol, wt].filter(Boolean).join(' · ');
             return `<td style="padding:8px 10px;font-size:0.86rem;color:var(--text);">
-              <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;" title="${esc(combinedText)}">
-                ${esc(name)}${wt ? ` <span style="font-size:0.88rem;color:var(--text-muted);font-weight:500;">${esc(wt)}</span>` : ''}
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-width:0;" title="${esc(combinedText)}">
+                <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;">${esc(name)}</span>
+                ${wt ? `<span style="margin-left:auto;white-space:nowrap;font-size:0.88rem;color:var(--text-muted);font-weight:700;flex-shrink:0;text-align:right;">${esc(wt)}</span>` : ''}
               </div>
             </td>`;
           }).join('');
@@ -17329,7 +17578,11 @@ const Pages = {
             ${cells}
           </tr>`;
         });
-        holdTbody.innerHTML = rows.join('');
+        const summaryRow = `<tr style="border-bottom:1px solid var(--border-light);background:#f8fafc;">
+          <td style="padding:8px 10px;text-align:center;font-size:0.78rem;font-weight:800;color:#1a3c6e;background:#eef4fb;border-right:1px solid var(--border-light);line-height:1.25;">Top 10<br>% Portfolio</td>
+          ${data.map(f => `<td style="padding:8px 10px;text-align:center;font-size:0.9rem;font-weight:800;color:#1a3c6e;background:#f8fafc;">${fmtPct(top10PortfolioPercent(f))}</td>`).join('')}
+        </tr>`;
+        holdTbody.innerHTML = summaryRow + rows.join('');
       }
 
       // Top 10 Holdings compare matrix by asset name
@@ -17429,26 +17682,46 @@ const Pages = {
             <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${f.color};margin-right:5px;vertical-align:middle;opacity:0.9;"></span>${esc((f._selectorName || f.name).split('–')[0].trim())}
           </th>`).join('')}
         </tr>`;
-      const riskMetrics = [
-        ['Sharpe ratio', '1 year'],
-        ['Sharpe ratio', '3 year'],
-        ['Sharpe ratio', '5 years'],
-        ['Standard deviation', '1 year'],
-        ['Standard deviation', '3 year'],
-        ['Standard deviation', '5 years'],
-        ['Alpha', '3 year'],
-        ['Beta', '3 year'],
-      ];
-      const riskValue = (f, metric, period) => {
+      const riskMetricMap = new Map();
+      data.forEach(f => {
+        (f._ftRisk || []).forEach(row => {
+          const metric = row?.metric || '';
+          const period = row?.period || '';
+          if (!metric || !period) return;
+          const key = `${period}||${metric}`;
+          if (!riskMetricMap.has(key)) riskMetricMap.set(key, [metric, period]);
+        });
+      });
+      const periodOrder = { '1 year': 1, '3 year': 2, '5 years': 3 };
+      const riskMetrics = Array.from(riskMetricMap.values()).sort(([metricA, periodA], [metricB, periodB]) => {
+        const periodDiff = (periodOrder[periodA] || 99) - (periodOrder[periodB] || 99);
+        return periodDiff || metricA.localeCompare(metricB);
+      });
+      const riskRecord = (f, metric, period) => {
         const found = (f._ftRisk || []).find(row => row.metric === metric && row.period === period);
-        return found?.fundValue || '';
+        return found || null;
+      };
+      const riskCell = (f, metric, period) => {
+        const row = riskRecord(f, metric, period);
+        if (!row?.fundValue && !row?.categoryAverage) return dash;
+        const titleParts = [
+          row?.benchmarkUsed ? `Benchmark: ${row.benchmarkUsed}` : '',
+          row?.asOfDate ? `As of: ${row.asOfDate}` : '',
+          row?.fetchedAt ? `Fetched: ${row.fetchedAt}` : '',
+        ].filter(Boolean);
+        return `<div title="${esc(titleParts.join(' · '))}" style="display:flex;flex-direction:column;gap:2px;align-items:center;line-height:1.25;">
+          <span style="font-weight:700;color:var(--text);">${fmtStr(row?.fundValue)}</span>
+          ${row?.categoryAverage ? `<span style="font-size:0.78rem;color:var(--text-muted);">Category ${esc(row.categoryAverage)}</span>` : ''}
+          ${row?.asOfDate ? `<span style="font-size:0.74rem;color:#94a3b8;">As of ${esc(row.asOfDate)}</span>` : ''}
+          ${row?.benchmarkUsed ? `<span style="font-size:0.74rem;color:#94a3b8;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Benchmark ${esc(row.benchmarkUsed)}</span>` : ''}
+        </div>`;
       };
       const anyRisk = data.some(f => Array.isArray(f._ftRisk) && f._ftRisk.length);
       if (riskTbody) riskTbody.innerHTML = anyRisk
         ? riskMetrics.map(([metric, period], ri) => `
           <tr style="border-bottom:1px solid var(--border-light);${ri % 2 === 0 ? '' : 'background:#fafbfd;'}">
             <td style="padding:9px 14px;font-weight:700;font-size:0.9rem;color:var(--text-muted);background:#f8fafc;white-space:nowrap;border-right:1px solid var(--border-light);">${esc(metric)} · ${esc(period)}</td>
-            ${data.map(f => `<td style="padding:9px 10px;text-align:center;font-size:0.9rem;color:var(--text);">${fmtStr(riskValue(f, metric, period))}</td>`).join('')}
+            ${data.map(f => `<td style="padding:9px 10px;text-align:center;font-size:0.9rem;color:var(--text);">${riskCell(f, metric, period)}</td>`).join('')}
           </tr>`).join('')
         : `<tr><td colspan="${data.length + 1}" style="padding:14px;text-align:center;color:var(--text-muted);">ยังไม่มี FT risk measures ใน SQLite สำหรับกองที่เลือก</td></tr>`;
 
@@ -17540,10 +17813,21 @@ const Pages = {
         const inp = area.querySelector(`#v3-sel-${fi}`);
         const code = inp?.value?.trim() || '';
         if (code && !code.startsWith('กองทุนไทย #')) {
-          const lu = thaiLookup[code];
-          const isin = lu?.isin || code;
-          const shortName = lu?.name ? code + ' – ' + lu.name.substring(0, 18) : code;
-          fundList.push({ idx: fi, name: shortName, isin, apiId: isin, color: fundColors[fi] });
+          if (isLocalFtPage) {
+            const ftMeta = ftSymbolMeta.get(code);
+            fundList.push({
+              idx: fi,
+              name: ftMeta?.displayName || ftMeta?.label || code,
+              isin: code,
+              apiId: code.split(':')[0],
+              color: fundColors[fi],
+            });
+          } else {
+            const lu = thaiLookup[code];
+            const isin = lu?.isin || code;
+            const shortName = lu?.name ? code + ' – ' + lu.name.substring(0, 18) : code;
+            fundList.push({ idx: fi, name: shortName, isin, apiId: isin, color: fundColors[fi] });
+          }
         }
       }
       return fundList;
@@ -17581,6 +17865,8 @@ const Pages = {
         weight: parseFloat(String(item.portfolioWeight || '').replace(/%/g, '').trim()),
         weightText: item.portfolioWeight || '',
         oneYearChange: item.oneYearChange || '',
+        top10PortfolioPercent: item.top10PortfolioPercent || '',
+        asOfDate: item.asOfDate || '',
       })).filter(item => item.name),
       _ftSymbol: ft?.symbol || '',
       _ftDisplayName: ft?.displayName || '',
