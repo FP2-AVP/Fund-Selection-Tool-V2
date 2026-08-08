@@ -1,6 +1,9 @@
 name: Build FT Historical Prices Database
 
 on:
+  schedule:
+    # Monthly qualitative refresh: 20:00 UTC on the 1st = 03:00 Bangkok on the 2nd.
+    - cron: "0 20 1 * *"
   workflow_dispatch:
     inputs:
       quarter:
@@ -9,8 +12,20 @@ on:
         default: "2026-Q1"
       symbol:
         description: "FT Markets symbol, e.g. IXN:PCQ:USD"
-        required: true
+        required: false
         default: "IXN:PCQ:USD"
+      symbols:
+        description: "Optional comma/newline separated FT symbols for batch sync."
+        required: false
+        default: ""
+      all_symbols_from_db:
+        description: "Batch sync every symbol already present in the downloaded FT SQLite database."
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
       ft_url:
         description: "Original FT.com URL, kept for logs."
         required: false
@@ -55,12 +70,33 @@ on:
         description: "Apps Script API key"
         required: false
         default: ""
+      continue_on_error:
+        description: "Continue batch sync even if one symbol fails."
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      sleep_seconds:
+        description: "Delay between symbols during batch sync."
+        required: false
+        default: "1"
 
 jobs:
   build-ft-historical-prices-database:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      EFFECTIVE_QUARTER: ${{ inputs.quarter || '2026-Q1' }}
+      EFFECTIVE_SYMBOL: ${{ inputs.symbol || 'IXN:PCQ:USD' }}
+      EFFECTIVE_SYMBOLS: ${{ inputs.symbols || '' }}
+      EFFECTIVE_DRIVE_FOLDER_ID: ${{ inputs.drive_folder_id || '1Locig3aW7hVs0SxCoeFpa76OJ0XcF1rg' }}
+      EFFECTIVE_FILE_NAME: ${{ inputs.file_name || 'ft_historical_prices_database.json' }}
+      EFFECTIVE_APP_SCRIPT_URL: ${{ inputs.app_script_url || secrets.FT_HISTORICAL_APP_SCRIPT_URL }}
+      EFFECTIVE_APP_SCRIPT_KEY: ${{ inputs.app_script_key || secrets.FT_HISTORICAL_APP_SCRIPT_KEY }}
+      EFFECTIVE_SLEEP_SECONDS: ${{ inputs.sleep_seconds || '1' }}
 
     steps:
       - name: Checkout repository
@@ -73,11 +109,13 @@ jobs:
 
       - name: Show sync plan
         run: |
-          echo "quarter=${{ inputs.quarter }}"
-          echo "symbol=${{ inputs.symbol }}"
+          echo "quarter=${EFFECTIVE_QUARTER}"
+          echo "symbol=${EFFECTIVE_SYMBOL}"
+          echo "symbols=${EFFECTIVE_SYMBOLS}"
+          echo "all_symbols_from_db=${{ github.event_name == 'schedule' && 'true' || inputs.all_symbols_from_db }}"
           echo "ft_url=${{ inputs.ft_url }}"
-          echo "run_prices=${{ inputs.run_prices }}"
-          echo "run_qualitative=${{ inputs.run_qualitative }}"
+          echo "run_prices=${{ github.event_name == 'schedule' && 'false' || inputs.run_prices }}"
+          echo "run_qualitative=${{ github.event_name == 'schedule' && 'true' || inputs.run_qualitative }}"
           echo "start_date=${{ inputs.start_date }}"
           echo "end_date=${{ inputs.end_date }}"
 
@@ -87,59 +125,79 @@ jobs:
           mkdir -p Data/ft_historical_prices
 
       - name: Download existing FT SQLite from Google Drive
-        if: ${{ inputs.app_script_url != '' }}
+        if: ${{ env.EFFECTIVE_APP_SCRIPT_URL != '' }}
         run: |
           python scripts/download_ft_historical_artifact_from_apps_script.py \
-            --url "${{ inputs.app_script_url }}" \
-            --key "${{ inputs.app_script_key }}" \
-            --folder-id "${{ inputs.drive_folder_id }}" \
+            --url "${EFFECTIVE_APP_SCRIPT_URL}" \
+            --key "${EFFECTIVE_APP_SCRIPT_KEY}" \
+            --folder-id "${EFFECTIVE_DRIVE_FOLDER_ID}" \
             --relative-path "ft_historical_prices.sqlite" \
             --output "Data/ft_historical_prices/ft_historical_prices.sqlite" \
             --optional
 
       - name: Sync FT historical prices
-        if: ${{ inputs.run_prices == 'true' }}
+        if: ${{ github.event_name != 'schedule' && inputs.run_prices == 'true' }}
         run: |
+          extra_args=()
+          if [ "${{ inputs.all_symbols_from_db }}" = "true" ]; then
+            extra_args+=(--all-symbols-from-db)
+          fi
+          if [ "${{ inputs.continue_on_error }}" = "true" ]; then
+            extra_args+=(--continue-on-error)
+          fi
           python scripts/ft_historical_prices_store.py \
-            --symbol "${{ inputs.symbol }}" \
+            --symbol "${EFFECTIVE_SYMBOL}" \
+            --symbols "${EFFECTIVE_SYMBOLS}" \
             --start-date "${{ inputs.start_date }}" \
-            --end-date "${{ inputs.end_date }}"
+            --end-date "${{ inputs.end_date }}" \
+            --sleep-seconds "${EFFECTIVE_SLEEP_SECONDS}" \
+            "${extra_args[@]}"
 
       - name: Sync FT qualitative data
-        if: ${{ inputs.run_qualitative == 'true' }}
+        if: ${{ github.event_name == 'schedule' || inputs.run_qualitative == 'true' }}
         run: |
+          extra_args=()
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.all_symbols_from_db }}" = "true" ]; then
+            extra_args+=(--all-symbols-from-db)
+          fi
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ inputs.continue_on_error }}" = "true" ]; then
+            extra_args+=(--continue-on-error)
+          fi
           python scripts/ft_historical_prices_store.py \
-            --symbol "${{ inputs.symbol }}" \
-            --qualitative-only
+            --symbol "${EFFECTIVE_SYMBOL}" \
+            --symbols "${EFFECTIVE_SYMBOLS}" \
+            --qualitative-only \
+            --sleep-seconds "${EFFECTIVE_SLEEP_SECONDS}" \
+            "${extra_args[@]}"
 
       - name: Export FT database JSON
         run: |
           python scripts/ft_historical_prices_store.py \
             --export-json \
-            --output "Data/ft_historical_prices/exports/${{ inputs.file_name }}"
+            --output "Data/ft_historical_prices/exports/${EFFECTIVE_FILE_NAME}"
 
       - name: Upload FT database JSON via Apps Script
-        if: ${{ inputs.app_script_url != '' }}
+        if: ${{ env.EFFECTIVE_APP_SCRIPT_URL != '' }}
         run: |
           python scripts/upload_ft_historical_database_to_apps_script.py \
-            --url "${{ inputs.app_script_url }}" \
-            --key "${{ inputs.app_script_key }}" \
-            --input "Data/ft_historical_prices/exports/${{ inputs.file_name }}" \
-            --folder-id "${{ inputs.drive_folder_id }}" \
-            --file-name "${{ inputs.file_name }}"
+            --url "${EFFECTIVE_APP_SCRIPT_URL}" \
+            --key "${EFFECTIVE_APP_SCRIPT_KEY}" \
+            --input "Data/ft_historical_prices/exports/${EFFECTIVE_FILE_NAME}" \
+            --folder-id "${EFFECTIVE_DRIVE_FOLDER_ID}" \
+            --file-name "${EFFECTIVE_FILE_NAME}"
 
       - name: Upload FT SQLite CSV and raw artifacts via Apps Script
-        if: ${{ inputs.app_script_url != '' }}
+        if: ${{ env.EFFECTIVE_APP_SCRIPT_URL != '' }}
         run: |
           python scripts/upload_ft_historical_artifacts_to_apps_script.py \
-            --url "${{ inputs.app_script_url }}" \
-            --key "${{ inputs.app_script_key }}" \
+            --url "${EFFECTIVE_APP_SCRIPT_URL}" \
+            --key "${EFFECTIVE_APP_SCRIPT_KEY}" \
             --root "Data/ft_historical_prices" \
-            --folder-id "${{ inputs.drive_folder_id }}"
+            --folder-id "${EFFECTIVE_DRIVE_FOLDER_ID}"
 
       - name: Upload JSON artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ft-historical-prices-database-${{ inputs.quarter }}
-          path: Data/ft_historical_prices/exports/${{ inputs.file_name }}
+          name: ft-historical-prices-database-${{ env.EFFECTIVE_QUARTER }}
+          path: Data/ft_historical_prices/exports/${{ env.EFFECTIVE_FILE_NAME }}
           if-no-files-found: error
