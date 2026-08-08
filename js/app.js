@@ -2316,6 +2316,104 @@ async function triggerFtHistoricalSync(payload = {}) {
   return data;
 }
 
+async function loadFtWorkflowStatus() {
+  const apiUrl = ftHistoricalApiUrl();
+  if (!apiUrl) throw new Error('ยังไม่ได้ตั้งค่า CONFIG.FT_HISTORICAL_API_WEB_APP_URL');
+  const url = new URL(apiUrl);
+  url.searchParams.set('action', 'workflowStatus');
+  if (ftHistoricalApiKey()) url.searchParams.set('key', ftHistoricalApiKey());
+  const resp = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || data.ok === false) {
+    throw new Error(data.error || data.message || `โหลดสถานะ GitHub Actions ไม่สำเร็จ (${resp.status})`);
+  }
+  return data;
+}
+
+function ftDatabaseHealthSummary(payload = {}) {
+  const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+  const counts = payload.counts || {};
+  const drive = payload.drive || {};
+  const fallback = payload.drivePriceFallback || {};
+  const priceRows = Number(counts.price_rows || counts.priceRows || 0);
+  const profileRows = Number(counts.profile_rows || counts.profileRows || 0);
+  const riskRows = Number(counts.risk_rows || counts.riskRows || 0);
+  const holdingRows = Number(counts.holding_rows || counts.holdingRows || 0);
+  const parts = [
+    `symbols ${symbols.length.toLocaleString()}`,
+    priceRows ? `price rows ${priceRows.toLocaleString()}` : '',
+    profileRows ? `profile ${profileRows.toLocaleString()}` : '',
+    riskRows ? `risk ${riskRows.toLocaleString()}` : '',
+    holdingRows ? `holdings ${holdingRows.toLocaleString()}` : '',
+    Number(fallback.added || 0) ? `เติมจาก CSV ${Number(fallback.added || 0).toLocaleString()} symbols` : '',
+  ].filter(Boolean);
+  return {
+    ok: symbols.length > 0,
+    text: parts.join(' · ') || 'ยังไม่มีข้อมูลในฐานข้อมูลรวม',
+    updatedAt: drive.updatedAt || payload.generated_at || payload.generatedAt || '',
+    fileName: drive.fileName || FT_HISTORICAL_DB_FILE_NAME,
+    source: payload.source || '',
+  };
+}
+
+function renderFtWorkflowStatusDetail(resultDetail, statusData, databasePayload = null) {
+  if (!resultDetail) return;
+  const run = statusData?.latestRun || {};
+  const status = run.status || '-';
+  const conclusion = run.conclusion || '-';
+  const health = databasePayload ? ftDatabaseHealthSummary(databasePayload) : null;
+  resultDetail.innerHTML = `
+    <div><span>GitHub Actions</span><strong>${esc(status)}${run.conclusion ? ` · ${esc(conclusion)}` : ''}</strong></div>
+    <div><span>เริ่มรัน</span><strong>${esc(run.runStartedAt || run.createdAt || '-')}</strong></div>
+    <div><span>อัปเดตล่าสุด</span><strong>${esc(run.updatedAt || '-')}</strong></div>
+    ${run.htmlUrl ? `<div><span>Run URL</span><strong><a href="${esc(run.htmlUrl)}" target="_blank" rel="noopener noreferrer">เปิดดูบน GitHub</a></strong></div>` : ''}
+    ${health ? `
+      <div><span>ตรวจฐานข้อมูล</span><strong>${esc(health.ok ? 'พร้อมใช้' : 'ยังไม่มีข้อมูล')}</strong></div>
+      <div><span>รายละเอียด</span><strong>${esc(health.text)}</strong></div>
+      <div><span>ไฟล์ JSON</span><strong>${esc(health.fileName)} · ${esc(health.updatedAt || '-')}</strong></div>
+    ` : '<div><span>ไฟล์ฐานข้อมูล</span><strong>รอ Actions export/upload JSON กลับเข้า Drive</strong></div>'}
+  `;
+}
+
+async function watchFtWorkflowUntilReady({ resultSummary, resultDetail, onReady } = {}) {
+  if (!ftHistoricalApiUrl()) return null;
+  const maxAttempts = 60;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let statusData = null;
+    try {
+      statusData = await loadFtWorkflowStatus();
+      const run = statusData.latestRun || {};
+      const statusText = run.status === 'completed'
+        ? `GitHub Actions จบแล้ว: ${run.conclusion || '-'}`
+        : `GitHub Actions กำลังทำงาน: ${run.status || 'unknown'} (${attempt}/${maxAttempts})`;
+      if (resultSummary) resultSummary.textContent = statusText;
+      renderFtWorkflowStatusDetail(resultDetail, statusData);
+
+      if (run.status === 'completed') {
+        if (run.conclusion === 'success') {
+          const payload = await loadFtHistoricalDatabase(true);
+          renderFtWorkflowStatusDetail(resultDetail, statusData, payload);
+          if (resultSummary) {
+            const health = ftDatabaseHealthSummary(payload);
+            resultSummary.textContent = `ดึงข้อมูลเสร็จและตรวจไฟล์แล้ว: ${health.text}`;
+          }
+          if (typeof onReady === 'function') onReady(payload);
+          return { statusData, payload };
+        }
+        if (resultSummary) resultSummary.textContent = `GitHub Actions ไม่สำเร็จ: ${run.conclusion || 'unknown'}`;
+        return { statusData, payload: null };
+      }
+    } catch (err) {
+      if (resultDetail) {
+        resultDetail.innerHTML = `<div><span>สถานะ</span><strong>${esc(err.message || 'อ่านสถานะ GitHub Actions ไม่สำเร็จ')}</strong></div>`;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 10000));
+  }
+  if (resultSummary) resultSummary.textContent = 'ยังรอ GitHub Actions อยู่ ระบบจะไม่ปิดงานนี้ แต่คุณกดรีเฟรชฐานข้อมูลซ้ำได้ภายหลัง';
+  return null;
+}
+
 function ftSymbolBase(value) {
   return String(value || '').trim().split(':')[0].toUpperCase();
 }
@@ -15941,7 +16039,12 @@ const Pages = {
           buildFtSymbolAvpLookup(),
         ]);
         const symbols = (payload.symbols || []).filter(item => item.symbol);
-        if (summary) summary.textContent = symbols.length ? `พบ ${symbols.length.toLocaleString()} symbols ในฐานข้อมูล` : 'ยังไม่มี symbol ในฐานข้อมูล';
+        const health = ftDatabaseHealthSummary(payload);
+        if (summary) {
+          summary.textContent = symbols.length
+            ? `พบ ${symbols.length.toLocaleString()} symbols ในฐานข้อมูล · ${health.updatedAt ? `JSON ${health.updatedAt}` : health.text}`
+            : 'ยังไม่มี symbol ในฐานข้อมูล';
+        }
         if (!symbols.length) {
           body.innerHTML = '<div class="state-box compact">ยังไม่มีข้อมูล FT Historical Prices ให้ดึงราคาอย่างน้อย 1 symbol ก่อน</div>';
           return;
@@ -16199,10 +16302,15 @@ const Pages = {
             resultDetail.innerHTML = `
               <div><span>Workflow</span><strong>${esc(result.workflow || 'ft-historical-prices-database.yml')}</strong></div>
               <div><span>Drive Folder</span><strong>${esc(result.driveFolderId || FT_HISTORICAL_DRIVE_FOLDER_ID)}</strong></div>
-              <div><span>สถานะ</span><strong>รอ GitHub Actions ทำงานเสร็จ แล้วกดรีเฟรชฐานข้อมูล</strong></div>
+              <div><span>สถานะ</span><strong>กำลังติดตาม GitHub Actions และจะตรวจไฟล์ฐานข้อมูลให้อัตโนมัติ</strong></div>
             `;
           }
           toast(data.message || 'สั่งดึงข้อมูลเชิงคุณภาพทั้งหมดผ่าน GitHub Actions แล้ว', 'success', 6500);
+          await watchFtWorkflowUntilReady({
+            resultSummary,
+            resultDetail,
+            onReady: () => renderAvailableSymbols(true),
+          });
           return;
         }
         const resp = await fetch('/api/ft-qualitative-data', {
@@ -16276,10 +16384,15 @@ const Pages = {
               <div><span>Workflow</span><strong>${esc(result.workflow || 'ft-historical-prices-database.yml')}</strong></div>
               <div><span>Drive Folder</span><strong>${esc(result.driveFolderId || FT_HISTORICAL_DRIVE_FOLDER_ID)}</strong></div>
               <div><span>ไฟล์ปลายทาง</span><strong>${esc(result.fileName || FT_HISTORICAL_DB_FILE_NAME)}</strong></div>
-              <div><span>สถานะ</span><strong>รอ GitHub Actions ทำงานเสร็จ แล้วไฟล์ JSON จะถูกอัปโหลดกลับเข้า Google Drive</strong></div>
+              <div><span>สถานะ</span><strong>กำลังติดตาม GitHub Actions และจะตรวจไฟล์ฐานข้อมูลให้อัตโนมัติ</strong></div>
             `;
           }
           toast(data.message || 'สั่งดึงราคา FT ผ่าน GitHub Actions แล้ว', 'success', 6500);
+          await watchFtWorkflowUntilReady({
+            resultSummary,
+            resultDetail,
+            onReady: () => renderAvailableSymbols(true),
+          });
           return;
         }
         const resp = await fetch('/api/ft-historical-prices', {
@@ -16355,10 +16468,15 @@ const Pages = {
               <div><span>Workflow</span><strong>${esc(result.workflow || 'ft-historical-prices-database.yml')}</strong></div>
               <div><span>Drive Folder</span><strong>${esc(result.driveFolderId || FT_HISTORICAL_DRIVE_FOLDER_ID)}</strong></div>
               <div><span>ไฟล์ปลายทาง</span><strong>${esc(result.fileName || FT_HISTORICAL_DB_FILE_NAME)}</strong></div>
-              <div><span>สถานะ</span><strong>รอ GitHub Actions ทำงานเสร็จ แล้วไฟล์ JSON จะถูกอัปโหลดกลับเข้า Google Drive</strong></div>
+              <div><span>สถานะ</span><strong>กำลังติดตาม GitHub Actions และจะตรวจไฟล์ฐานข้อมูลให้อัตโนมัติ</strong></div>
             `;
           }
           toast(data.message || 'สั่งดึงข้อมูลเชิงคุณภาพ FT ผ่าน GitHub Actions แล้ว', 'success', 6500);
+          await watchFtWorkflowUntilReady({
+            resultSummary,
+            resultDetail,
+            onReady: () => renderAvailableSymbols(true),
+          });
           return;
         }
         const resp = await fetch('/api/ft-qualitative-data', {
@@ -17234,6 +17352,36 @@ const Pages = {
       thaiCodes.forEach(item => { thaiLookup[item.code] = item; });
     } catch (_) {}
 
+    const normalizeFtTop10Isin = (value = '') => String(value || '').split(':')[0].replace(/\s+/g, '').trim().toUpperCase();
+    const normalizeFtTop10Name = (value = '') => String(value || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const addFtTop10AvpMatch = (lookup, key, category) => {
+      const cleanKey = String(key || '').trim();
+      if (!cleanKey) return;
+      const cleanCategory = String(category || '').trim();
+      const entry = lookup.get(cleanKey) || { categories: new Set() };
+      if (cleanCategory) entry.categories.add(cleanCategory);
+      lookup.set(cleanKey, entry);
+    };
+    const ftTop10AvpLookup = { byIsin: new Map(), byName: new Map() };
+    try {
+      const rawRows = await fetchCached('select-fund');
+      await Promise.all([
+        loadFundOverrides(),
+        loadMasterAllocations(),
+      ]);
+      const funds = applyFundOverrides(buildSelectedFundsCatalog(rawRows));
+      funds.forEach(fund => {
+        addFtTop10AvpMatch(ftTop10AvpLookup.byIsin, normalizeFtTop10Isin(fund.masterId), fund.category);
+        addFtTop10AvpMatch(ftTop10AvpLookup.byName, normalizeFtTop10Name(fund.masterName), fund.category);
+        const saved = State.masterAllocations?.items?.[fund.key];
+        const allocations = Array.isArray(saved?.allocations) ? saved.allocations : [];
+        allocations.forEach(allocation => {
+          addFtTop10AvpMatch(ftTop10AvpLookup.byIsin, normalizeFtTop10Isin(allocation.masterId), fund.category);
+          addFtTop10AvpMatch(ftTop10AvpLookup.byName, normalizeFtTop10Name(allocation.masterName), fund.category);
+        });
+      });
+    } catch (_) {}
+
     let ftSymbolItems = [];
     try {
       const payload = await loadFtHistoricalPayloadForPage(1);
@@ -17254,7 +17402,17 @@ const Pages = {
             : null,
           riskRowCount: Number(item.riskRowCount || 0),
           holdingsRowCount: Number(item.holdingsRowCount || 0),
-        }));
+        }))
+        .map(item => {
+          const matched = ftTop10AvpLookup.byIsin.get(normalizeFtTop10Isin(item.isin || item.symbol))
+            || ftTop10AvpLookup.byName.get(normalizeFtTop10Name(item.displayName || item.label || ''));
+          const categories = matched ? [...matched.categories].filter(Boolean) : [];
+          return {
+            ...item,
+            categories,
+            categoryText: categories.join(', ') || 'ไม่พบหมวดหมู่ AVP',
+          };
+        });
     } catch (_) {}
     const ftSymbolMeta = new Map(ftSymbolItems.map(item => [item.symbol, item]));
 
@@ -17312,12 +17470,31 @@ const Pages = {
     const savedFtSymbol = String(savedV3State?.selections?.iShare || '').trim();
     const selectedFtSymbol = ftSymbolMeta.has(savedFtSymbol) ? savedFtSymbol : '';
     const buildFtSymbolOptions = (selectedSymbol = '') => ftSymbolItems.length
-      ? ftSymbolItems.map(item => {
-          const riskLabel = item.riskRowCount ? ` · risk ${item.riskRowCount}` : '';
-          const holdingsLabel = item.holdingsRowCount ? ` · holdings ${item.holdingsRowCount}` : '';
-          const profileLabel = item.profileRowCount == null ? '' : ` · profile ${item.profileRowCount}`;
-          return `<option value="${esc(item.symbol)}"${item.symbol === selectedSymbol ? ' selected' : ''}>${esc(item.label)}${profileLabel}${riskLabel}${holdingsLabel}</option>`;
-        }).join('')
+      ? (() => {
+          const grouped = new Map();
+          [...ftSymbolItems]
+            .sort((a, b) => {
+              const aMissing = a.categoryText === 'ไม่พบหมวดหมู่ AVP';
+              const bMissing = b.categoryText === 'ไม่พบหมวดหมู่ AVP';
+              if (aMissing !== bMissing) return aMissing ? 1 : -1;
+              return compareValues(a.categoryText, b.categoryText, 'asc') || compareValues(a.label, b.label, 'asc');
+            })
+            .forEach(item => {
+              const group = item.categoryText || 'ไม่พบหมวดหมู่ AVP';
+              if (!grouped.has(group)) grouped.set(group, []);
+              grouped.get(group).push(item);
+            });
+          return [...grouped.entries()].map(([category, items]) => `
+            <optgroup label="${esc(category)} (${items.length})">
+              ${items.map(item => {
+                const riskLabel = item.riskRowCount ? ` · risk ${item.riskRowCount}` : '';
+                const holdingsLabel = item.holdingsRowCount ? ` · holdings ${item.holdingsRowCount}` : '';
+                const profileLabel = item.profileRowCount == null ? '' : ` · profile ${item.profileRowCount}`;
+                return `<option value="${esc(item.symbol)}"${item.symbol === selectedSymbol ? ' selected' : ''}>${esc(item.label)}${profileLabel}${riskLabel}${holdingsLabel}</option>`;
+              }).join('')}
+            </optgroup>
+          `).join('');
+        })()
       : '<option value="">ยังไม่มีข้อมูล FT qualitative ในเครื่อง</option>';
 
     // ── Selector Card HTML builder ──
