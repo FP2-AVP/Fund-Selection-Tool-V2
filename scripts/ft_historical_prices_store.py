@@ -879,10 +879,17 @@ def export_database_json(db_path: Path = DEFAULT_DB_PATH, output_path: Path | No
                     from ft_profile_investment
                     where section = 'metadata' and field = 'FT display name' and value is not null and value <> ''
                     group by symbol
+                ),
+                profile_isins as (
+                    select symbol, max(value) as isin
+                    from ft_profile_investment
+                    where field = 'ISIN' and value is not null and value <> ''
+                    group by symbol
                 )
                 select
                     k.symbol,
                     coalesce(p.ftIssueId, q.ftIssueId, r.ftIssueId, h.ftIssueId, '') as ftIssueId,
+                    coalesce(i.isin, '') as isin,
                     coalesce(d.displayName, '') as displayName,
                     coalesce(p.rowCount, 0) as rowCount,
                     coalesce(q.profileRowCount, 0) as profileRowCount,
@@ -896,6 +903,7 @@ def export_database_json(db_path: Path = DEFAULT_DB_PATH, output_path: Path | No
                 left join risk_symbols r on upper(r.symbol) = upper(k.symbol)
                 left join holdings_symbols h on upper(h.symbol) = upper(k.symbol)
                 left join display_names d on upper(d.symbol) = upper(k.symbol)
+                left join profile_isins i on upper(i.symbol) = upper(k.symbol)
                 order by k.symbol
                 """
             )
@@ -1096,6 +1104,12 @@ def sync_historical_prices(
     }
 
 
+def qualitative_snapshot_dir(output_root: Path, as_of_date: str, symbol_slug: str) -> Path:
+    month_bucket = as_of_date[:7] if re.match(r"^\d{4}-\d{2}-\d{2}$", as_of_date or "") else "unknown-month"
+    snapshot_name = f"as_of_{as_of_date}" if as_of_date else "as_of_unknown"
+    return output_root / "qualitative" / month_bucket / snapshot_name / symbol_slug
+
+
 def sync_qualitative_data(
     symbol: str,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
@@ -1114,7 +1128,7 @@ def sync_qualitative_data(
         or profile_raw.get("as_of_date")
         or utc_now()[:10]
     )
-    snapshot_dir = output_root / "qualitative" / f"as_of_{as_of_date}" / symbol_slug
+    snapshot_dir = qualitative_snapshot_dir(output_root, as_of_date, symbol_slug)
 
     profile_raw_path = snapshot_dir / "summary_profile_investment.raw.json"
     write_raw(profile_raw_path, profile_raw)
@@ -1155,14 +1169,128 @@ def sync_qualitative_data(
     }
 
 
+def parse_symbol_list(value: str) -> list[str]:
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for raw in re.split(r"[\n,]+", value or ""):
+        symbol = raw.strip()
+        if not symbol:
+            continue
+        key = symbol.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        symbols.append(symbol)
+    return symbols
+
+
+def list_symbols_from_db(db_path: Path = DEFAULT_DB_PATH) -> list[str]:
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            select symbol from (
+                select symbol from ft_historical_prices
+                union
+                select symbol from ft_profile_investment
+                union
+                select symbol from ft_risk_measures
+                union
+                select symbol from ft_top_holdings
+            )
+            order by upper(symbol)
+            """
+        ).fetchall()
+    return [str(row[0]).strip() for row in rows if str(row[0] or "").strip()]
+
+
+def resolve_requested_symbols(args: argparse.Namespace) -> list[str]:
+    symbols = parse_symbol_list(args.symbols or "")
+    if args.all_symbols_from_db:
+        for symbol in list_symbols_from_db(args.db_path):
+            if symbol.upper() not in {item.upper() for item in symbols}:
+                symbols.append(symbol)
+    if not symbols and not args.all_symbols_from_db:
+        symbols = [args.symbol]
+    if not symbols:
+        raise ValueError("No FT symbols found. Sync at least one symbol first or provide --symbols.")
+    return symbols
+
+
+def sync_qualitative_symbols(
+    symbols: list[str],
+    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    db_path: Path = DEFAULT_DB_PATH,
+    continue_on_error: bool = False,
+    sleep_seconds: float = 0,
+) -> dict[str, Any]:
+    import time
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for idx, symbol in enumerate(symbols):
+        try:
+            result = sync_qualitative_data(symbol, output_root, db_path)
+            results.append(result)
+        except Exception as exc:
+            errors.append({"symbol": symbol, "error": str(exc)})
+            if not continue_on_error:
+                raise
+        if sleep_seconds > 0 and idx < len(symbols) - 1:
+            time.sleep(sleep_seconds)
+    return {
+        "requested": len(symbols),
+        "succeeded": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors,
+    }
+
+
+def sync_historical_symbols(
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    output_root: Path = DEFAULT_OUTPUT_ROOT,
+    db_path: Path = DEFAULT_DB_PATH,
+    continue_on_error: bool = False,
+    sleep_seconds: float = 0,
+) -> dict[str, Any]:
+    import time
+
+    results: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for idx, symbol in enumerate(symbols):
+        try:
+            result = sync_historical_prices(symbol, start_date, end_date, output_root, db_path)
+            results.append(result)
+        except Exception as exc:
+            errors.append({"symbol": symbol, "error": str(exc)})
+            if not continue_on_error:
+                raise
+        if sleep_seconds > 0 and idx < len(symbols) - 1:
+            time.sleep(sleep_seconds)
+    return {
+        "requested": len(symbols),
+        "succeeded": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--symbol", default="IXN:PCQ:USD")
+    parser.add_argument("--symbols", default="", help="Comma/newline separated FT symbols for batch sync")
+    parser.add_argument("--all-symbols-from-db", action="store_true", help="Use every symbol currently present in the SQLite database")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--qualitative-only", action="store_true", help="Fetch summary/profile and risk data without historical prices")
+    parser.add_argument("--continue-on-error", action="store_true", help="Continue syncing remaining symbols if one symbol fails")
+    parser.add_argument("--sleep-seconds", type=float, default=0, help="Delay between symbols for batch sync")
     parser.add_argument("--export-json", action="store_true", help="Export the SQLite database to a Drive-friendly JSON file")
     parser.add_argument(
         "--output",
@@ -1178,28 +1306,45 @@ def main() -> int:
         return 0
 
     if args.qualitative_only:
-        result = sync_qualitative_data(args.symbol, args.output_root, args.db_path)
-        print(f"resolved_issue_id={result['ftIssueId']}")
-        print(f"display_name={result.get('displayName') or ''}")
-        print(f"profile_csv={result['profileCsvPath']}")
-        print(f"risk_csv={result['riskCsvPath']}")
-        print(f"sqlite={result['sqlitePath']}")
-        print(f"risk_rows={result['riskRows']}")
-        print(f"holdings_rows={result['holdingsRows']}")
-        print(f"risk_as_of_date={result.get('riskAsOfDate') or ''}")
-        print(f"holdings_as_of_date={result.get('holdingsAsOfDate') or ''}")
+        symbols = resolve_requested_symbols(args)
+        batch = sync_qualitative_symbols(
+            symbols,
+            args.output_root,
+            args.db_path,
+            args.continue_on_error,
+            args.sleep_seconds,
+        )
+        for result in batch["results"]:
+            print(f"{result['symbol']}: resolved_issue_id={result['ftIssueId']} display_name={result.get('displayName') or ''} risk_rows={result['riskRows']} holdings_rows={result['holdingsRows']} as_of={result.get('asOfDate') or ''}")
+        for error in batch["errors"]:
+            print(f"{error['symbol']}: ERROR {error['error']}")
+        print(f"batch_requested={batch['requested']} batch_succeeded={batch['succeeded']} batch_failed={batch['failed']}")
+        if batch["failed"] and not args.continue_on_error:
+            return 1
         return 0
 
     if not args.start_date or not args.end_date:
         parser.error("--start-date and --end-date are required unless --qualitative-only is used")
 
-    result = sync_historical_prices(args.symbol, args.start_date, args.end_date, args.output_root, args.db_path)
-    for range_summary in result["ranges"]:
-        print(f"{args.symbol} {range_summary['startDate']}..{range_summary['endDate']}: {range_summary['rows']} rows")
-    print(f"resolved_issue_id={result['ftIssueId']}")
-    print(f"csv={result['csvPath']}")
-    print(f"sqlite={result['sqlitePath']}")
-    print(f"total_rows={result['totalRows']}")
+    symbols = resolve_requested_symbols(args)
+    batch = sync_historical_symbols(
+        symbols,
+        args.start_date,
+        args.end_date,
+        args.output_root,
+        args.db_path,
+        args.continue_on_error,
+        args.sleep_seconds,
+    )
+    for result in batch["results"]:
+        print(f"{result['symbol']}: resolved_issue_id={result['ftIssueId']} csv={result['csvPath']} total_rows={result['totalRows']}")
+        for range_summary in result["ranges"]:
+            print(f"{result['symbol']} {range_summary['startDate']}..{range_summary['endDate']}: {range_summary['rows']} rows")
+    for error in batch["errors"]:
+        print(f"{error['symbol']}: ERROR {error['error']}")
+    print(f"batch_requested={batch['requested']} batch_succeeded={batch['succeeded']} batch_failed={batch['failed']}")
+    if batch["failed"] and not args.continue_on_error:
+        return 1
     return 0
 
 
