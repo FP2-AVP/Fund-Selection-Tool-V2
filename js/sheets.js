@@ -169,14 +169,28 @@ const SheetsAPI = {
     return data.values || [];
   },
 
+  async fetchSheetRange(sheetId, rangeA1) {
+    const range = encodeURIComponent(rangeA1);
+    const params = 'valueRenderOption=FORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING';
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?${params}`;
+    const data = await this._fetchGoogleJson(url);
+    return data.values || [];
+  },
+
   /* ── Get spreadsheet metadata (list of tab names) ── */
   async getSheetTabs(sheetId) {
     if (!this.accessToken) throw new Error('ยังไม่ได้เข้าสู่ระบบ');
 
     const url  = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties(title,sheetId),properties.title`;
-    const resp = await fetch(url, {
-      headers: { 'Authorization': `Bearer ${this.accessToken}` },
-    });
+    let resp;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      resp = await fetch(url, {
+        headers: { 'Authorization': `Bearer ${this.accessToken}` },
+      });
+      if (resp.ok) break;
+      if (![429, 500, 502, 503, 504].includes(resp.status) || attempt === 3) break;
+      await new Promise(resolve => setTimeout(resolve, attempt * 700));
+    }
     if (!resp.ok) throw new Error(`ดึง metadata ไม่สำเร็จ: ${resp.status}`);
 
     const data = await resp.json();
@@ -227,9 +241,9 @@ const SheetsAPI = {
     });
   },
 
-  async updateSheetRange(sheetId, rangeA1, rows) {
+  async updateSheetRange(sheetId, rangeA1, rows, valueInputOption = 'RAW') {
     const range = encodeURIComponent(rangeA1);
-    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?valueInputOption=RAW`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?valueInputOption=${encodeURIComponent(valueInputOption)}`;
     return await this._fetchGoogleJson(url, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
