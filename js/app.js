@@ -98,6 +98,7 @@ const State = {
   _pageDataMeta: {},
   _compareRows: null,
   top10HoldingV3: null,
+  upsideDownsideCapture: null,
   currentQuarter: null,      // ← active quarter tab (auto-detected from Sheets)
   availableQuarters: [],     // ← list of detected quarter tabs
   currentUser: { name: '', email: '' },
@@ -132,8 +133,10 @@ const State = {
 	  },
 	  secDataImport: {
 	    preview: null,
+	    dataPreparationPreview: null,
+	    masterViewPreview: null,
 	    columnTypes: {},
-	    targetTab: 'data_preparation',
+	    targetTab: '',
 	    targetExists: false,
 	    isImporting: false,
 	    isLoadingPreview: false,
@@ -488,6 +491,34 @@ const SEC_DATA_PREPARATION_TARGETS = [
 ];
 
 const SIDEBAR_PREF_KEY = 'fund-selection-sidebar-collapsed';
+const TOP10_HOLDING_V3_PREF_KEY = 'fund-selection-top10-holding-v3-state';
+const UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY = 'fund-selection-upside-downside-capture-state';
+const ROBUSTNESS_DRAFTS_PREF_KEY = 'fund-selection-robustness-drafts';
+
+function readJsonPreference(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJsonPreference(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value || {}));
+  } catch {
+    /* ignore preference persistence failures */
+  }
+}
+
+function removeJsonPreference(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore preference persistence failures */
+  }
+}
 
 function isCompactViewport() {
   return window.matchMedia('(max-width: 640px)').matches;
@@ -2006,6 +2037,10 @@ function ensureExtendedPageConfigs() {
     'robustness-ft-import': {
       title: 'เตรียมข้อมูลจาก FT.com',
       source: 'FT Markets historical prices',
+    },
+    'robustness-notes': {
+      title: 'บันทึกข้อมูล Robustness',
+      source: 'Upside Downside Capture snapshot',
     },
     'upside-downside-capture': {
       title: 'Upside Downside Capture',
@@ -9218,6 +9253,8 @@ const Pages = {
       left.length === right.length && left.every(id => right.includes(id))
     );
     const configuredGithubToken = String(CONFIG?.GITHUB_TOKEN || window.APP_SECRETS?.githubToken || '').trim();
+    const secGithubProxyUrl = String(CONFIG?.SEC_GITHUB_PROXY_URL || '').trim();
+    const secGithubProxySecretKey = String(CONFIG?.SEC_GITHUB_PROXY_SECRET_KEY || '').trim();
     const readSecImportPrefs = () => {
       try {
         return JSON.parse(localStorage.getItem(secImportPrefsKey) || '{}') || {};
@@ -9248,6 +9285,10 @@ const Pages = {
 	    const secJsonDriveFolderId = JSON_DRIVE_ROOT_FOLDER_ID;
 	    const secJsonDriveFolderUrl = JSON_DRIVE_ROOT_FOLDER_URL;
 	    const secJsonFileName = 'Data For SEC API.json';
+	    const secDefaultOutputTab = /^\d{4}-Q[1-4]$/i.test(String(State.currentQuarter || '').trim())
+	      ? String(State.currentQuarter).trim().toUpperCase()
+	      : 'master_view';
+	    State.secDataImport.targetTab = State.secDataImport.targetTab || secDefaultOutputTab;
 	    const secWorkflowDispatchUrl = 'https://api.github.com/repos/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml/dispatches';
     const secWorkflowRunsUrl = 'https://api.github.com/repos/FP2-AVP/Fund-Selection-Tool-V2/actions/workflows/sec-master-view-to-google-sheet.yml/runs';
     const datasetKey = item => item.id.replace(/^\d+_/, '');
@@ -9684,10 +9725,17 @@ const Pages = {
                 <span>max_pages</span>
                 <input class="fund-input sec-data-highlight" id="sec-max-pages" type="number" min="0" step="1" value="${esc(prefValue('maxPages', '0'))}">
               </label>
-              <label class="fund-field sec-data-field-main">
-                <span>GitHub token</span>
-                <input class="fund-input" id="sec-github-token" type="password" value="${esc(configuredGithubToken)}" placeholder="ใส่ token ตอนจะรัน หรือกำหนดไว้ใน config.override.js">
-              </label>
+              ${secGithubProxyUrl ? `
+                <label class="fund-field sec-data-field-main">
+                  <span>GitHub Actions Proxy</span>
+                  <input class="fund-input" id="sec-github-proxy-url" type="text" value="${esc(secGithubProxyUrl)}" readonly>
+                </label>
+              ` : `
+                <label class="fund-field sec-data-field-main">
+                  <span>GitHub token</span>
+                  <input class="fund-input" id="sec-github-token" type="password" value="${esc(configuredGithubToken)}" placeholder="ใส่ token ตอนจะรัน หรือกำหนดไว้ใน config.override.js">
+                </label>
+              `}
               <div class="sec-data-actions">
                 <button class="btn btn-secondary" id="sec-open-master-sheet" type="button">เปิด Google Sheet</button>
                 <button class="btn sec-data-primary-btn" id="sec-run-workflow" type="button">รัน GitHub Actions</button>
@@ -9816,13 +9864,13 @@ const Pages = {
               รวบรวมข้อมูลเป็น data_preparation
             </span>
             <div class="page-tools-meta">
-              <span class="badge badge-data-origin">master_view</span>
+              <span class="badge badge-data-origin">data_preparation + master_view</span>
               <button class="btn sec-data-primary-btn btn-sm" id="sec-build-master-view" type="button">รวบรวมข้อมูล</button>
             </div>
           </div>
           <div class="card-body">
             <div class="sec-master-note">
-              อ่านข้อมูลจาก raw tabs ที่ตรวจในขั้นตอนที่ 2 แล้วรวมเป็น tab <strong>data_preparation</strong> สำหรับใช้งานต่อ โดยใช้ workflow โหมด <strong>master_from_raw</strong>
+              อ่านข้อมูลจาก raw tabs ที่ตรวจในขั้นตอนที่ 2 แล้วสร้าง tab <strong>data_preparation</strong> เป็นโต๊ะทำงาน และสร้าง <strong>master_view</strong> เป็นข้อมูลพร้อมใช้สำหรับบันทึกปลายทาง/JSON
             </div>
           </div>
         </div>
@@ -9861,7 +9909,7 @@ const Pages = {
 
         <div class="card sec-data-card">
           <div class="card-header">
-            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">5</span>ฐานข้อมูลปลายทางที่ต้องการจะบันทึก</span>
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no">5</span>ฐานข้อมูลปลายทางที่ต้องการจะบันทึก master_view</span>
             <div class="page-tools-meta">
               <span class="badge ${State.secDataImport.targetExists ? 'badge-warning' : 'badge-success'}">
                 ${State.secDataImport.targetExists ? 'พบ Tab แล้ว' : 'ยังไม่มี Tab นี้'}
@@ -9872,15 +9920,15 @@ const Pages = {
             <div class="data-import-form">
               <div class="fund-field">
                 <span>ฐานข้อมูลปลายทาง</span>
-                <input class="fund-input" value="SEC data_preparation" readonly>
+                <input class="fund-input" value="SEC master_view" readonly>
               </div>
               <div class="fund-field">
                 <span>ระบุชื่อ Tab ปลายทาง</span>
-                <input class="fund-input" id="sec-output-target-tab" value="${esc(State.secDataImport.targetTab || 'data_preparation')}" placeholder="data_preparation">
+                <input class="fund-input" id="sec-output-target-tab" value="${esc(State.secDataImport.targetTab || secDefaultOutputTab)}" placeholder="${esc(secDefaultOutputTab)}">
               </div>
             </div>
             <div class="sec-master-note">
-              ปลายทาง: <a href="${esc(secOutputSheetUrl)}" target="_blank" rel="noopener noreferrer">Google Sheet data_preparation</a>
+              ปลายทาง: <a href="${esc(secOutputSheetUrl)}" target="_blank" rel="noopener noreferrer">Google Sheet สำหรับ Data For SEC API</a>
             </div>
           </div>
         </div>
@@ -9889,6 +9937,13 @@ const Pages = {
           <div class="card-header">
             <span class="card-title data-import-card-title-step"><span class="data-import-step-no">6</span>บันทึกข้อมูลปลายทางไปที่ Google Sheets</span>
             <div class="page-tools-meta">
+              ${State.secDataImport.masterViewPreview ? `
+                <span class="row-count-badge">${State.secDataImport.masterViewPreview.rowCount.toLocaleString()} rows</span>
+                <span class="row-count-badge">${State.secDataImport.masterViewPreview.colCount.toLocaleString()} columns</span>
+              ` : '<span class="badge badge-data-origin">master_view</span>'}
+              <button class="btn btn-secondary btn-sm" id="sec-load-master-view-preview" type="button" ${State.secDataImport.isLoadingPreview ? 'disabled' : ''}>
+                ${State.secDataImport.isLoadingPreview ? 'กำลังโหลด...' : 'โหลด master_view'}
+              </button>
               <span class="badge ${State.secDataImport.targetExists ? 'badge-warning' : 'badge-success'}">
                 ${State.secDataImport.targetExists ? 'พบ Tab แล้ว' : 'ยังไม่มี Tab นี้'}
               </span>
@@ -9896,17 +9951,17 @@ const Pages = {
           </div>
           <div class="card-body">
             <div class="import-status-grid">
-              <div><span>Sheet</span><strong>SEC data_preparation</strong></div>
-              <div><span>Tab</span><strong>${esc(State.secDataImport.targetTab || 'data_preparation')}</strong></div>
+              <div><span>Sheet</span><strong>SEC master_view</strong></div>
+              <div><span>Tab</span><strong>${esc(State.secDataImport.targetTab || secDefaultOutputTab)}</strong></div>
               <div><span>Mode</span><strong>${State.secDataImport.targetExists ? 'เขียนทับเมื่อยืนยัน' : 'สร้าง Tab ใหม่'}</strong></div>
               <div class="import-status-action-cell">
                 <span>Action</span>
                 <div class="data-import-actions data-import-status-actions">
-                  ${State.secDataImport.preview ? `<button class="btn btn-primary import-commit-btn" id="sec-output-save" type="button" ${State.secDataImport.isImporting ? 'disabled' : ''}>บันทึกข้อมูล</button>` : ''}
-                  ${State.secDataImport.preview && State.secDataImport.targetExists ? `
+                  ${State.secDataImport.masterViewPreview ? `<button class="btn btn-primary import-commit-btn" id="sec-output-save" type="button" ${State.secDataImport.isImporting ? 'disabled' : ''}>บันทึกข้อมูล</button>` : ''}
+                  ${State.secDataImport.masterViewPreview && State.secDataImport.targetExists ? `
                     <label class="fund-manager-check import-confirm">
                       <input type="checkbox" id="sec-output-overwrite-confirm">
-                      ติ๊กเพื่อยืนยันการเขียนทับข้อมูลใน ${esc(State.secDataImport.targetTab || 'data_preparation')}
+                      ติ๊กเพื่อยืนยันการเขียนทับข้อมูลใน ${esc(State.secDataImport.targetTab || secDefaultOutputTab)}
                     </label>` : ''}
                 </div>
               </div>
@@ -9922,7 +9977,7 @@ const Pages = {
 	          <div class="card-body">
 	            <div class="json-readiness-box">
 	              <div class="json-readiness-copy">
-	                สร้างไฟล์ <strong>${esc(secJsonFileName)}</strong> จาก preview ปัจจุบัน แล้วบันทึกตาม path ของ Quarter ที่เลือก
+	                สร้างไฟล์ <strong>${esc(secJsonFileName)}</strong> จาก tab <strong>master_view</strong> แล้วบันทึกตาม path ของ Quarter ที่เลือก
 	              </div>
 	              <div class="json-path-grid">
 	                <div class="fund-field data-import-path-field">
@@ -9947,7 +10002,7 @@ const Pages = {
               ` : ''}
               <div class="data-import-actions json-export-actions">
                 <button class="btn btn-ghost" id="sec-open-json-folder" type="button">เปิดโฟลเดอร์ JSON</button>
-                <button class="btn btn-primary import-commit-btn" id="sec-json-export" type="button" ${State.secDataImport.preview && !State.secDataImport.isExportingJson ? '' : 'disabled'}>
+                <button class="btn btn-primary import-commit-btn" id="sec-json-export" type="button" ${State.secDataImport.masterViewPreview && !State.secDataImport.isExportingJson ? '' : 'disabled'}>
                   ${State.secDataImport.isExportingJson ? 'กำลังสร้าง JSON...' : 'สร้าง JSON'}
                 </button>
               </div>
@@ -10217,7 +10272,7 @@ const Pages = {
 	    const runSecWorkflow = async ({ button, inputs, runningMessage, successMessage }) => {
 	      if (!button) return;
 	      const token = (($('#sec-github-token', area)?.value || '').trim() || configuredGithubToken);
-	      if (!token) {
+	      if (!secGithubProxyUrl && !token) {
 	        updateWorkflowStatus('กรุณาใส่ GitHub token ก่อนรัน workflow', 'is-warning');
 	        toast('กรุณาใส่ GitHub token ก่อนรัน workflow', 'warning');
 	        return;
@@ -10228,31 +10283,50 @@ const Pages = {
 	      updateWorkflowStatus(runningMessage || 'กำลังส่งคำสั่งรัน GitHub Actions...', 'is-running');
 
 	      try {
-	        const response = await fetch(secWorkflowDispatchUrl, {
-	          method: 'POST',
-	          headers: {
-	            Accept: 'application/vnd.github+json',
-	            Authorization: `Bearer ${token}`,
-	            'Content-Type': 'application/json',
-	            'X-GitHub-Api-Version': '2022-11-28',
-	          },
-	          body: JSON.stringify({
-	            ref: 'main',
-	            inputs,
-	          }),
-	        });
+	        if (secGithubProxyUrl) {
+	          await fetch(secGithubProxyUrl, {
+	            method: 'POST',
+	            mode: 'no-cors',
+	            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+	            body: JSON.stringify({
+	              action: 'dispatch',
+	              key: secGithubProxySecretKey,
+	              ref: 'main',
+	              inputs,
+	            }),
+	            cache: 'no-store',
+	          });
+	        } else {
+	          const response = await fetch(secWorkflowDispatchUrl, {
+	            method: 'POST',
+	            headers: {
+	              Accept: 'application/vnd.github+json',
+	              Authorization: `Bearer ${token}`,
+	              'Content-Type': 'application/json',
+	              'X-GitHub-Api-Version': '2022-11-28',
+	            },
+	            body: JSON.stringify({
+	              ref: 'main',
+	              inputs,
+	            }),
+	          });
 
-	        if (!response.ok) {
-	          const errorText = await response.text();
-	          if (response.status === 422 && errorText.includes('output_spreadsheet_id')) {
-	            throw new Error('GitHub workflow บน repo ยังไม่รองรับ output_spreadsheet_id กรุณาอัปโหลดไฟล์ workflow เวอร์ชันล่าสุดก่อน แล้วค่อยรันใหม่');
+	          if (!response.ok) {
+	            const errorText = await response.text();
+	            if (response.status === 422 && errorText.includes('output_spreadsheet_id')) {
+	              throw new Error('GitHub workflow บน repo ยังไม่รองรับ output_spreadsheet_id กรุณาอัปโหลดไฟล์ workflow เวอร์ชันล่าสุดก่อน แล้วค่อยรันใหม่');
+	            }
+	            throw new Error(errorText || `GitHub API error ${response.status}`);
 	          }
-	          throw new Error(errorText || `GitHub API error ${response.status}`);
 	        }
 
-	        updateWorkflowStatus('ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...', 'is-running');
+	        updateWorkflowStatus(secGithubProxyUrl && !token
+	          ? `ส่งคำสั่งรันผ่าน Apps Script สำเร็จแล้ว <a href="${esc(secWorkflowUrl)}" target="_blank" rel="noopener noreferrer">เปิด GitHub Actions</a>`
+	          : 'ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...', 'is-running');
 	        toast(successMessage || 'รัน GitHub Actions สำเร็จแล้ว', 'success', 5000);
-	        startWorkflowPolling(token);
+	        if (token) {
+	          startWorkflowPolling(token);
+	        }
 	      } catch (err) {
 	        updateWorkflowStatus(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'is-error');
 	        toast(err.message || 'รัน GitHub Actions ไม่สำเร็จ', 'error', 7000);
@@ -10278,14 +10352,15 @@ const Pages = {
 	        ...workflowInputs(),
 	        output_mode: 'master_from_raw',
 	        tab_name: 'data_preparation',
+	        master_tab_name: 'master_view',
 	        dataset_preset: 'master_core',
 	        custom_datasets: '',
 	      };
 	      await runSecWorkflow({
 	        button: buildButton,
 	        inputs,
-	        runningMessage: 'กำลังส่งคำสั่งรวบรวม raw tabs เป็น data_preparation...',
-	        successMessage: 'เริ่มรวบรวมข้อมูลเป็น data_preparation แล้ว',
+	        runningMessage: 'กำลังส่งคำสั่งรวบรวม raw tabs เป็น data_preparation และ master_view...',
+	        successMessage: 'เริ่มรวบรวมข้อมูลเป็น data_preparation และ master_view แล้ว',
 	      });
 	    });
 
@@ -10347,7 +10422,8 @@ const Pages = {
 	          SheetsAPI.getSheetTabs(secOutputSpreadsheetId),
 	        ]);
 	        State.secDataImport.preview = refreshSecDataPreparationPreview(rows);
-	        State.secDataImport.targetTab = State.secDataImport.targetTab || 'data_preparation';
+	        State.secDataImport.dataPreparationPreview = State.secDataImport.preview;
+	        State.secDataImport.targetTab = State.secDataImport.targetTab || secDefaultOutputTab;
 	        State.secDataImport.targetExists = (targetMeta.tabs || []).includes(State.secDataImport.targetTab);
 	        toast('โหลด data_preparation สำหรับกำหนด Type แล้ว', 'success');
 	      } catch (err) {
@@ -10358,13 +10434,33 @@ const Pages = {
 	      }
 	    });
 
+	    $('#sec-load-master-view-preview', area)?.addEventListener('click', async () => {
+	      State.secDataImport.isLoadingPreview = true;
+	      Pages.secDataImport(area);
+	      try {
+	        const [rows, targetMeta] = await Promise.all([
+	          SheetsAPI.fetchSheetData(secSpreadsheetId, 'master_view'),
+	          SheetsAPI.getSheetTabs(secOutputSpreadsheetId),
+	        ]);
+	        State.secDataImport.masterViewPreview = refreshSecDataPreparationPreview(rows);
+	        State.secDataImport.targetTab = State.secDataImport.targetTab || secDefaultOutputTab;
+	        State.secDataImport.targetExists = (targetMeta.tabs || []).includes(State.secDataImport.targetTab);
+	        toast('โหลด master_view สำหรับบันทึกปลายทางแล้ว', 'success');
+	      } catch (err) {
+	        toast(err.message || 'โหลด master_view ไม่สำเร็จ', 'error', 7000);
+	      } finally {
+	        State.secDataImport.isLoadingPreview = false;
+	        Pages.secDataImport(area);
+	      }
+	    });
+
 	    $('#sec-output-target-tab', area)?.addEventListener('input', e => {
-	      State.secDataImport.targetTab = e.target.value.trim() || 'data_preparation';
+	      State.secDataImport.targetTab = e.target.value.trim() || secDefaultOutputTab;
 	      State.secDataImport.jsonStatus = null;
 	    });
 
 	    $('#sec-output-target-tab', area)?.addEventListener('change', async e => {
-	      State.secDataImport.targetTab = e.target.value.trim() || 'data_preparation';
+	      State.secDataImport.targetTab = e.target.value.trim() || secDefaultOutputTab;
 	      State.secDataImport.jsonStatus = null;
 	      try {
 	        const meta = await SheetsAPI.getSheetTabs(secOutputSpreadsheetId);
@@ -10376,10 +10472,10 @@ const Pages = {
 	    });
 
 	    $('#sec-output-save', area)?.addEventListener('click', async () => {
-	      const previewNow = State.secDataImport.preview;
-	      const targetTab = ($('#sec-output-target-tab', area)?.value || State.secDataImport.targetTab || 'data_preparation').trim() || 'data_preparation';
+	      const previewNow = State.secDataImport.masterViewPreview;
+	      const targetTab = ($('#sec-output-target-tab', area)?.value || State.secDataImport.targetTab || secDefaultOutputTab).trim() || secDefaultOutputTab;
 	      if (!previewNow?.rows?.length) {
-	        toast('ไม่มี data_preparation สำหรับบันทึก', 'warning');
+	        toast('กรุณาโหลด master_view ก่อนบันทึก', 'warning');
 	        return;
 	      }
 	      if (State.secDataImport.targetExists && !$('#sec-output-overwrite-confirm', area)?.checked) {
@@ -10412,9 +10508,9 @@ const Pages = {
 	    });
 
 	    $('#sec-json-export', area)?.addEventListener('click', async () => {
-	      const previewNow = State.secDataImport.preview;
+	      const previewNow = State.secDataImport.masterViewPreview;
 	      if (!previewNow?.rows?.length) {
-	        toast('กรุณาโหลด data_preparation ก่อนสร้าง JSON', 'warning');
+	        toast('กรุณาโหลด master_view ก่อนสร้าง JSON', 'warning');
 	        return;
 	      }
 	      const jsonPath = getSecJsonPathParts();
@@ -14164,13 +14260,15 @@ const Pages = {
 	    }
 	
 	    async function loadDrafts() {
+	      const normalDraftsOnly = drafts => (Array.isArray(drafts) ? drafts : [])
+	        .filter(draft => !draft?.draftKind || draft.draftKind === 'fund-selection');
 	      try {
 	        if (hasDraftApi()) {
 	          const data = await draftApiRequest('list');
 	          storageMode = 'drive';
 	          draftApiStatus = '';
-	          const driveDrafts = Array.isArray(data.drafts) ? data.drafts : [];
-	          const localDrafts = loadLocalDrafts();
+	          const driveDrafts = normalDraftsOnly(data.drafts);
+	          const localDrafts = normalDraftsOnly(loadLocalDrafts());
 	          const driveIds = new Set(driveDrafts.map(d => String(d.id || '')));
 	          const draftsToMigrate = localDrafts.filter(d => d?.id && !driveIds.has(String(d.id)));
 	          for (const draft of draftsToMigrate) {
@@ -14190,7 +14288,7 @@ const Pages = {
 	          if (draftsToMigrate.length) {
 	            localStorage.removeItem(DRAFTS_KEY);
 	            const migratedData = await draftApiRequest('list');
-	            return Array.isArray(migratedData.drafts) ? migratedData.drafts : driveDrafts;
+	            return normalDraftsOnly(migratedData.drafts);
 	          }
 	          return driveDrafts;
 	        }
@@ -14198,8 +14296,8 @@ const Pages = {
 	        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         storageMode = 'file';
-        const fileDrafts = Array.isArray(data.drafts) ? data.drafts : [];
-        const localDrafts = loadLocalDrafts();
+        const fileDrafts = normalDraftsOnly(data.drafts);
+        const localDrafts = normalDraftsOnly(loadLocalDrafts());
         const fileIds = new Set(fileDrafts.map(d => String(d.id || '')));
         const draftsToMigrate = localDrafts.filter(d => d?.id && !fileIds.has(String(d.id)));
         for (const draft of draftsToMigrate) {
@@ -14223,14 +14321,14 @@ const Pages = {
           const migrated = await fetch('/api/drafts', { cache: 'no-store' });
           if (migrated.ok) {
             const migratedData = await migrated.json();
-            return Array.isArray(migratedData.drafts) ? migratedData.drafts : fileDrafts;
+            return normalDraftsOnly(migratedData.drafts);
           }
         }
         return fileDrafts;
 	      } catch (err) {
 	        draftApiStatus = hasDraftApi() ? `Draft API ใช้งานไม่ได้: ${err.message || err}` : '';
 	        storageMode = 'local';
-	        return loadLocalDrafts();
+	        return normalDraftsOnly(loadLocalDrafts());
 	      }
 	    }
 
@@ -14316,6 +14414,7 @@ const Pages = {
       const nowIso = new Date().toISOString();
       return {
         id: existingDraft?.id || Date.now().toString(),
+        draftKind: 'fund-selection',
         name: buildDraftName(avpCategory, fundType, userDate),
         avpCategory,
         fundType,
@@ -14644,6 +14743,392 @@ const Pages = {
     setLoading(area, 'กำลังโหลดบันทึกข้อมูล...');
     currentDrafts = await loadDrafts();
     renderPage();
+    App._currentExport = null;
+    App._currentTableExport = null;
+  },
+
+  async robustnessNotes(area) {
+    let currentDrafts = [];
+    let storageMode = 'local';
+    let storageWarning = '';
+    const loadLocalDrafts = () => {
+      const drafts = readJsonPreference(ROBUSTNESS_DRAFTS_PREF_KEY, []);
+      return Array.isArray(drafts) ? drafts : [];
+    };
+    const saveLocalDrafts = drafts => saveJsonPreference(ROBUSTNESS_DRAFTS_PREF_KEY, Array.isArray(drafts) ? drafts : []);
+    const hasDraftApi = () => Boolean(String(DRAFT_API_WEB_APP_URL || '').trim());
+    const shouldUseLocalDraftProxy = () => ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+    const robustDraftApiJsonp = params => new Promise((resolve, reject) => {
+      const callbackName = `__robustDraftApiCallback_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const script = document.createElement('script');
+      const cleanup = () => {
+        delete window[callbackName];
+        script.remove();
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('Robustness Draft API request timeout'));
+      }, 30000);
+      window[callbackName] = data => {
+        clearTimeout(timer);
+        cleanup();
+        resolve(data || {});
+      };
+      const url = new URL(DRAFT_API_WEB_APP_URL);
+      Object.entries({
+        key: DRAFT_API_SECRET_KEY,
+        callback: callbackName,
+        ...params,
+      }).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
+      });
+      script.onerror = () => {
+        clearTimeout(timer);
+        cleanup();
+        reject(new Error('Robustness Draft API script failed to load'));
+      };
+      script.src = url.toString();
+      document.head.appendChild(script);
+    });
+    const robustDraftApiFetch = async params => {
+      const url = new URL(DRAFT_API_WEB_APP_URL);
+      Object.entries({
+        key: DRAFT_API_SECRET_KEY,
+        ...params,
+      }).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
+      });
+      const res = await fetch(url.toString(), { cache: 'no-store', redirect: 'follow' });
+      const text = await res.text();
+      if (!res.ok) throw new Error(`Robustness Draft API HTTP ${res.status}`);
+      return JSON.parse(text);
+    };
+    const robustDraftCompressedPayload = async payload => {
+      const text = JSON.stringify(payload || {});
+      if (!('CompressionStream' in window)) return { payload: text };
+      const stream = new Blob([text], { type: 'application/json' }).stream().pipeThrough(new CompressionStream('gzip'));
+      const buffer = await new Response(stream).arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      return {
+        payloadGzipB64: btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''),
+      };
+    };
+    const robustDraftApiRequest = async (action, payload = {}) => {
+      if (shouldUseLocalDraftProxy()) {
+        let res;
+        if (action === 'list') {
+          const quarter = payload?.quarter ? `?quarter=${encodeURIComponent(payload.quarter)}` : '';
+          res = await fetch(`/api/draft-drive${quarter}`, { cache: 'no-store' });
+        } else if (action === 'delete') {
+          const quarter = payload?.quarter ? `?quarter=${encodeURIComponent(payload.quarter)}` : '';
+          res = await fetch(`/api/draft-drive/${encodeURIComponent(payload.id || '')}${quarter}`, { method: 'DELETE' });
+        } else {
+          res = await fetch('/api/draft-drive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload?.draft || payload || {}),
+          });
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.ok === false) throw new Error(data.error || `Robustness Draft API ${action} failed (${res.status})`);
+        return data;
+      }
+      const params = { action };
+      if (action === 'delete') {
+        params.id = payload?.id || '';
+        params.quarter = payload?.quarter || '';
+      } else if (action === 'save') {
+        Object.assign(params, await robustDraftCompressedPayload({
+          action,
+          key: DRAFT_API_SECRET_KEY,
+          draft: payload?.draft || payload || {},
+        }));
+      }
+      let data;
+      try {
+        data = await robustDraftApiFetch(params);
+      } catch {
+        data = await robustDraftApiJsonp(params);
+      }
+      if (data.ok === false) throw new Error(data.error || `Robustness Draft API ${action} failed`);
+      return data;
+    };
+    const sortDrafts = drafts => [...(Array.isArray(drafts) ? drafts : [])]
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+    const loadDrafts = async () => {
+      const localDrafts = loadLocalDrafts();
+      try {
+        if (!hasDraftApi() && !shouldUseLocalDraftProxy()) throw new Error('Draft API URL is not configured');
+        const data = await robustDraftApiRequest('list');
+        const driveDrafts = (Array.isArray(data.drafts) ? data.drafts : [])
+          .filter(draft => draft?.draftKind === 'robustness');
+        const driveIds = new Set(driveDrafts.map(draft => String(draft.id || '')));
+        const draftsToMigrate = localDrafts.filter(draft => draft?.id && !driveIds.has(String(draft.id)));
+        for (const draft of draftsToMigrate) {
+          try {
+            await robustDraftApiRequest('save', { draft: { ...draft, draftKind: 'robustness', migratedFromLocalStorage: true } });
+          } catch {
+            /* keep local copy if migration fails */
+          }
+        }
+        if (draftsToMigrate.length) localStorage.removeItem(ROBUSTNESS_DRAFTS_PREF_KEY);
+        storageMode = 'drive';
+        storageWarning = '';
+        if (draftsToMigrate.length) {
+          const migratedData = await robustDraftApiRequest('list');
+          return sortDrafts((Array.isArray(migratedData.drafts) ? migratedData.drafts : []).filter(draft => draft?.draftKind === 'robustness'));
+        }
+        return sortDrafts(driveDrafts);
+      } catch (err) {
+        storageMode = 'local';
+        storageWarning = `Draft API ใช้งานไม่ได้: ${err.message || err}`;
+        return sortDrafts(localDrafts);
+      }
+    };
+    const saveDraft = async draft => {
+      if (storageMode === 'drive') return await robustDraftApiRequest('save', { draft });
+      const draftsNow = loadLocalDrafts().filter(item => String(item.id || '') !== String(draft.id || ''));
+      const nextDrafts = sortDrafts([draft, ...draftsNow]);
+      saveLocalDrafts(nextDrafts);
+      return { ok: true, draft, localOnly: true };
+    };
+    const deleteDraft = async draft => {
+      if (storageMode === 'drive') return await robustDraftApiRequest('delete', {
+        id: draft?.id || '',
+        quarter: draft?.currentQuarter || draft?.quarter || '',
+      });
+      saveLocalDrafts(loadLocalDrafts().filter(item => String(item.id || '') !== String(draft?.id || '')));
+      return { ok: true, localOnly: true };
+    };
+    const currentCaptureState = () => readJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY, {}) || {};
+    const cleanRows = rows => (Array.isArray(rows) ? rows : [])
+      .map(row => Array.isArray(row) ? row.slice(0, 3) : ['', '', ''])
+      .filter(row => row.some(Boolean));
+    const compactSymbol = value => String(value || '').trim() || '-';
+    const formatDateTime = value => {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return '-';
+      return date.toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    };
+    const captureSummary = (state = {}) => {
+      const rows = cleanRows(state.rows);
+      const compareSymbols = Array.isArray(state.compareSymbols) ? state.compareSymbols.filter(Boolean) : [];
+      const allDates = rows.flat().filter(Boolean).sort();
+      return {
+        benchmark: compactSymbol(state.benchmark),
+        benchmarkFundCode: compactSymbol(state.benchmarkFundCode),
+        rows,
+        compareSymbols,
+        compareFundCodes: Array.isArray(state.compareFundCodes) ? state.compareFundCodes.filter(Boolean) : [],
+        chartViewMode: state.chartViewMode || 'nav',
+        startDate: allDates[0] || '',
+        endDate: allDates[allDates.length - 1] || '',
+      };
+    };
+    const buildDraftPayload = () => {
+      const state = currentCaptureState();
+      const summary = captureSummary(state);
+      const nowIso = new Date().toISOString();
+      const titleInput = $('#robustness-draft-title', area)?.value.trim() || '';
+      const noteInput = $('#robustness-draft-note', area)?.value.trim() || '';
+      const defaultTitle = [
+        summary.benchmarkFundCode !== '-' ? summary.benchmarkFundCode : summary.benchmark,
+        summary.rows.length ? `${summary.rows.length} cycles` : 'ยังไม่มี cycle',
+        summary.compareSymbols.length ? `${summary.compareSymbols.length} compare` : '',
+      ].filter(Boolean).join(' · ');
+      return {
+        id: Date.now().toString(),
+        draftKind: 'robustness',
+        avpCategory: 'Robustness Fund',
+        fundType: 'Upside Downside Capture',
+        title: titleInput || defaultTitle || 'Robustness snapshot',
+        name: titleInput || defaultTitle || 'Robustness snapshot',
+        note: noteInput,
+        notes: noteInput,
+        userDate: new Date().toISOString().slice(0, 10),
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        currentQuarter: State.currentQuarter || '',
+        state,
+        summary,
+      };
+    };
+    const renderCyclePreview = rows => {
+      if (!rows.length) return '<tr><td colspan="4" class="robustness-empty-cell">ยังไม่มีวันที่ใน Capture Date Builder</td></tr>';
+      return rows.map((row, idx) => `
+        <tr>
+          <td>Cycle ${idx + 1}</td>
+          <td>${esc(row[0] || '-')}</td>
+          <td>${esc(row[1] || '-')}</td>
+          <td>${esc(row[2] || '-')}</td>
+        </tr>
+      `).join('');
+    };
+    const renderDraftCard = draft => {
+      const summary = draft.summary || captureSummary(draft.state || {});
+      const assetLabels = [
+        summary.benchmarkFundCode && summary.benchmarkFundCode !== '-' ? `BM ${summary.benchmarkFundCode}` : `BM ${summary.benchmark || '-'}`,
+        ...((summary.compareFundCodes || []).length ? summary.compareFundCodes : summary.compareSymbols || []).map((item, idx) => `Compare ${idx + 1}: ${item}`),
+      ];
+      return `
+        <article class="robustness-draft-card" data-id="${esc(draft.id || '')}">
+          <div class="robustness-draft-main">
+            <div class="robustness-draft-title">${esc(draft.title || 'Robustness snapshot')}</div>
+            <div class="robustness-draft-meta">
+              <span>${esc(formatDateTime(draft.updatedAt || draft.createdAt))}</span>
+              <span>${Number(summary.rows?.length || 0).toLocaleString()} cycles</span>
+              <span>${Number(summary.compareSymbols?.length || 0).toLocaleString()} compare assets</span>
+              ${summary.startDate || summary.endDate ? `<span>${esc(summary.startDate || '-')} ถึง ${esc(summary.endDate || '-')}</span>` : ''}
+            </div>
+            <div class="robustness-draft-assets">${assetLabels.map(label => `<span>${esc(label)}</span>`).join('')}</div>
+            ${draft.note ? `<div class="robustness-draft-note">${esc(draft.note)}</div>` : ''}
+          </div>
+          <div class="robustness-draft-actions">
+            <button class="btn btn-primary robustness-load-draft" type="button">โหลดไปวิเคราะห์</button>
+            <button class="btn btn-ghost robustness-delete-draft" type="button">ลบ</button>
+          </div>
+        </article>
+      `;
+    };
+    const render = () => {
+      const drafts = currentDrafts;
+      const currentState = currentCaptureState();
+      const summary = captureSummary(currentState);
+      const storageLabel = storageMode === 'drive'
+        ? 'Google Drive JSON'
+        : 'Local snapshot';
+      area.innerHTML = `
+        <div class="card robustness-notes-card">
+          <div class="robustness-notes-head">
+            <div>
+              <h3>บันทึกข้อมูล Robustness</h3>
+              <p>บันทึกชุดวันที่, Benchmark, สินทรัพย์เปรียบเทียบ และการตั้งค่าจากหน้า Upside Downside Capture</p>
+            </div>
+            <span class="badge badge-data-origin">${esc(storageLabel)}</span>
+          </div>
+          ${storageWarning ? `<div class="robustness-storage-warning">${esc(storageWarning)} · ระบบจะใช้ localStorage สำรองไว้ก่อน</div>` : ''}
+          <div class="robustness-notes-grid">
+            <section class="robustness-save-panel">
+              <h4>Snapshot ปัจจุบัน</h4>
+              <div class="robustness-summary-grid">
+                <div><span>Benchmark</span><strong>${esc(summary.benchmark)}</strong></div>
+                <div><span>Fund Code</span><strong>${esc(summary.benchmarkFundCode)}</strong></div>
+                <div><span>Cycles</span><strong>${summary.rows.length.toLocaleString()}</strong></div>
+                <div><span>Compare Assets</span><strong>${summary.compareSymbols.length.toLocaleString()}</strong></div>
+              </div>
+              <div class="robustness-cycle-preview">
+                <table>
+                  <thead><tr><th>Cycle</th><th>NAV (1)</th><th>NAV (2)</th><th>NAV (3)</th></tr></thead>
+                  <tbody>${renderCyclePreview(summary.rows)}</tbody>
+                </table>
+              </div>
+              <label class="robustness-field">
+                <span>ชื่อบันทึก</span>
+                <input id="robustness-draft-title" type="text" placeholder="เช่น Healthcare Cycle Research รอบเดือนนี้">
+              </label>
+              <label class="robustness-field">
+                <span>หมายเหตุ</span>
+                <textarea id="robustness-draft-note" rows="3" placeholder="ใส่เหตุผล/สมมติฐาน/สิ่งที่ต้องกลับมาดูต่อ"></textarea>
+              </label>
+              <div class="robustness-actions">
+                <button class="btn btn-primary" id="robustness-save-draft" type="button">บันทึก Snapshot</button>
+                <button class="btn btn-secondary" id="robustness-open-capture" type="button">ไปหน้า Upside Downside Capture</button>
+              </div>
+            </section>
+            <section class="robustness-list-panel">
+              <h4>รายการที่บันทึกไว้ (${drafts.length.toLocaleString()})</h4>
+              <div class="robustness-draft-list">
+                ${drafts.length ? drafts.map(renderDraftCard).join('') : '<div class="robustness-empty">ยังไม่มีบันทึก Robustness</div>'}
+              </div>
+            </section>
+          </div>
+        </div>
+        <style>
+          .robustness-notes-card{overflow:hidden}
+          .robustness-notes-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 20px;border-bottom:1px solid var(--border-light)}
+          .robustness-notes-head h3{margin:0;color:var(--text)}
+          .robustness-notes-head p{margin:4px 0 0;color:var(--text-muted)}
+          .robustness-storage-warning{margin:14px 20px 0;padding:9px 12px;border:1px solid #fcd34d;background:#fffbeb;color:#92400e;border-radius:8px;font-weight:700}
+          .robustness-notes-grid{display:grid;grid-template-columns:minmax(360px,0.9fr) minmax(420px,1.1fr);gap:18px;padding:18px 20px}
+          .robustness-save-panel,.robustness-list-panel{border:1px solid var(--border-light);border-radius:10px;background:#fff;padding:16px}
+          .robustness-save-panel h4,.robustness-list-panel h4{margin:0 0 12px;color:var(--text)}
+          .robustness-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:14px}
+          .robustness-summary-grid div{background:#f8fafc;border:1px solid var(--border-light);border-radius:8px;padding:10px}
+          .robustness-summary-grid span{display:block;color:var(--text-muted);font-size:0.9rem;font-weight:700}
+          .robustness-summary-grid strong{display:block;color:#1a3c6e;font-size:1.02rem;overflow-wrap:anywhere}
+          .robustness-cycle-preview{max-height:220px;overflow:auto;border:1px solid var(--border-light);border-radius:8px;margin-bottom:14px}
+          .robustness-cycle-preview table{width:100%;border-collapse:collapse;font-size:0.9rem}
+          .robustness-cycle-preview th{position:sticky;top:0;background:#1a3c6e;color:#fff;padding:8px}
+          .robustness-cycle-preview td{border-top:1px solid var(--border-light);padding:8px;text-align:center}
+          .robustness-empty-cell{color:var(--text-muted);padding:18px !important}
+          .robustness-field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+          .robustness-field span{font-weight:700;color:var(--text-muted)}
+          .robustness-field input,.robustness-field textarea{border:1px solid var(--border);border-radius:8px;padding:9px 10px;font:inherit;color:var(--text)}
+          .robustness-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+          .robustness-draft-list{display:flex;flex-direction:column;gap:10px;max-height:680px;overflow:auto}
+          .robustness-draft-card{display:flex;gap:12px;justify-content:space-between;border:1px solid var(--border-light);border-radius:10px;padding:13px;background:#fbfdff}
+          .robustness-draft-main{min-width:0}
+          .robustness-draft-title{font-weight:800;color:var(--text);font-size:1.02rem}
+          .robustness-draft-meta{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+          .robustness-draft-meta span,.robustness-draft-assets span{display:inline-flex;border-radius:999px;background:#eef4fb;color:#1a3c6e;padding:3px 9px;font-size:0.86rem;font-weight:700}
+          .robustness-draft-assets{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+          .robustness-draft-note{margin-top:8px;color:var(--text-muted);font-size:0.93rem}
+          .robustness-draft-actions{display:flex;flex-direction:column;gap:7px;flex:0 0 auto}
+          .robustness-delete-draft{color:#ef4444 !important;border-color:#fecaca}
+          .robustness-empty{padding:34px;text-align:center;color:var(--text-muted);border:1px dashed var(--border);border-radius:10px;background:#f8fafc}
+          @media(max-width:980px){.robustness-notes-grid{grid-template-columns:1fr}.robustness-draft-card{flex-direction:column}.robustness-draft-actions{flex-direction:row}}
+        </style>
+      `;
+      $('#robustness-save-draft', area)?.addEventListener('click', async () => {
+        const draft = buildDraftPayload();
+        const saveBtn = $('#robustness-save-draft', area);
+        try {
+          if (saveBtn) saveBtn.disabled = true;
+          const result = await saveDraft(draft);
+          currentDrafts = await loadDrafts();
+          toast(result?.driveUploaded ? 'บันทึก Snapshot Robustness ลง Google Drive แล้ว' : 'บันทึก Snapshot Robustness แล้ว', result?.localOnly ? 'warning' : 'success', 3600);
+          render();
+        } catch (err) {
+          toast(`บันทึก Robustness ไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
+        } finally {
+          if (saveBtn) saveBtn.disabled = false;
+        }
+      });
+      $('#robustness-open-capture', area)?.addEventListener('click', () => App.navigate('upside-downside-capture'));
+      $('.robustness-draft-list', area)?.addEventListener('click', async event => {
+        const card = event.target.closest('.robustness-draft-card');
+        if (!card) return;
+        const id = card.dataset.id || '';
+        const draftsNow = currentDrafts;
+        const draft = draftsNow.find(item => String(item.id || '') === id);
+        if (!draft) return;
+        if (event.target.closest('.robustness-load-draft')) {
+          State.upsideDownsideCapture = draft.state || {};
+          saveJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY, draft.state || {});
+          toast('โหลด Snapshot แล้ว', 'success', 2200);
+          App.navigate('upside-downside-capture');
+        }
+        if (event.target.closest('.robustness-delete-draft')) {
+          if (!confirm('ลบบันทึก Robustness นี้?')) return;
+          try {
+            await deleteDraft(draft);
+            currentDrafts = await loadDrafts();
+            toast('ลบบันทึก Robustness แล้ว', 'success', 2200);
+            render();
+          } catch (err) {
+            toast(`ลบบันทึก Robustness ไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
+          }
+        }
+      });
+    };
+    setLoading(area, 'กำลังโหลดบันทึก Robustness...');
+    currentDrafts = await loadDrafts();
+    render();
     App._currentExport = null;
     App._currentTableExport = null;
   },
@@ -16552,10 +17037,80 @@ const Pages = {
     const symbols = payload.symbols || [];
     const rows = payload.prices || payload.rows || [];
     const profileRows = payload.profile || [];
-    const symbolItems = symbols.filter(item => item.symbol);
+    const normalizeUcIsin = (value = '') => String(value || '').split(':')[0].replace(/\s+/g, '').trim().toUpperCase();
+    const normalizeUcName = (value = '') => String(value || '').replace(/\s+/g, ' ').trim().toUpperCase();
+    const addUcAvpMatch = (lookup, key, category) => {
+      const cleanKey = String(key || '').trim();
+      if (!cleanKey) return;
+      const cleanCategory = String(category || '').trim();
+      const entry = lookup.get(cleanKey) || { categories: new Set() };
+      if (cleanCategory) entry.categories.add(cleanCategory);
+      lookup.set(cleanKey, entry);
+    };
+    const ucAvpLookup = { byIsin: new Map(), byName: new Map() };
+    let ucFundCodeItems = [];
+    const ucFundCodeByIsin = new Map();
+    const ucFundCodeByName = new Map();
+    const addUcFundCodeMatch = (lookup, key, fundItem) => {
+      const cleanKey = String(key || '').trim();
+      if (!cleanKey || !fundItem?.code) return;
+      if (!lookup.has(cleanKey)) lookup.set(cleanKey, []);
+      lookup.get(cleanKey).push(fundItem);
+    };
+    try {
+      const rawRows = await fetchCached('select-fund');
+      await Promise.all([
+        loadFundOverrides(),
+        loadMasterAllocations(),
+      ]);
+      const funds = applyFundOverrides(buildSelectedFundsCatalog(rawRows));
+      ucFundCodeItems = funds
+        .filter(fund => fund.code)
+        .map(fund => ({
+          code: String(fund.code || '').trim(),
+          name: String(fund.name || '').trim(),
+          masterId: String(fund.masterId || '').trim(),
+          masterName: String(fund.masterName || '').trim(),
+        }))
+        .sort((a, b) => compareValues(a.code, b.code, 'asc'));
+      ucFundCodeItems.forEach(fund => {
+        addUcFundCodeMatch(ucFundCodeByIsin, normalizeUcIsin(fund.masterId), fund);
+        addUcFundCodeMatch(ucFundCodeByName, normalizeUcName(fund.masterName), fund);
+      });
+      funds.forEach(fund => {
+        addUcAvpMatch(ucAvpLookup.byIsin, normalizeUcIsin(fund.masterId), fund.category);
+        addUcAvpMatch(ucAvpLookup.byName, normalizeUcName(fund.masterName), fund.category);
+        const saved = State.masterAllocations?.items?.[fund.key];
+        const allocations = Array.isArray(saved?.allocations) ? saved.allocations : [];
+        allocations.forEach(allocation => {
+          addUcAvpMatch(ucAvpLookup.byIsin, normalizeUcIsin(allocation.masterId), fund.category);
+          addUcAvpMatch(ucAvpLookup.byName, normalizeUcName(allocation.masterName), fund.category);
+        });
+      });
+    } catch (_) {}
+    const symbolItems = symbols
+      .filter(item => item.symbol)
+      .map(item => {
+        const displayName = item.displayName || item.name || item.fundName || '';
+        const displayLabel = item.displayLabel || [item.symbol, displayName].filter(Boolean).join(' - ') || item.symbol;
+        const matched = ucAvpLookup.byIsin.get(normalizeUcIsin(item.isin || item.symbol))
+          || ucAvpLookup.byName.get(normalizeUcName(displayName || displayLabel));
+        const categories = matched ? [...matched.categories].filter(Boolean) : [];
+        return {
+          ...item,
+          displayLabel,
+          categories,
+          categoryText: categories.join(', ') || 'ไม่พบหมวดหมู่ AVP',
+        };
+      });
     const symbolOptions = symbolItems.map(item => item.symbol);
     const symbolMetaBySymbol = new Map(symbolItems.map(item => [item.symbol, item]));
-    const defaultSymbol = payload.selectedSymbol || symbolOptions[0] || '';
+    const savedUcState = State.upsideDownsideCapture || readJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY, {}) || {};
+    State.upsideDownsideCapture = savedUcState;
+    const savedBenchmark = String(savedUcState?.benchmark || '').trim();
+    const defaultSymbol = symbolOptions.includes(savedBenchmark)
+      ? savedBenchmark
+      : (payload.selectedSymbol || symbolOptions[0] || '');
     const selectedRowsForStats = rows
       .filter(row => row.symbol === defaultSymbol && row.date && Number.isFinite(Number(row.close)))
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -16583,9 +17138,68 @@ const Pages = {
     };
     const symbolLabel = (symbol) => symbolMetaBySymbol.get(symbol)?.displayLabel || symbol || '-';
     const symbolSelectOptions = (selectedSymbol = defaultSymbol) => symbolOptions
-      .map(symbol => `<option value="${esc(symbol)}"${symbol === selectedSymbol ? ' selected' : ''}>${esc(symbolLabel(symbol))}</option>`)
-      .join('');
-    const captureRowHtml = (rowIdx) => `
+      .length
+        ? (() => {
+            const grouped = new Map();
+            [...symbolItems]
+              .sort((a, b) => {
+                const aMissing = a.categoryText === 'ไม่พบหมวดหมู่ AVP';
+                const bMissing = b.categoryText === 'ไม่พบหมวดหมู่ AVP';
+                if (aMissing !== bMissing) return aMissing ? 1 : -1;
+                return compareValues(a.categoryText, b.categoryText, 'asc') || compareValues(a.displayLabel, b.displayLabel, 'asc');
+              })
+              .forEach(item => {
+                const group = item.categoryText || 'ไม่พบหมวดหมู่ AVP';
+                if (!grouped.has(group)) grouped.set(group, []);
+                grouped.get(group).push(item);
+              });
+            return [...grouped.entries()].map(([category, items]) => `
+              <optgroup label="${esc(category)} (${items.length})">
+                ${items.map(item => `<option value="${esc(item.symbol)}"${item.symbol === selectedSymbol ? ' selected' : ''}>${esc(item.displayLabel)}</option>`).join('')}
+              </optgroup>
+            `).join('');
+          })()
+        : '<option value="">ยังไม่มีข้อมูล FT Historical Prices</option>';
+    const fundCodeOptionsHtml = ucFundCodeItems.length
+      ? ucFundCodeItems.map(item => `<option value="${esc(item.code)}">${esc(item.code)}${item.name ? ' - ' + esc(item.name) : ''}</option>`).join('')
+      : '<option value="">ยังไม่มี Fund Code</option>';
+    const resolveFundCodeForSymbol = (symbol = '') => {
+      const meta = symbolMetaBySymbol.get(symbol) || {};
+      const displayName = meta.displayName || meta.name || meta.fundName || meta.displayLabel || '';
+      const byIsin = ucFundCodeByIsin.get(normalizeUcIsin(meta.isin || symbol)) || [];
+      if (byIsin.length) return byIsin[0].code;
+      const byName = ucFundCodeByName.get(normalizeUcName(displayName)) || [];
+      return byName[0]?.code || '';
+    };
+    const chartColorPalette = [
+      { value: '#1a3c6e', label: 'น้ำเงินเข้ม' },
+      { value: '#2d9e6b', label: 'เขียว' },
+      { value: '#d63b3b', label: 'แดง' },
+      { value: '#8b5cf6', label: 'ม่วง' },
+      { value: '#e8a317', label: 'เหลืองส้ม' },
+      { value: '#4a90d9', label: 'ฟ้า' },
+      { value: '#00a7a7', label: 'ทีล' },
+      { value: '#f97316', label: 'ส้มสด' },
+      { value: '#c026d3', label: 'ชมพูม่วง' },
+      { value: '#64748b', label: 'เทา slate' },
+    ];
+    const chartColorPickerHtml = (inputClass, selectedColor = '', inputId = '') => {
+      const selected = chartColorPalette.some(color => color.value === selectedColor)
+        ? selectedColor
+        : chartColorPalette[0].value;
+      return `
+        <div class="uc-chart-color-picker">
+          <input ${inputId ? `id="${esc(inputId)}"` : ''} class="uc-chart-color-value ${esc(inputClass)}" type="hidden" value="${esc(selected)}">
+          <button class="uc-chart-color-dot" type="button" style="background:${esc(selected)}" aria-label="เลือกสีกราฟ"></button>
+          <div class="uc-chart-color-menu">
+            ${chartColorPalette.map(color => `
+              <button class="uc-chart-color-choice${color.value === selected ? ' is-selected' : ''}" type="button" data-color="${esc(color.value)}" style="background:${esc(color.value)}" title="${esc(color.label)}"></button>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    };
+    const captureRowHtml = (rowIdx, dates = ['', '', '']) => `
       <tr data-uc-row="${rowIdx}">
         <td class="uc-benchmark-cell">${esc(symbolLabel(defaultSymbol))}</td>
         ${[1, 2, 3].map(point => `
@@ -16596,7 +17210,7 @@ const Pages = {
             </div>
           </td>
           <td>
-            <input class="uc-date" data-point="${point}" type="date">
+            <input class="uc-date" data-point="${point}" type="date" value="${esc(dates[point - 1] || '')}">
           </td>
         `).join('')}
         <td class="td-num uc-calc uc-downside-gap">-</td>
@@ -16605,7 +17219,6 @@ const Pages = {
         <td class="td-num uc-calc uc-upside-capture">-</td>
         <td class="td-num uc-calc uc-robustness-ratio">-</td>
         <td class="td-num uc-calc uc-total-cycle-fund">-</td>
-        <td class="td-num uc-calc uc-total-cycle-benchmark">-</td>
         <td class="td-num uc-calc uc-robustness-score">-</td>
         <td><button class="btn btn-ghost btn-xs uc-delete-row" type="button">ลบ</button></td>
       </tr>
@@ -16630,7 +17243,6 @@ const Pages = {
         <td class="td-num uc-calc uc-upside-capture">-</td>
         <td class="td-num uc-calc uc-robustness-ratio">-</td>
         <td class="td-num uc-calc uc-total-cycle-fund">-</td>
-        <td class="td-num uc-calc uc-total-cycle-benchmark">-</td>
         <td class="td-num uc-calc uc-robustness-score">-</td>
         <td></td>
       </tr>
@@ -16651,96 +17263,60 @@ const Pages = {
       return;
     }
 
+    const initialDateRows = Array.isArray(savedUcState?.rows) && savedUcState.rows.length
+      ? savedUcState.rows.map(row => Array.isArray(row) ? row.slice(0, 3) : ['', '', ''])
+      : Array.from({ length: 5 }, () => ['', '', '']);
+    while (initialDateRows.length < 1) initialDateRows.push(['', '', '']);
+    const initialCompareSymbols = Array.isArray(savedUcState?.compareSymbols)
+      ? savedUcState.compareSymbols.filter(symbol => symbolOptions.includes(symbol))
+      : [];
+    const initialBenchmarkFundCode = String(savedUcState?.benchmarkFundCode || '').trim() || resolveFundCodeForSymbol(defaultSymbol);
+    const initialCompareFundCodes = Array.isArray(savedUcState?.compareFundCodes)
+      ? savedUcState.compareFundCodes.map(code => String(code || '').trim())
+      : [];
+    const initialBenchmarkChartColor = String(savedUcState?.benchmarkChartColor || '').trim() || chartColorPalette[0].value;
+    const initialCompareChartColors = Array.isArray(savedUcState?.compareChartColors)
+      ? savedUcState.compareChartColors.map(color => String(color || '').trim())
+      : [];
+    const ucCaptureColgroup = `
+      <colgroup>
+        <col class="uc-col-asset">
+        <col class="uc-col-phase-nav">
+        <col class="uc-col-phase-date">
+        <col class="uc-col-phase-nav">
+        <col class="uc-col-phase-date">
+        <col class="uc-col-phase-nav">
+        <col class="uc-col-phase-date">
+        <col class="uc-col-calc">
+        <col class="uc-col-calc">
+        <col class="uc-col-calc">
+        <col class="uc-col-calc">
+        <col class="uc-col-calc">
+        <col class="uc-col-calc-wide">
+        <col class="uc-col-calc-wide">
+        <col class="uc-col-action">
+      </colgroup>
+    `;
+    const ucResearchMetricRows = [
+      'Median of ..... Latest Downside Capture vs. Benchmark',
+      'Median of ..... Latest Upside Capture vs. Benchmark',
+      'Median Robustness Ratio (Upside/Downside Capture)',
+      'Cumulative ..... latest Total Cycle Returns for the fund',
+    ];
+
     area.innerHTML = `
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Symbol ที่เลือก</div>
-          <div class="stat-value stat-value-small">${esc(payload.selectedDisplayLabel || symbolLabel(payload.selectedSymbol || defaultSymbol))}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">จำนวนราคา</div>
-          <div class="stat-value">${int(stat.rowCount || 0)}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">ช่วงข้อมูล</div>
-          <div class="stat-value stat-value-small">${esc(stat.startDate || '-')} ถึง ${esc(stat.endDate || '-')}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">ผลตอบแทนสะสมจาก Close</div>
-          <div class="stat-value">${pct(stat.cumulativeReturn)}</div>
-        </div>
-      </div>
+      <datalist id="uc-fund-code-list">${fundCodeOptionsHtml}</datalist>
 
-      <div class="grid grid-2">
-        <section class="card">
-          <div class="card-header">
-            <div>
-              <h3>Profile and Investment</h3>
-              <p>Metadata จากหน้า FT summary สำหรับช่วยเลือก benchmark/fund</p>
-            </div>
+      <section class="card uc-research-summary-card">
+        <div class="card-header">
+          <div>
+            <h3>ข้อสรุปเบื้องต้น Funds Robustness Research</h3>
           </div>
-          <div class="kv-list">
-            ${profileRows.length ? profileRows.map(item => `
-              <div>
-                <span>${esc(item.field || '')}</span>
-                <strong>${esc(item.value || '--').replace(/\n/g, '<br>')}</strong>
-              </div>
-            `).join('') : `
-              <div><span>สถานะ</span><strong>ยังไม่มี Profile and investment สำหรับ symbol นี้ ให้ดึงข้อมูล FT ใหม่อีกครั้ง</strong></div>
-            `}
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card-header">
-            <div>
-              <h3>ค่าที่มีสำหรับคำนวณ Capture</h3>
-              <p>ชุดนี้คือข้อมูลจาก SQLite หลังแปลงจาก FT Historical Prices แล้ว</p>
-            </div>
-            <span class="badge badge-data-origin">${esc(payload.source || 'SQLite')}</span>
-          </div>
-          <div class="kv-list">
-            <div><span>Open / High / Low / Close</span><strong>มีครบในระดับรายวัน</strong></div>
-            <div><span>Volume</span><strong>มีสำหรับตรวจ liquidity/ความผิดปกติ</strong></div>
-            <div><span>Daily Return</span><strong>คำนวณจาก Close เทียบวันก่อนหน้าได้ ${int(stat.dailyReturnCount || 0)} ค่า</strong></div>
-            <div><span>Up Days</span><strong>${int(stat.upDays || 0)} วัน · เฉลี่ย ${pct(stat.avgUpDayReturn)}</strong></div>
-            <div><span>Down Days</span><strong>${int(stat.downDays || 0)} วัน · เฉลี่ย ${pct(stat.avgDownDayReturn)}</strong></div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card-header">
-            <div>
-              <h3>Available Symbols</h3>
-              <p>ตอนนี้เลือกให้ดูตัวแรกก่อน รอบถัดไปค่อยเพิ่มตัวเลือก fund/benchmark</p>
-            </div>
-          </div>
-          <div class="table-wrapper" style="max-height:320px">
-            <table>
-              <thead>
-                <tr>
-                  <th>Symbol</th>
-                  <th>Name</th>
-                  <th>Rows</th>
-                  <th>Start</th>
-                  <th>End</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${symbols.map(item => `
-                  <tr>
-                    <td>${esc(item.symbol || '')}</td>
-                    <td>${esc(item.displayName || '-')}</td>
-                    <td class="td-num">${int(item.rowCount || 0)}</td>
-                    <td>${esc(item.startDate || '')}</td>
-                    <td>${esc(item.endDate || '')}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
+        </div>
+        <div class="uc-research-summary-wrap">
+          <div id="uc-research-summary-table-root"></div>
+        </div>
+      </section>
 
       <section class="card" id="uc-nav-chart-card">
         <div class="card-header">
@@ -16751,6 +17327,14 @@ const Pages = {
           <label class="form-field uc-chart-cycle-field">
             <span>Cycle</span>
             <select id="uc-chart-row-select"></select>
+          </label>
+          <label class="form-field uc-chart-cycle-field">
+            <span>มุมมองกราฟ</span>
+            <select id="uc-chart-view-mode">
+              <option value="nav"${(savedUcState?.chartViewMode || 'nav') === 'nav' ? ' selected' : ''}>NAV จริง</option>
+              <option value="base100"${savedUcState?.chartViewMode === 'base100' ? ' selected' : ''}>เริ่มเท่ากันที่ 100</option>
+              <option value="returnPct"${savedUcState?.chartViewMode === 'returnPct' ? ' selected' : ''}>% จากวันแรก</option>
+            </select>
           </label>
         </div>
         <div class="uc-chart-summary" id="uc-chart-summary">เลือกวันที่ NAV (1) และ NAV (3) เพื่อแสดงกราฟ</div>
@@ -16774,10 +17358,19 @@ const Pages = {
               ${symbolSelectOptions(defaultSymbol)}
             </select>
           </label>
+          <label class="form-field uc-chart-color-field">
+            <span>สีกราฟ</span>
+            ${chartColorPickerHtml('uc-benchmark-chart-color', initialBenchmarkChartColor, 'uc-benchmark-chart-color')}
+          </label>
+          <label class="form-field uc-fund-code-field">
+            <span>Fund Code</span>
+            <input id="uc-benchmark-fund-code" class="uc-fund-code-input" list="uc-fund-code-list" value="${esc(initialBenchmarkFundCode)}" placeholder="เลือกหรือพิมพ์ Fund Code">
+          </label>
           <button class="btn btn-secondary" id="uc-add-compare-asset" type="button">เพิ่มสินทรัพย์เปรียบเทียบ</button>
         </div>
         <div class="table-wrapper uc-table-wrapper">
           <table class="uc-table">
+            ${ucCaptureColgroup}
             <thead>
               <tr>
                 <th rowspan="2">Benchmark</th>
@@ -16790,7 +17383,6 @@ const Pages = {
                 <th rowspan="2">Upside Capture</th>
                 <th rowspan="2">Robustness Ratio</th>
                 <th rowspan="2">Total Cycle Return<br>(Fund)</th>
-                <th rowspan="2">Total Cycle Return<br>(Benchmark)</th>
                 <th rowspan="2">Robustness Score<br>(Fund/Benchmark)</th>
                 <th rowspan="2">จัดการ</th>
               </tr>
@@ -16804,9 +17396,9 @@ const Pages = {
               </tr>
             </thead>
             <tbody id="uc-cycle-body">
-              ${Array.from({ length: 5 }, (_, rowIdx) => captureRowHtml(rowIdx)).join('')}
+              ${initialDateRows.map((dates, rowIdx) => captureRowHtml(rowIdx, dates)).join('')}
               <tr class="uc-add-row">
-                <td colspan="16">
+                <td colspan="15">
                   <button class="btn btn-secondary" id="uc-add-row" type="button">เพิ่มวันที่</button>
                 </td>
               </tr>
@@ -16875,6 +17467,26 @@ const Pages = {
         .concat($$('.uc-compare-symbol', area).map(select => select.value).filter(Boolean));
       return [...new Set(list.filter(Boolean))];
     };
+    const chartLineColors = chartColorPalette.map(color => color.value);
+    const getChartColorMap = () => {
+      const colorMap = new Map();
+      const benchmarkSymbol = $('#uc-benchmark-select', area)?.value || defaultSymbol;
+      const benchmarkColor = $('#uc-benchmark-chart-color', area)?.value || chartLineColors[0];
+      if (benchmarkSymbol) colorMap.set(benchmarkSymbol, benchmarkColor);
+      $$('.uc-compare-block', area).forEach((blockEl, idx) => {
+        const symbol = $('.uc-compare-symbol', blockEl)?.value || '';
+        const color = $('.uc-compare-chart-color', blockEl)?.value || chartLineColors[(idx + 1) % chartLineColors.length];
+        if (symbol && !colorMap.has(symbol)) colorMap.set(symbol, color);
+      });
+      return colorMap;
+    };
+    const getHiddenChartSymbols = () => (
+      Array.isArray(State.upsideDownsideCapture?.hiddenChartSymbols)
+        ? State.upsideDownsideCapture.hiddenChartSymbols
+        : Array.isArray(savedUcState?.hiddenChartSymbols)
+          ? savedUcState.hiddenChartSymbols
+          : []
+    ).filter(Boolean);
 
     const formatShortDate = (value) => {
       if (!value) return '';
@@ -16882,15 +17494,29 @@ const Pages = {
       return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0].slice(2)}` : value;
     };
 
-    const buildNavChartSvg = (series, markers, startDate, endDate, highlightRanges = []) => {
+    const buildNavChartSvg = (series, markers, startDate, endDate, highlightRanges = [], viewMode = 'nav', hiddenSymbols = []) => {
       const width = 1080;
       const height = 360;
       const pad = { left: 68, right: 22, top: 28, bottom: 48 };
       const chartW = width - pad.left - pad.right;
       const chartH = height - pad.top - pad.bottom;
-      const allPoints = series.flatMap(item => item.points);
+      const hiddenSet = new Set(hiddenSymbols);
+      const visibleSeries = series.filter(item => !hiddenSet.has(item.symbol));
+      const legend = series.map((item, idx) => {
+        const color = item.color || chartLineColors[idx % chartLineColors.length];
+        const isHidden = hiddenSet.has(item.symbol);
+        return `
+          <button class="uc-chart-legend-item ${isHidden ? 'is-hidden' : ''}" type="button" data-chart-symbol="${esc(item.symbol)}" title="คลิกเพื่อซ่อน/แสดงเส้นนี้">
+            <i style="background:${color}"></i>${esc(item.label || item.symbol)}
+          </button>
+        `;
+      }).join('');
+      const allPoints = visibleSeries.flatMap(item => item.points);
       if (!allPoints.length) {
-        return '<div class="state-box compact">ไม่มีราคาในช่วงวันที่นี้สำหรับ symbol ที่เลือก</div>';
+        return `
+          <div class="uc-chart-legend">${legend}</div>
+          <div class="state-box compact">ไม่มีเส้นที่เปิดแสดงอยู่ในช่วงวันที่นี้</div>
+        `;
       }
       const times = allPoints.map(point => new Date(`${point.date}T00:00:00`).getTime()).filter(Number.isFinite);
       const values = allPoints.map(point => Number(point.close)).filter(Number.isFinite);
@@ -16906,7 +17532,6 @@ const Pages = {
         return pad.left + ((t - minT) / ((maxT - minT) || 1)) * chartW;
       };
       const y = (value) => pad.top + (1 - ((value - minV) / ((maxV - minV) || 1))) * chartH;
-      const colors = ['#1a3c6e', '#2d9e6b', '#d63b3b', '#8b5cf6', '#e8a317', '#4a90d9'];
       const yTicks = Array.from({ length: 5 }, (_, idx) => minV + ((maxV - minV) * idx / 4));
       const markerItems = markers.filter(marker => marker.date);
       const rangeHighlight = (fromDate, toDate, className) => {
@@ -16933,12 +17558,12 @@ const Pages = {
           <text x="${markerX.toFixed(2)}" y="${height - 14}" text-anchor="middle" class="uc-chart-marker-label">${esc(marker.label)}</text>
         `;
       }).join('');
-      const paths = series.map((item, idx) => {
+      const paths = visibleSeries.map((item) => {
         const path = item.points.map((point, pointIdx) => {
           const cmd = pointIdx === 0 ? 'M' : 'L';
           return `${cmd}${x(point.date).toFixed(2)},${y(Number(point.close)).toFixed(2)}`;
         }).join(' ');
-        const color = colors[idx % colors.length];
+        const color = item.color || chartLineColors[0];
         const dots = markers
           .map(marker => item.points.find(point => point.date === marker.date))
           .filter(Boolean)
@@ -16949,19 +17574,15 @@ const Pages = {
           ${dots}
         `;
       }).join('');
-      const legend = series.map((item, idx) => {
-        const color = colors[idx % colors.length];
-        return `
-          <span class="uc-chart-legend-item">
-            <i style="background:${color}"></i>${esc(item.label || item.symbol)}
-          </span>
-        `;
-      }).join('');
+      const formatAxisValue = (value) => {
+        if (viewMode === 'returnPct') return `${num(value * 100, 2)}%`;
+        return num(value, 2);
+      };
       const yGrid = yTicks.map(value => {
         const yy = y(value);
         return `
           <line x1="${pad.left}" y1="${yy.toFixed(2)}" x2="${pad.left + chartW}" y2="${yy.toFixed(2)}" class="uc-chart-grid"></line>
-          <text x="${pad.left - 10}" y="${(yy + 4).toFixed(2)}" text-anchor="end" class="uc-chart-axis-label">${num(value, 2)}</text>
+          <text x="${pad.left - 10}" y="${(yy + 4).toFixed(2)}" text-anchor="end" class="uc-chart-axis-label">${formatAxisValue(value)}</text>
         `;
       }).join('');
       return `
@@ -16988,10 +17609,13 @@ const Pages = {
         '<option value="all">All</option>',
         ...Array.from({ length: count }, (_, idx) => `<option value="${idx}">Cycle ${idx + 1}</option>`),
       ].join('');
+      const savedChartCycle = State.upsideDownsideCapture?.chartCycle || savedUcState?.chartCycle || '';
       if (current === 'all') {
         select.value = 'all';
       } else if (current && Number(current) < count) {
         select.value = current;
+      } else if (savedChartCycle === 'all' || (savedChartCycle && Number(savedChartCycle) < count)) {
+        select.value = savedChartCycle;
       } else if (!current) {
         select.value = 'all';
       }
@@ -17001,6 +17625,7 @@ const Pages = {
       const chartEl = $('#uc-nav-chart', area);
       const summaryEl = $('#uc-chart-summary', area);
       const selectedChartMode = $('#uc-chart-row-select', area)?.value || 'all';
+      const chartViewMode = $('#uc-chart-view-mode', area)?.value || 'nav';
       const cycleRows = selectedChartMode === 'all'
         ? $$('#uc-cycle-body tr[data-uc-row]', area)
         : [getSelectedChartRow()].filter(Boolean);
@@ -17027,18 +17652,41 @@ const Pages = {
       const startDate = cycleBoundaryDates[0];
       const endDate = cycleBoundaryDates[cycleBoundaryDates.length - 1];
       const symbolsForChart = getChartSymbols();
+      const chartViewLabel = chartViewMode === 'base100'
+        ? 'เริ่มเท่ากันที่ 100'
+        : chartViewMode === 'returnPct'
+          ? '% จากวันแรก'
+          : 'NAV จริง';
       summaryEl.textContent = selectedChartMode === 'all'
-        ? `ทุก Cycle · ช่วง ${formatShortDate(startDate)} ถึง ${formatShortDate(endDate)} · ${symbolsForChart.length} สินทรัพย์`
-        : `${chartCycles[0].label} · ช่วง ${formatShortDate(startDate)} ถึง ${formatShortDate(endDate)} · ${symbolsForChart.length} สินทรัพย์`;
+        ? `ทุก Cycle · ช่วง ${formatShortDate(startDate)} ถึง ${formatShortDate(endDate)} · ${symbolsForChart.length} สินทรัพย์ · ${chartViewLabel}`
+        : `${chartCycles[0].label} · ช่วง ${formatShortDate(startDate)} ถึง ${formatShortDate(endDate)} · ${symbolsForChart.length} สินทรัพย์ · ${chartViewLabel}`;
       chartEl.innerHTML = '<div class="state-box compact">กำลังวาดกราฟ...</div>';
       try {
         const series = [];
+        const chartColorMap = getChartColorMap();
         for (const symbol of symbolsForChart) {
           const priceRows = await getSymbolPriceRows(symbol);
           const points = priceRows
             .filter(row => row.date >= startDate && row.date <= endDate && Number.isFinite(Number(row.close)))
             .map(row => ({ date: row.date, close: Number(row.close) }));
-          if (points.length) series.push({ symbol, label: symbolLabel(symbol), points });
+          if (points.length) {
+            const baseClose = Number(points[0]?.close);
+            const chartPoints = points.map(point => {
+              if (chartViewMode === 'base100' && baseClose > 0) {
+                return { ...point, close: (Number(point.close) / baseClose) * 100 };
+              }
+              if (chartViewMode === 'returnPct' && baseClose > 0) {
+                return { ...point, close: (Number(point.close) / baseClose) - 1 };
+              }
+              return point;
+            });
+            series.push({
+              symbol,
+              label: symbolLabel(symbol),
+              color: chartColorMap.get(symbol) || chartLineColors[series.length % chartLineColors.length],
+              points: chartPoints,
+            });
+          }
         }
         const markers = chartCycles.flatMap(cycle => [
           { label: `${cycle.label} NAV (1)`, date: cycle.nav1Date },
@@ -17061,6 +17709,8 @@ const Pages = {
           startDate,
           endDate,
           highlightRanges,
+          chartViewMode,
+          getHiddenChartSymbols(),
         );
       } catch (err) {
         chartEl.innerHTML = `<div class="state-box compact">${esc(err.message || 'วาดกราฟไม่สำเร็จ')}</div>`;
@@ -17083,6 +17733,349 @@ const Pages = {
       el.textContent = formatter === 'ratio' ? value.toFixed(2) : pct(value);
     };
 
+    const parseRatioText = (value = '') => {
+      const clean = String(value || '').replace(/,/g, '').replace(/%/g, '').trim();
+      if (!clean || clean === '-') return NaN;
+      const parsed = Number(clean);
+      return Number.isFinite(parsed) ? parsed : NaN;
+    };
+
+    const parsePercentText = (value = '') => {
+      const raw = String(value || '').trim();
+      const clean = raw.replace(/,/g, '').replace(/%/g, '').trim();
+      if (!clean || clean === '-') return NaN;
+      const parsed = Number(clean);
+      if (!Number.isFinite(parsed)) return NaN;
+      return raw.includes('%') ? parsed / 100 : parsed;
+    };
+
+    const median = (values = []) => {
+      const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+      if (!sorted.length) return NaN;
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    };
+
+    const getResearchYearRangeLabel = () => {
+      const dates = $$('#uc-cycle-body .uc-date', area)
+        .map(input => input.value)
+        .filter(Boolean)
+        .sort();
+      if (!dates.length) return 'ข้อมูลทดสอบตั้งแต่ .... ถึง ....';
+      const startYear = dates[0].slice(0, 4);
+      const endYear = dates[dates.length - 1].slice(0, 4);
+      return `ข้อมูลทดสอบตั้งแต่ ${startYear || '....'} ถึง ${endYear || '....'}`;
+    };
+
+    const collectLatestMetricValues = (rootEl, rowSelector, metricSelector, limit = 4, parser = parseRatioText) => {
+      return $$(rowSelector, rootEl || area)
+        .map((rowEl, idx) => ({
+          idx,
+          date: getRowDateValue(rowEl, 3) || getRowDateValue(rowEl, 2) || getRowDateValue(rowEl, 1),
+          value: parser($(metricSelector, rowEl)?.textContent || ''),
+        }))
+        .filter(item => item.date && Number.isFinite(item.value))
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)) || b.idx - a.idx)
+        .slice(0, limit)
+        .map(item => item.value);
+    };
+
+    const cumulativeLatestCycleReturn = (rootEl, rowSelector, limit = 3) => {
+      const cycles = $$(rowSelector, rootEl || area)
+        .map((rowEl, idx) => {
+          const downsideGap = parsePercentText($('.uc-downside-gap', rowEl)?.textContent || '');
+          const upsideGap = parsePercentText($('.uc-upside-gap', rowEl)?.textContent || '');
+          return {
+            idx,
+            date: getRowDateValue(rowEl, 3) || getRowDateValue(rowEl, 2) || getRowDateValue(rowEl, 1),
+            downsideGap,
+            upsideGap,
+          };
+        })
+        .filter(item => item.date && Number.isFinite(item.downsideGap) && Number.isFinite(item.upsideGap))
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)) || b.idx - a.idx)
+        .slice(0, limit);
+      if (!cycles.length) return NaN;
+      return cycles.reduce((product, cycle) => (
+        product * (1 + cycle.downsideGap) * (1 + cycle.upsideGap)
+      ), 1) - 1;
+    };
+
+    const renderResearchSummary = () => {
+      const root = $('#uc-research-summary-table-root', area);
+      if (!root) return;
+      const compareColumns = $$('.uc-compare-block', area).map((blockEl, idx) => {
+        const symbol = $('.uc-compare-symbol', blockEl)?.value || '';
+        const fundCode = $('.uc-compare-fund-code', blockEl)?.value.trim() || '';
+        const downsideValues = collectLatestMetricValues(
+          blockEl,
+          'tr[data-uc-compare-row]',
+          '.uc-downside-capture',
+          4,
+        );
+        const upsideValues = collectLatestMetricValues(
+          blockEl,
+          'tr[data-uc-compare-row]',
+          '.uc-upside-capture',
+          3,
+        );
+        const robustnessRatioValues = collectLatestMetricValues(
+          blockEl,
+          'tr[data-uc-compare-row]',
+          '.uc-robustness-ratio',
+          Infinity,
+        );
+        return {
+          symbol,
+          fundCode,
+          label: symbolLabel(symbol) || `สินทรัพย์เปรียบเทียบ ${idx + 1}`,
+          isBenchmark: false,
+          blockEl,
+          downsideMedian: median(downsideValues),
+          upsideMedian: median(upsideValues),
+          robustnessRatioMedian: median(robustnessRatioValues),
+          cumulativeReturn: cumulativeLatestCycleReturn(blockEl, 'tr[data-uc-compare-row]', 3),
+        };
+      });
+      const benchmarkSymbol = $('#uc-benchmark-select', area)?.value || defaultSymbol || '';
+      const benchmarkFundCode = $('#uc-benchmark-fund-code', area)?.value.trim() || '';
+      const benchmarkDownsideMedian = median(collectLatestMetricValues(
+        $('#uc-cycle-body', area),
+        'tr[data-uc-row]',
+        '.uc-downside-capture',
+        4,
+      ));
+      const benchmarkUpsideMedian = median(collectLatestMetricValues(
+        $('#uc-cycle-body', area),
+        'tr[data-uc-row]',
+        '.uc-upside-capture',
+        3,
+      ));
+      const benchmarkRobustnessRatioMedian = median(collectLatestMetricValues(
+        $('#uc-cycle-body', area),
+        'tr[data-uc-row]',
+        '.uc-robustness-ratio',
+        Infinity,
+      ));
+      const benchmarkCumulativeReturn = cumulativeLatestCycleReturn($('#uc-cycle-body', area), 'tr[data-uc-row]', 3);
+      const columns = [
+        ...compareColumns,
+        {
+          symbol: benchmarkSymbol,
+          fundCode: benchmarkFundCode,
+          label: symbolLabel(benchmarkSymbol),
+          isBenchmark: true,
+          downsideMedian: benchmarkDownsideMedian,
+          upsideMedian: benchmarkUpsideMedian,
+          robustnessRatioMedian: benchmarkRobustnessRatioMedian,
+          cumulativeReturn: benchmarkCumulativeReturn,
+        },
+      ].filter(col => col.symbol || col.isBenchmark);
+      const summaryValue = (col, rowIdx) => {
+        if (rowIdx === 0) return Number.isFinite(col.downsideMedian) ? col.downsideMedian.toFixed(2) : '-';
+        if (rowIdx === 1) return Number.isFinite(col.upsideMedian) ? col.upsideMedian.toFixed(2) : '-';
+        if (rowIdx === 2) return Number.isFinite(col.robustnessRatioMedian) ? col.robustnessRatioMedian.toFixed(2) : '-';
+        if (rowIdx === 3) return Number.isFinite(col.cumulativeReturn) ? pct(col.cumulativeReturn) : '-';
+        return '-';
+      };
+      const summaryNumericValue = (col, rowIdx) => {
+        if (rowIdx === 0) return col.downsideMedian;
+        if (rowIdx === 1) return col.upsideMedian;
+        if (rowIdx === 2) return col.robustnessRatioMedian;
+        if (rowIdx === 3) return col.cumulativeReturn;
+        return NaN;
+      };
+      const summaryHeatStyles = ucResearchMetricRows.map((_, rowIdx) => {
+        const values = columns.map(col => summaryNumericValue(col, rowIdx)).filter(Number.isFinite);
+        if (!values.length) return columns.map(() => '');
+        const minValue = Math.min(...values);
+        const maxValue = Math.max(...values);
+        return columns.map(col => {
+          const value = summaryNumericValue(col, rowIdx);
+          if (!Number.isFinite(value)) return '';
+          const rawScore = maxValue === minValue ? 0.55 : (value - minValue) / (maxValue - minValue);
+          const score = rowIdx === 0 ? 1 - rawScore : rawScore;
+          const lightness = 97 - (score * 34);
+          const saturation = 42 + (score * 6);
+          return ` style="background:hsl(137 ${saturation.toFixed(0)}% ${lightness.toFixed(0)}%);"`;
+        });
+      });
+      const rankColumns = compareColumns.filter(col => col.symbol || col.fundCode);
+      const rankMetricRows = [
+        {
+          label: 'Median of ..... Latest Downside Capture vs. Benchmark',
+          key: 'downsideMedian',
+          dir: 'asc',
+        },
+        {
+          label: 'Median Robustness Ratio (Upside/Downside Capture)',
+          key: 'robustnessRatioMedian',
+          dir: 'desc',
+        },
+        {
+          label: 'The sum of the ..... latest Total Cycle Returns for the fund',
+          key: 'cumulativeReturn',
+          dir: 'desc',
+        },
+      ];
+      const rankValues = (items, key, dir = 'desc') => {
+        const sorted = items
+          .map((col, idx) => ({ idx, value: Number(col[key]) }))
+          .filter(item => Number.isFinite(item.value))
+          .sort((a, b) => (
+            dir === 'asc' ? a.value - b.value : b.value - a.value
+          ) || a.idx - b.idx);
+        const ranks = Array(items.length).fill(NaN);
+        sorted.forEach((item, rankIdx) => { ranks[item.idx] = rankIdx + 1; });
+        return ranks;
+      };
+      const rankRows = rankMetricRows.map(row => ({
+        ...row,
+        ranks: rankValues(rankColumns, row.key, row.dir),
+      }));
+      const sumRanks = rankColumns.map((_, colIdx) => {
+        const values = rankRows.map(row => row.ranks[colIdx]).filter(Number.isFinite);
+        return values.length === rankRows.length ? values.reduce((sum, value) => sum + value, 0) : NaN;
+      });
+      const rankHeatStyle = (value, values) => {
+        const validValues = values.filter(Number.isFinite);
+        if (!Number.isFinite(value) || !validValues.length) return '';
+        const minValue = Math.min(...validValues);
+        const maxValue = Math.max(...validValues);
+        const score = maxValue === minValue ? 0.55 : 1 - ((value - minValue) / (maxValue - minValue));
+        const lightness = 97 - (score * 34);
+        const saturation = 42 + (score * 6);
+        return ` style="background:hsl(137 ${saturation.toFixed(0)}% ${lightness.toFixed(0)}%);"`;
+      };
+      const benchmarkCycleRows = $$('#uc-cycle-body tr[data-uc-row]', area);
+      const downsideDetailRows = benchmarkCycleRows.map((rowEl, cycleIdx) => {
+        return { type: 'downside', cycleIdx, label: `Downside Capture Cycle ${cycleIdx + 1} เมื่อเทียบ Benchmark` };
+      });
+      const upsideDetailRows = benchmarkCycleRows.map((rowEl, cycleIdx) => {
+        return { type: 'upside', cycleIdx, label: `Upside Capture Cycle ${cycleIdx + 1} เมื่อเทียบ Benchmark` };
+      });
+      const detailValue = (col, row) => {
+        if (col.isBenchmark || !col.blockEl) return NaN;
+        const compareRows = $$('tr[data-uc-compare-row]', col.blockEl);
+        const compareRow = compareRows[row.cycleIdx] || null;
+        const selector = row.type === 'downside' ? '.uc-downside-capture' : '.uc-upside-capture';
+        return parseRatioText($(selector, compareRow)?.textContent || '');
+      };
+      const hasDetailValues = row => columns
+        .some(col => !col.isBenchmark && Number.isFinite(detailValue(col, row)));
+      const visibleDownsideDetailRows = downsideDetailRows.filter(hasDetailValues);
+      const visibleUpsideDetailRows = upsideDetailRows.filter(hasDetailValues);
+      const detailRows = [
+        ...visibleDownsideDetailRows,
+        ...(visibleDownsideDetailRows.length && visibleUpsideDetailRows.length
+          ? [{ type: 'gap', cycleIdx: -1, label: '' }]
+          : []),
+        ...visibleUpsideDetailRows,
+      ];
+      const detailHeatStyle = (value, values, type) => {
+        const validValues = values.filter(Number.isFinite);
+        if (!Number.isFinite(value) || !validValues.length) return '';
+        const minValue = Math.min(...validValues);
+        const maxValue = Math.max(...validValues);
+        const score = maxValue === minValue ? 0.55 : (value - minValue) / (maxValue - minValue);
+        if (type === 'downside') {
+          const lightness = 98 - (score * 30);
+          return ` style="background:hsl(357 84% ${lightness.toFixed(0)}%);"`;
+        }
+        const lightness = 97 - (score * 34);
+        const saturation = 42 + (score * 6);
+        return ` style="background:hsl(137 ${saturation.toFixed(0)}% ${lightness.toFixed(0)}%);"`;
+      };
+      const summaryMinWidth = Math.max(1080, 330 + (columns.length * 180));
+      const rankDisplayColumns = columns;
+      const rankMinWidth = Math.max(1080, 330 + (rankDisplayColumns.length * 180));
+      const detailMinWidth = Math.max(1080, 330 + (rankDisplayColumns.length * 180));
+      root.innerHTML = `
+        <table class="uc-research-summary-table" style="min-width:${summaryMinWidth}px;">
+          <thead>
+            <tr>
+              <th rowspan="2" class="uc-research-master-head">
+                Master Fund<br>
+                <span>(${esc(getResearchYearRangeLabel())})</span>
+              </th>
+              ${columns.map(col => `
+                <th class="${col.isBenchmark ? 'uc-research-benchmark-head' : ''}">
+                  ${esc(col.fundCode || col.symbol || '-')}
+                </th>
+              `).join('')}
+            </tr>
+            <tr>
+              ${columns.map(col => `
+                <th class="uc-research-fund-name ${col.isBenchmark ? 'uc-research-benchmark-name' : ''}">
+                  ${esc(col.label || '-')}
+                </th>
+              `).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${ucResearchMetricRows.map((label, rowIdx) => `
+              <tr>
+                <th>${esc(label)}</th>
+                ${columns.map((col, colIdx) => `<td class="${col.isBenchmark ? 'uc-research-benchmark-cell' : ''}"${summaryHeatStyles[rowIdx]?.[colIdx] || ''}>${esc(summaryValue(col, rowIdx))}</td>`).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <table class="uc-research-summary-table uc-research-rank-table" style="min-width:${rankMinWidth}px;">
+          <thead>
+            <tr>
+              <th class="uc-research-master-head">ผลสรุปกองทุน คิดเป็น Sum Rank</th>
+              ${rankDisplayColumns.map(col => `
+                <th class="${col.isBenchmark ? 'uc-research-rank-placeholder-head' : ''}">${esc(col.fundCode || col.symbol || '-')}</th>
+              `).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${rankRows.map(row => `
+              <tr>
+                <th>${esc(row.label)}</th>
+                ${rankDisplayColumns.map(col => {
+                  if (col.isBenchmark) return '<td class="uc-research-rank-placeholder"></td>';
+                  const colIdx = rankColumns.indexOf(col);
+                  const rank = colIdx >= 0 ? row.ranks[colIdx] : NaN;
+                  return `<td${rankHeatStyle(rank, row.ranks)}>${Number.isFinite(rank) ? esc(String(rank)) : '-'}</td>`;
+                }).join('')}
+              </tr>
+            `).join('')}
+            <tr class="uc-research-rank-total">
+              <th>Sum Rank (ยิ่งน้อยยิ่งดี)</th>
+              ${rankDisplayColumns.map(col => {
+                if (col.isBenchmark) return '<td class="uc-research-rank-placeholder"></td>';
+                const colIdx = rankColumns.indexOf(col);
+                const total = colIdx >= 0 ? sumRanks[colIdx] : NaN;
+                return `<td${rankHeatStyle(total, sumRanks)}>${Number.isFinite(total) ? esc(String(total)) : '-'}</td>`;
+              }).join('')}
+            </tr>
+          </tbody>
+        </table>
+        <table class="uc-research-summary-table uc-research-detail-table" style="min-width:${detailMinWidth}px;">
+          <tbody>
+            ${detailRows.map((row) => {
+              if (row.type === 'gap') {
+                return `<tr class="uc-research-detail-gap"><th colspan="${rankDisplayColumns.length + 1}"></th></tr>`;
+              }
+              const rowValues = rankDisplayColumns.map(col => detailValue(col, row));
+              return `
+                <tr class="uc-research-detail-${esc(row.type)}">
+                  <th>${esc(row.label)}</th>
+                  ${rankDisplayColumns.map((col, colIdx) => {
+                    if (col.isBenchmark) return '<td class="uc-research-rank-placeholder"></td>';
+                    const value = rowValues[colIdx];
+                    return `<td${detailHeatStyle(value, rowValues, row.type)}>${Number.isFinite(value) ? esc(value.toFixed(2)) : '-'}</td>`;
+                  }).join('')}
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      `;
+    };
+
     const updateCaptureCalculations = (rowEl) => {
       const nav1 = parseNavValue(rowEl, 1);
       const nav2 = parseNavValue(rowEl, 2);
@@ -17090,11 +18083,39 @@ const Pages = {
       const downsideGap = nav1 && nav2 ? (nav2 / nav1) - 1 : NaN;
       const upsideGap = nav2 && nav3 ? (nav3 / nav2) - 1 : NaN;
       const totalCycleFund = nav1 && nav3 ? (nav3 / nav1) - 1 : NaN;
-      const downsideCapture = Number.isFinite(downsideGap) ? 1 : NaN;
-      const upsideCapture = Number.isFinite(upsideGap) ? 1 : NaN;
+      const compareRowIndex = rowEl?.dataset?.ucCompareRow;
+      let benchmarkDownsideGap = NaN;
+      let benchmarkUpsideGap = NaN;
+      let benchmarkTotalCycleReturn = NaN;
+      if (compareRowIndex != null) {
+        const benchmarkRows = $$('#uc-cycle-body tr[data-uc-row]', area);
+        const benchmarkRow = benchmarkRows[Number(compareRowIndex)] || null;
+        const benchmarkNav1 = benchmarkRow ? parseNavValue(benchmarkRow, 1) : null;
+        const benchmarkNav2 = benchmarkRow ? parseNavValue(benchmarkRow, 2) : null;
+        const benchmarkNav3 = benchmarkRow ? parseNavValue(benchmarkRow, 3) : null;
+        benchmarkDownsideGap = benchmarkNav1 && benchmarkNav2 ? (benchmarkNav2 / benchmarkNav1) - 1 : NaN;
+        benchmarkUpsideGap = benchmarkNav2 && benchmarkNav3 ? (benchmarkNav3 / benchmarkNav2) - 1 : NaN;
+        benchmarkTotalCycleReturn = benchmarkNav1 && benchmarkNav3 ? (benchmarkNav3 / benchmarkNav1) - 1 : NaN;
+      }
+      const downsideCapture = compareRowIndex != null
+        ? Number.isFinite(downsideGap) && Number.isFinite(benchmarkDownsideGap) && benchmarkDownsideGap !== 0
+          ? downsideGap / benchmarkDownsideGap
+          : NaN
+        : Number.isFinite(downsideGap) ? 1 : NaN;
+      const upsideCapture = compareRowIndex != null
+        ? Number.isFinite(upsideGap) && Number.isFinite(benchmarkUpsideGap) && benchmarkUpsideGap !== 0
+          ? upsideGap / benchmarkUpsideGap
+          : NaN
+        : Number.isFinite(upsideGap) ? 1 : NaN;
       const robustnessRatio = Number.isFinite(upsideCapture) && Number.isFinite(downsideCapture) && downsideCapture !== 0
         ? upsideCapture / downsideCapture
         : NaN;
+      const robustnessScore = compareRowIndex != null
+        && Number.isFinite(totalCycleFund)
+        && Number.isFinite(benchmarkTotalCycleReturn)
+        && benchmarkTotalCycleReturn !== 0
+          ? totalCycleFund / benchmarkTotalCycleReturn
+          : NaN;
 
       setCalcText(rowEl, '.uc-downside-gap', downsideGap);
       setCalcText(rowEl, '.uc-downside-capture', downsideCapture, 'ratio');
@@ -17102,8 +18123,12 @@ const Pages = {
       setCalcText(rowEl, '.uc-upside-capture', upsideCapture, 'ratio');
       setCalcText(rowEl, '.uc-robustness-ratio', robustnessRatio, 'ratio');
       setCalcText(rowEl, '.uc-total-cycle-fund', totalCycleFund);
-      setCalcText(rowEl, '.uc-total-cycle-benchmark', NaN);
-      setCalcText(rowEl, '.uc-robustness-score', NaN);
+      setCalcText(rowEl, '.uc-robustness-score', robustnessScore, 'ratio');
+      renderResearchSummary();
+    };
+
+    const refreshComparisonCalculations = () => {
+      $$('.uc-compare-body tr[data-uc-compare-row]', area).forEach(rowEl => updateCaptureCalculations(rowEl));
     };
 
     const updateCaptureCell = async (rowEl, point, symbolOverride = '') => {
@@ -17115,6 +18140,7 @@ const Pages = {
       navInput.value = '';
       actualEl.textContent = '';
       updateCaptureCalculations(rowEl);
+      if (rowEl.matches('tr[data-uc-row]')) refreshComparisonCalculations();
       if (!symbol || !dateValue) return;
       navInput.placeholder = '...';
       try {
@@ -17123,22 +18149,44 @@ const Pages = {
           navInput.placeholder = '-';
           actualEl.textContent = 'ไม่มีข้อมูลก่อนวันที่นี้';
           updateCaptureCalculations(rowEl);
+          if (rowEl.matches('tr[data-uc-row]')) refreshComparisonCalculations();
           return;
         }
         navInput.value = num(price.close, 3);
         navInput.placeholder = '-';
         actualEl.textContent = price.isExactDate ? '' : `ใช้ ${price.date}`;
         updateCaptureCalculations(rowEl);
+        if (rowEl.matches('tr[data-uc-row]')) refreshComparisonCalculations();
       } catch (err) {
         navInput.placeholder = '-';
         actualEl.textContent = err.message || 'โหลดไม่ได้';
         updateCaptureCalculations(rowEl);
+        if (rowEl.matches('tr[data-uc-row]')) refreshComparisonCalculations();
       }
     };
 
     const getBenchmarkDateRows = () => $$('#uc-cycle-body tr[data-uc-row]', area).map(rowEl => (
       [1, 2, 3].map(point => $(`.uc-date[data-point="${point}"]`, rowEl)?.value || '')
     ));
+
+    const saveUcState = () => {
+      const nextState = {
+        benchmark: $('#uc-benchmark-select', area)?.value || defaultSymbol || '',
+        benchmarkChartColor: $('#uc-benchmark-chart-color', area)?.value || chartLineColors[0],
+        benchmarkFundCode: $('#uc-benchmark-fund-code', area)?.value.trim() || '',
+        rows: getBenchmarkDateRows(),
+        compareSymbols: $$('.uc-compare-symbol', area).map(select => select.value).filter(Boolean),
+        compareChartColors: $$('.uc-compare-block', area).map((blockEl, idx) => (
+          $('.uc-compare-chart-color', blockEl)?.value || chartLineColors[(idx + 1) % chartLineColors.length]
+        )),
+        compareFundCodes: $$('.uc-compare-block', area).map(blockEl => $('.uc-compare-fund-code', blockEl)?.value.trim() || ''),
+        chartCycle: $('#uc-chart-row-select', area)?.value || 'all',
+        chartViewMode: $('#uc-chart-view-mode', area)?.value || 'nav',
+        hiddenChartSymbols: getHiddenChartSymbols(),
+      };
+      State.upsideDownsideCapture = nextState;
+      saveJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY, nextState);
+    };
 
     const refreshComparisonLabels = (blockEl) => {
       const symbol = $('.uc-compare-symbol', blockEl)?.value || '-';
@@ -17166,21 +18214,33 @@ const Pages = {
       });
     };
 
-    const compareBlockHtml = (compareIdx) => {
+    const compareBlockHtml = (compareIdx, selectedSymbol = defaultSymbol, selectedFundCode = '', selectedChartColor = '') => {
       const dateRows = getBenchmarkDateRows();
+      const resolvedSymbol = symbolOptions.includes(selectedSymbol) ? selectedSymbol : defaultSymbol;
+      const resolvedFundCode = String(selectedFundCode || '').trim() || resolveFundCodeForSymbol(resolvedSymbol);
+      const resolvedChartColor = String(selectedChartColor || '').trim() || chartLineColors[compareIdx % chartLineColors.length];
       return `
         <section class="uc-compare-block" data-uc-compare-id="${compareIdx}">
           <div class="uc-compare-header">
             <label class="form-field">
               <span>สินทรัพย์เปรียบเทียบ ${compareIdx}</span>
               <select class="uc-compare-symbol">
-                ${symbolSelectOptions(defaultSymbol)}
+                ${symbolSelectOptions(resolvedSymbol)}
               </select>
+            </label>
+            <label class="form-field uc-chart-color-field">
+              <span>สีกราฟ</span>
+              ${chartColorPickerHtml('uc-compare-chart-color', resolvedChartColor)}
+            </label>
+            <label class="form-field uc-fund-code-field">
+              <span>Fund Code</span>
+              <input class="uc-fund-code-input uc-compare-fund-code" list="uc-fund-code-list" value="${esc(resolvedFundCode)}" placeholder="เลือกหรือพิมพ์ Fund Code">
             </label>
             <button class="btn btn-ghost uc-remove-compare" type="button">ลบสินทรัพย์</button>
           </div>
           <div class="table-wrapper uc-table-wrapper">
             <table class="uc-table">
+              ${ucCaptureColgroup}
               <thead>
                 <tr>
                   <th rowspan="2">สินทรัพย์เปรียบเทียบ</th>
@@ -17193,7 +18253,6 @@ const Pages = {
                   <th rowspan="2">Upside Capture</th>
                   <th rowspan="2">Robustness Ratio</th>
                   <th rowspan="2">Total Cycle Return<br>(Fund)</th>
-                  <th rowspan="2">Total Cycle Return<br>(Benchmark)</th>
                   <th rowspan="2">Robustness Score<br>(Fund/Benchmark)</th>
                   <th rowspan="2">จัดการ</th>
                 </tr>
@@ -17215,6 +18274,18 @@ const Pages = {
       `;
     };
 
+    if (initialCompareSymbols.length) {
+      const container = $('#uc-compare-assets', area);
+      initialCompareSymbols.forEach((symbol, idx) => {
+        container?.insertAdjacentHTML('beforeend', compareBlockHtml(
+          idx + 1,
+          symbol,
+          initialCompareFundCodes[idx] || '',
+          initialCompareChartColors[idx] || '',
+        ));
+      });
+    }
+
     const refreshBenchmarkLabels = () => {
       const symbol = $('#uc-benchmark-select', area)?.value || defaultSymbol || '-';
       $$('.uc-benchmark-cell', area).forEach(cell => {
@@ -17229,18 +18300,35 @@ const Pages = {
       if (rowEl) {
         await updateCaptureCell(rowEl, input.dataset.point);
         syncComparisonBlocks();
+        saveUcState();
         renderNavChart();
       }
     });
 
     $('#uc-benchmark-select', area)?.addEventListener('change', () => {
+      const benchmarkFundCodeInput = $('#uc-benchmark-fund-code', area);
+      if (benchmarkFundCodeInput && !benchmarkFundCodeInput.value.trim()) {
+        benchmarkFundCodeInput.value = resolveFundCodeForSymbol($('#uc-benchmark-select', area)?.value || defaultSymbol);
+      }
       refreshBenchmarkLabels();
+      renderResearchSummary();
       $$('#uc-cycle-body tr[data-uc-row]', area).forEach(rowEl => {
         [1, 2, 3].forEach(point => updateCaptureCell(rowEl, String(point)));
         updateCaptureCalculations(rowEl);
       });
       syncComparisonBlocks();
+      saveUcState();
       renderNavChart();
+    });
+
+    $('#uc-benchmark-fund-code', area)?.addEventListener('input', () => {
+      renderResearchSummary();
+      saveUcState();
+    });
+
+    $('#uc-benchmark-fund-code', area)?.addEventListener('change', () => {
+      renderResearchSummary();
+      saveUcState();
     });
 
     $('#uc-cycle-body', area)?.addEventListener('click', event => {
@@ -17256,6 +18344,8 @@ const Pages = {
       rowEl.remove();
       refreshChartRowOptions();
       syncComparisonBlocks();
+      renderResearchSummary();
+      saveUcState();
       renderNavChart();
     });
 
@@ -17272,6 +18362,8 @@ const Pages = {
       refreshBenchmarkLabels();
       refreshChartRowOptions();
       syncComparisonBlocks();
+      renderResearchSummary();
+      saveUcState();
       renderNavChart();
     });
 
@@ -17282,15 +18374,65 @@ const Pages = {
       container.insertAdjacentHTML('beforeend', compareBlockHtml(compareIdx));
       const blockEl = container.lastElementChild;
       if (blockEl) updateComparisonBlock(blockEl);
+      renderResearchSummary();
+      saveUcState();
       renderNavChart();
     });
 
     $('#uc-compare-assets', area)?.addEventListener('change', event => {
       const select = event.target.closest('.uc-compare-symbol');
-      if (!select) return;
-      const blockEl = select.closest('.uc-compare-block');
-      if (blockEl) updateComparisonBlock(blockEl);
+      const fundCodeInput = event.target.closest('.uc-compare-fund-code');
+      if (!select && !fundCodeInput) return;
+      const blockEl = (select || fundCodeInput).closest('.uc-compare-block');
+      if (select && blockEl) {
+        const codeInput = $('.uc-compare-fund-code', blockEl);
+        if (codeInput && !codeInput.value.trim()) codeInput.value = resolveFundCodeForSymbol(select.value);
+        updateComparisonBlock(blockEl);
+      }
+      renderResearchSummary();
+      saveUcState();
       renderNavChart();
+    });
+
+    area.addEventListener('click', event => {
+      const dot = event.target.closest('.uc-chart-color-dot');
+      const choice = event.target.closest('.uc-chart-color-choice');
+      if (!dot && !choice) {
+        $$('.uc-chart-color-picker.is-open', area).forEach(el => el.classList.remove('is-open'));
+        return;
+      }
+      if (dot) {
+        const picker = dot.closest('.uc-chart-color-picker');
+        if (!picker) return;
+        $$('.uc-chart-color-picker.is-open', area).forEach(el => {
+          if (el !== picker) el.classList.remove('is-open');
+        });
+        const menu = $('.uc-chart-color-menu', picker);
+        if (menu) {
+          const rect = dot.getBoundingClientRect();
+          menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 180))}px`;
+          menu.style.top = `${rect.bottom + 8}px`;
+        }
+        picker.classList.toggle('is-open');
+        return;
+      }
+      const picker = choice.closest('.uc-chart-color-picker');
+      const input = $('.uc-chart-color-value', picker);
+      const color = choice.dataset.color || chartLineColors[0];
+      if (input) input.value = color;
+      const pickerDot = $('.uc-chart-color-dot', picker);
+      if (pickerDot) pickerDot.style.background = color;
+      $$('.uc-chart-color-choice', picker).forEach(btn => btn.classList.toggle('is-selected', btn === choice));
+      picker.classList.remove('is-open');
+      saveUcState();
+      renderNavChart();
+    });
+
+    $('#uc-compare-assets', area)?.addEventListener('input', event => {
+      const input = event.target.closest('.uc-compare-fund-code');
+      if (!input) return;
+      renderResearchSummary();
+      saveUcState();
     });
 
     $('#uc-compare-assets', area)?.addEventListener('click', event => {
@@ -17298,14 +18440,50 @@ const Pages = {
       if (!removeBtn) return;
       const blockEl = removeBtn.closest('.uc-compare-block');
       if (blockEl) blockEl.remove();
+      renderResearchSummary();
+      saveUcState();
       renderNavChart();
     });
 
     $('#uc-chart-row-select', area)?.addEventListener('change', () => {
+      saveUcState();
+      renderNavChart();
+    });
+
+    $('#uc-chart-view-mode', area)?.addEventListener('change', () => {
+      saveUcState();
+      renderNavChart();
+    });
+
+    $('#uc-nav-chart', area)?.addEventListener('click', event => {
+      const button = event.target.closest('.uc-chart-legend-item[data-chart-symbol]');
+      if (!button) return;
+      const symbol = button.dataset.chartSymbol || '';
+      if (!symbol) return;
+      const hidden = new Set(getHiddenChartSymbols());
+      if (hidden.has(symbol)) hidden.delete(symbol);
+      else hidden.add(symbol);
+      State.upsideDownsideCapture = {
+        ...(State.upsideDownsideCapture || {}),
+        hiddenChartSymbols: [...hidden],
+      };
+      saveUcState();
       renderNavChart();
     });
 
     refreshChartRowOptions();
+    refreshBenchmarkLabels();
+    $$('#uc-cycle-body tr[data-uc-row]', area).forEach(rowEl => {
+      [1, 2, 3].forEach(point => {
+        if ($(`.uc-date[data-point="${point}"]`, rowEl)?.value) {
+          updateCaptureCell(rowEl, String(point));
+        }
+      });
+      updateCaptureCalculations(rowEl);
+    });
+    $$('.uc-compare-block', area).forEach(blockEl => updateComparisonBlock(blockEl));
+    renderResearchSummary();
+    saveUcState();
     renderNavChart();
     State._pageDataSource[pageKey] = `SQLite: ${payload.source || 'ft_historical_prices.sqlite'}`;
     App._currentExport = null;
@@ -17416,12 +18594,14 @@ const Pages = {
     } catch (_) {}
     const ftSymbolMeta = new Map(ftSymbolItems.map(item => [item.symbol, item]));
 
-    const savedV3State = State.top10HoldingV3 || {};
+    const savedV3State = State.top10HoldingV3 || readJsonPreference(TOP10_HOLDING_V3_PREF_KEY, {}) || {};
+    State.top10HoldingV3 = savedV3State;
     const saveV3State = (patch) => {
       State.top10HoldingV3 = {
         ...(State.top10HoldingV3 || {}),
         ...patch,
       };
+      saveJsonPreference(TOP10_HOLDING_V3_PREF_KEY, State.top10HoldingV3);
     };
 
     // ── Demo data builder ──
@@ -17560,23 +18740,7 @@ const Pages = {
           </section>
 
           <div id="v3-presentation-card" style="display:flex;flex-direction:column;gap:18px;">
-            <!-- 1. Master Fund Info Table -->
-            <section class="thv2-panel" id="v3-master-info-section" style="display:none;">
-              <div class="thv2-panel-head">
-                <div>
-                  <h3>ข้อมูล Master Fund</h3>
-                  <p>แสดง ISIN และค่าธรรมเนียมหลักของแต่ละกองทุนที่เลือก</p>
-                </div>
-              </div>
-              <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:0.92rem;">
-                  <thead id="v3-master-thead"></thead>
-                  <tbody id="v3-master-tbody"></tbody>
-                </table>
-              </div>
-            </section>
-
-            <!-- 2. Top 10 Holdings Comparison -->
+            <!-- 1. Top 10 Holdings Comparison -->
             <section class="thv2-panel" id="v3-holdings-section" style="display:none;">
               <div class="thv2-panel-head">
                 <div>
@@ -17588,6 +18752,22 @@ const Pages = {
                 <table style="width:100%;border-collapse:collapse;font-size:0.92rem;">
                   <thead id="v3-holdings-thead"></thead>
                   <tbody id="v3-holdings-tbody"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <!-- 2. Master Fund Info Table -->
+            <section class="thv2-panel" id="v3-master-info-section" style="display:none;">
+              <div class="thv2-panel-head">
+                <div>
+                  <h3>ข้อมูล Master Fund</h3>
+                  <p>แสดง ISIN และค่าธรรมเนียมหลักของแต่ละกองทุนที่เลือก</p>
+                </div>
+              </div>
+              <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.92rem;">
+                  <thead id="v3-master-thead"></thead>
+                  <tbody id="v3-master-tbody"></tbody>
                 </table>
               </div>
             </section>
@@ -17681,7 +18861,13 @@ const Pages = {
       const dash = '<span style="color:#cbd5e1;">—</span>';
       const fmtPct = v => { if (v == null) return dash; const n = parseFloat(String(v).replace(/%/g,'')); return isNaN(n) ? dash : n.toFixed(2) + '%'; };
       const fmtStr = v => v ? esc(v) : dash;
-      const fmtIsin = v => v ? `<span style="font-family:monospace;font-size:0.86rem;color:#1a3c6e;">${esc(v)}</span>` : dash;
+      const fmtCode = v => v ? `<span style="font:inherit;font-size:0.9rem;color:#1a3c6e;font-weight:700;letter-spacing:0;">${esc(v)}</span>` : dash;
+      const fmtWrap = v => v ? `<span style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;overflow-wrap:anywhere;word-break:break-word;line-height:1.35;">${esc(v)}</span>` : dash;
+      const fmtInvestmentStyle = v => {
+        if (!v) return dash;
+        const text = String(v).replace(/\s+(Investment Style:)/i, '\n$1');
+        return `<span style="white-space:pre-line;line-height:1.35;">${esc(text)}</span>`;
+      };
       const ftProfile = (f, field) => f?._ftProfileMap?.[field] || '';
       const firstFtProfile = (f, fields) => {
         for (const field of fields) {
@@ -17699,17 +18885,20 @@ const Pages = {
       if (masterThead) masterThead.innerHTML = `
         <tr style="background:#1a3c6e;color:#fff;font-size:0.86rem;">
           <th style="padding:10px 14px;min-width:130px;border-right:1px solid rgba(255,255,255,0.15);background:transparent;"></th>
-          ${data.map(f => `<th style="padding:10px 10px;text-align:center;font-weight:700;min-width:90px;">
-            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${f.color};margin-right:5px;vertical-align:middle;opacity:0.9;"></span>${esc((f._selectorName || f.name).split('–')[0].trim())}
+          ${data.map(f => `<th style="padding:10px 10px;text-align:center;font-weight:700;min-width:190px;max-width:260px;white-space:normal;line-height:1.3;vertical-align:middle;">
+            <span style="display:inline-flex;align-items:flex-start;justify-content:center;gap:6px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">
+              <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${f.color};margin-top:5px;opacity:0.9;flex:0 0 7px;"></span>
+              <span style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${esc((f._selectorName || f.name).split('–')[0].trim())}</span>
+            </span>
           </th>`).join('')}
         </tr>`;
 
       const masterRows = [
-        { label: 'ISIN Code',        fmt: f => fmtIsin(f._isin) },
-        { label: 'FT Symbol',        fmt: f => fmtIsin(f._ftSymbol) },
-        { label: 'FT Display Name',  fmt: f => fmtStr(f._ftDisplayName) },
+        { label: 'ISIN Code',        fmt: f => fmtCode(f._isin) },
+        { label: 'FT Symbol',        fmt: f => fmtCode(f._ftSymbol) },
+        { label: 'FT Display Name',  fmt: f => fmtWrap(f._ftDisplayName) },
         { label: 'Morningstar Category', fmt: f => fmtStr(ftProfile(f, 'Morningstar category')) },
-        { label: 'Investment Style', fmt: f => fmtStr(ftProfile(f, 'Investment style (stocks)')) },
+        { label: 'Investment Style', fmt: f => fmtInvestmentStyle(ftProfile(f, 'Investment style (stocks)')) },
         { label: 'Fund Size', fmt: f => fmtStr(firstFtProfile(f, ['Fund size', 'Total net assets'])) },
         { label: 'Share Class Size', fmt: f => fmtStr(firstFtProfile(f, ['Share class size'])) },
         { label: 'Ongoing Charge',   fmt: f => fmtPct(firstFtProfile(f, ['Ongoing charge', 'Net expense ratio']) || f._feesRaw) },
@@ -17730,8 +18919,11 @@ const Pages = {
       if (holdThead) holdThead.innerHTML = `
         <tr style="background:#1a3c6e;color:#fff;font-size:0.86rem;">
           <th style="padding:10px 10px;text-align:center;min-width:36px;border-right:1px solid rgba(255,255,255,0.15);background:transparent;font-weight:700;">#</th>
-          ${data.map(f => `<th style="padding:10px 10px;text-align:center;font-weight:700;min-width:120px;">
-            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${f.color};margin-right:5px;vertical-align:middle;opacity:0.9;"></span>${esc((f._selectorName || f.name).split('–')[0].trim())}
+          ${data.map(f => `<th style="padding:10px 10px;text-align:center;font-weight:700;min-width:190px;max-width:260px;white-space:normal;line-height:1.3;vertical-align:middle;">
+            <span style="display:inline-flex;align-items:flex-start;justify-content:center;gap:6px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">
+              <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${f.color};margin-top:5px;opacity:0.9;flex:0 0 7px;"></span>
+              <span style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${esc((f._selectorName || f.name).split('–')[0].trim())}</span>
+            </span>
           </th>`).join('')}
         </tr>`;
       if (holdTbody) {
@@ -17744,8 +18936,8 @@ const Pages = {
             const holdingSymbol = h.symbol || h.holdingSymbol || '';
             const combinedText = [name, holdingSymbol, wt].filter(Boolean).join(' · ');
             return `<td style="padding:8px 10px;font-size:0.86rem;color:var(--text);">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-width:0;" title="${esc(combinedText)}">
-                <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;">${esc(name)}</span>
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%;min-width:0;" title="${esc(combinedText)}">
+                <span style="min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${esc(name)}</span>
                 ${wt ? `<span style="margin-left:auto;white-space:nowrap;font-size:0.88rem;color:var(--text-muted);font-weight:700;flex-shrink:0;text-align:right;">${esc(wt)}</span>` : ''}
               </div>
             </td>`;
@@ -18526,6 +19718,9 @@ const App = {
         pageSize: SELECT_FUND_DEFAULT_PAGE_SIZE,
       };
       State.top10HoldingV3 = null;
+      State.upsideDownsideCapture = null;
+      removeJsonPreference(TOP10_HOLDING_V3_PREF_KEY);
+      removeJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY);
       State.currentUser = { name: '', email: '' };
       $('#app').classList.add('hidden');
       $('#login-screen').classList.remove('hidden');
@@ -18580,6 +19775,7 @@ const App = {
       'income-fund-1': { title: 'Income Fund', subtitle: 'แสดงเฉพาะกองทุน Dividend และ Auto Redeem จาก Fund Key Performance AVP' },
       'income-fund-2': { title: 'Income Fund 2', subtitle: 'Focus Group จากกองที่ติ๊กไว้ใน Income Fund พร้อมประวัติปันผล SEC/Finnomena' },
       'robustness-ft-import': { title: 'เตรียมข้อมูลจาก FT.com', subtitle: 'เตรียม Historical Prices สำหรับ Robustness Fund จาก FT Markets' },
+      'robustness-notes': { title: 'บันทึกข้อมูล Robustness', subtitle: 'บันทึกชุดวันที่และสินทรัพย์จาก Upside Downside Capture เพื่อโหลดกลับมาทำต่อ' },
       'ft-top10-holding': { title: 'Top 10 Holding', subtitle: 'อ่านข้อมูลจาก FT qualitative local snapshot เป็นหลัก' },
       'upside-downside-capture': { title: 'Upside Downside Capture', subtitle: 'เตรียมหน้าวิเคราะห์การจับ upside/downside ของกองทุนเทียบ benchmark' },
       'master-placeholder-9': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'Fund Size, Duration, Turnover และ Yield to Maturity' },
@@ -18628,6 +19824,7 @@ const App = {
       case 'income-fund-1': Pages.incomeFund(area, 'income-fund-1');        break;
       case 'income-fund-2': Pages.incomeFundFocus(area, 'income-fund-2');  break;
       case 'robustness-ft-import': Pages.robustnessFtImport(area);          break;
+      case 'robustness-notes': Pages.robustnessNotes(area);                 break;
       case 'ft-top10-holding': Pages.masterMenu02V3(area, 'ft-top10-holding'); break;
       case 'upside-downside-capture': Pages.upsideDownsideCapture(area);    break;
       case 'master-placeholder-9': Pages.otherFactorsFixedIncomeTable(area); break;
@@ -18686,6 +19883,9 @@ const QuarterSelector = {
         State.currentQuarter = newQ;
         clearCache();
         State.top10HoldingV3 = null;
+        State.upsideDownsideCapture = null;
+        removeJsonPreference(TOP10_HOLDING_V3_PREF_KEY);
+        removeJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY);
         /* Re-render หน้าปัจจุบัน */
         App.navigate(State.page);
         toast(`เปลี่ยนเป็นข้อมูล ${newQ} แล้ว`, 'info');
