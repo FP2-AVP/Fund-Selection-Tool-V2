@@ -4,11 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       tab_name:
-        description: "Target Google Sheet tab name"
+        description: "Target Google Sheet tab name for data_preparation"
         required: true
         default: "data_preparation"
+      master_tab_name:
+        description: "Target Google Sheet tab name for master_view"
+        required: true
+        default: "master_view"
       output_spreadsheet_id:
-        description: "Destination Google Sheet ID or URL for data_preparation output"
+        description: "Destination Google Sheet ID or URL for SEC raw, data_preparation, and master_view output"
         required: false
         default: "1SsL8fXFmKsAfnakrIBTtglZqhErrYz8SfiiZb4wKGDs"
       dataset_preset:
@@ -26,7 +30,7 @@ on:
         required: false
         default: ""
       output_mode:
-        description: "Write summarized data_preparation or raw endpoint tabs"
+        description: "Write raw endpoint tabs, data_preparation, or master_view from raw tabs"
         required: true
         default: "raw_tabs"
         type: choice
@@ -170,7 +174,8 @@ jobs:
             python scripts/sec_master_view_from_raw_tabs.py \
               --source-spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
               --spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
-              --output-tab "${{ inputs.tab_name }}"
+              --output-tab "${{ inputs.tab_name }}" \
+              --master-output-tab "${{ inputs.master_tab_name }}"
           else
             python scripts/sec_master_view_to_sheet.py \
               --spreadsheet-id "${{ inputs.output_spreadsheet_id }}" \
