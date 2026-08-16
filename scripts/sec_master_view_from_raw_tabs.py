@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build SEC data_preparation rows from raw endpoint tabs already stored in Google Sheets."""
+"""Build SEC data_preparation and master_view rows from raw endpoint tabs in Google Sheets."""
 
 from __future__ import annotations
 
@@ -13,7 +13,44 @@ from typing import Any
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SAFE_CELL_CHARS = 49_000
 SHEET_WRITE_CHUNK_ROWS = 100
-PROFILE_BASE_COLUMNS = [
+PROFILE_ALL_COLUMNS = [
+    "unique_id",
+    "comp_name_th",
+    "comp_name_en",
+    "proj_id",
+    "regis_id",
+    "proj_name_th",
+    "proj_name_en",
+    "proj_abbr_name",
+    "fund_status",
+    "fund_status_label",
+    "init_date",
+    "regis_date",
+    "cancel_date",
+    "invest_country_flag",
+    "invest_country_flag_label",
+    "proj_retail_type",
+    "proj_retail_type_label",
+    "proj_term_flag",
+    "proj_term_flag_label",
+    "proj_term_year",
+    "proj_term_month",
+    "proj_term_day",
+    "policy_desc",
+    "investment_policy_desc",
+    "management_style",
+    "management_style_label",
+    "feederfund_master_fund",
+    "feederfund_country",
+    "exchange_rate_protection_policy",
+    "fund_class_name",
+    "fund_class_detail",
+    "fund_class_description",
+    "fund_class_tax_incentive_type",
+    "fund_class_isin_code",
+    "last_upd_date",
+]
+MASTER_PROFILE_COLUMNS = [
     "comp_name_th",
     "proj_id",
     "regis_id",
@@ -33,10 +70,11 @@ PROFILE_BASE_COLUMNS = [
     "fund_class_tax_incentive_type",
     "fund_class_isin_code",
 ]
-MASTER_HEADERS = PROFILE_BASE_COLUMNS + [
+SUMMARY_COLUMNS = [
     "pdf_factsheet",
     "amc_url_factsheet",
     "ipo_start_date",
+    "ipo_end_date",
     "benchmarks",
     "minimum_sub_ipo",
     "minimum_sub",
@@ -75,10 +113,12 @@ MASTER_HEADERS = PROFILE_BASE_COLUMNS + [
     "top5_holdings",
     "top5_holdings_last_upd_date",
 ]
+DATA_PREPARATION_HEADERS = PROFILE_ALL_COLUMNS + SUMMARY_COLUMNS
+MASTER_HEADERS = MASTER_PROFILE_COLUMNS + SUMMARY_COLUMNS
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build SEC data_preparation from existing raw Google Sheet tabs.")
+    parser = argparse.ArgumentParser(description="Build SEC data_preparation and master_view from existing raw Google Sheet tabs.")
     parser.add_argument(
         "--spreadsheet-id",
         default=os.environ.get("SEC_MASTER_VIEW_SPREADSHEET_ID", ""),
@@ -90,6 +130,7 @@ def parse_args() -> argparse.Namespace:
         help="Source raw-tabs Google Sheet ID or URL. Defaults to SEC_MASTER_VIEW_SPREADSHEET_ID.",
     )
     parser.add_argument("--output-tab", default="data_preparation", help="Target tab name for data_preparation.")
+    parser.add_argument("--master-output-tab", default="master_view", help="Target tab name for master_view.")
     return parser.parse_args()
 
 
@@ -506,14 +547,14 @@ def write_values_to_sheet(sheets: Any, spreadsheet_id: str, tab_name: str, value
         print(f"Wrote {tab_name} rows {start + 1} - {start + len(chunk)}")
 
 
-def build_master_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def build_data_preparation_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     profiles = raw_tabs["02_profiles"]
     factsheet_urls = latest_field_lookup(
         raw_tabs["06_factsheet_urls"],
         proj_class_key,
         ["pdf_factsheet", "amc_url_factsheet"],
     )
-    ipos = latest_field_lookup(raw_tabs["07_ipos"], row_proj, ["start_date"])
+    ipos = latest_field_lookup(raw_tabs["07_ipos"], row_proj, ["first_sell_start_date", "first_sell_end_date", "start_date", "end_date"])
     benchmarks = benchmarks_lookup(raw_tabs["08_benchmarks"])
     minimums = latest_field_lookup(
         raw_tabs["09_subscription_redemption_minimums"],
@@ -564,7 +605,7 @@ def build_master_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> list[dict[st
         "top5_holdings_last_upd_date",
     )
 
-    master_rows: list[dict[str, Any]] = []
+    data_preparation_rows: list[dict[str, Any]] = []
     for profile in profiles:
         proj_id = row_proj(profile)
         fund_class_name = row_class(profile)
@@ -572,9 +613,11 @@ def build_master_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> list[dict[st
         statistics_row = statistics.get(key, {})
         period = periods.get(key, {})
 
-        row = {column: normalized_text(profile.get(column)) for column in PROFILE_BASE_COLUMNS}
+        row = {column: normalized_text(profile.get(column)) for column in PROFILE_ALL_COLUMNS}
         row.update(factsheet_urls.get(key, {}))
-        row["ipo_start_date"] = normalized_text(ipos.get(proj_id, {}).get("start_date"))
+        ipo = ipos.get(proj_id, {})
+        row["ipo_start_date"] = normalized_text(ipo.get("first_sell_start_date") or ipo.get("start_date"))
+        row["ipo_end_date"] = normalized_text(ipo.get("first_sell_end_date") or ipo.get("end_date"))
         row["benchmarks"] = benchmarks.get(proj_id, "")
         row.update(minimums.get(key, {}))
         row["type_settlement_period"] = normalized_text(period.get("type"))
@@ -599,8 +642,15 @@ def build_master_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> list[dict[st
         row.update(asset_allocations.get(proj_id, {}))
         row.update(top5_holdings.get(proj_id, {}))
 
-        master_rows.append(row)
-    return master_rows
+        data_preparation_rows.append(row)
+    return data_preparation_rows
+
+
+def build_master_rows(data_preparation_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {column: normalized_text(row.get(column)) for column in MASTER_HEADERS}
+        for row in data_preparation_rows
+    ]
 
 
 def rows_to_values(rows: list[dict[str, Any]], headers: list[str]) -> list[list[Any]]:
@@ -641,14 +691,25 @@ def main() -> int:
         tab_name: read_tab_rows(sheets, source_spreadsheet_id, tab_name)
         for tab_name in required_tabs
     }
-    rows = build_master_rows(raw_tabs)
+    data_preparation_rows = build_data_preparation_rows(raw_tabs)
+    master_rows = build_master_rows(data_preparation_rows)
+    output_tab = args.output_tab.strip() or "data_preparation"
+    master_output_tab = args.master_output_tab.strip() or "master_view"
     write_values_to_sheet(
         sheets,
         destination_spreadsheet_id,
-        args.output_tab.strip() or "data_preparation",
-        rows_to_values(rows, MASTER_HEADERS),
+        output_tab,
+        rows_to_values(data_preparation_rows, DATA_PREPARATION_HEADERS),
     )
-    print(f"data_preparation rows: {len(rows)}")
+    if master_output_tab != output_tab:
+        write_values_to_sheet(
+            sheets,
+            destination_spreadsheet_id,
+            master_output_tab,
+            rows_to_values(master_rows, MASTER_HEADERS),
+        )
+    print(f"data_preparation rows: {len(data_preparation_rows)}")
+    print(f"master_view rows: {len(master_rows)}")
     return 0
 
 
