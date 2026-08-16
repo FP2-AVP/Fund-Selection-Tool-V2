@@ -41,6 +41,13 @@ const CONFIG = {
   },
 
   /* ----------------------------------------------------------
+     SEC GitHub Actions Proxy
+     ใช้ Google Apps Script เป็นตัวกลางรัน workflow แทนการใส่ GitHub token ในหน้าเว็บ
+     ---------------------------------------------------------- */
+  SEC_GITHUB_PROXY_URL: 'https://script.google.com/macros/s/AKfycbx64UW8yjrgrVBXAX7K5reiFHLldPRpNuXVXdmcxPBvznNGdNT5Jid176hN5d-cs7sHcQ/exec',
+  SEC_GITHUB_PROXY_SECRET_KEY: '',
+
+  /* ----------------------------------------------------------
      Page Configuration
      ⚠️  tabName = ชื่อ Tab (Sheet) ใน Google Sheet
          ตรวจสอบชื่อจาก URL ของ Google Sheet หรือแถบล่างสุด
@@ -139,12 +146,27 @@ const CONFIG = {
 
     'income-fund-1': {
       title:  'Income Fund',
-      source: 'Data For SEC API + Fund Key Performance AVP',
+      source: 'Fund Key Performance AVP',
     },
 
     'income-fund-2': {
       title:  'Income Fund 2',
-      source: 'Data For SEC API + Fund Key Performance AVP',
+      source: 'Fund Key Performance AVP',
+    },
+
+    'robustness-ft-import': {
+      title:  'เตรียมข้อมูลจาก FT.com',
+      source: 'FT Markets historical prices',
+    },
+
+    'ft-top10-holding': {
+      title:  'Top 10 Holding',
+      source: 'FT Markets qualitative local snapshot',
+    },
+
+    'upside-downside-capture': {
+      title:  'Upside Downside Capture',
+      source: 'FT Markets + Fund performance data',
     },
 
     'fund-list-update': {
