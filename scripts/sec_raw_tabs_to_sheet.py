@@ -6,12 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fetch_sec_data import (
     DATASET_FILES,
     ENDPOINTS,
+    FUND_CLASS_PARAM_DATASETS,
     PROFILE_COLUMNS,
     PROJECT_ID_DATASETS,
     add_if_present,
@@ -32,6 +35,27 @@ from fetch_sec_data import (
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 GOOGLE_SHEETS_MAX_CELL_CHARS = 50_000
 SAFE_CELL_CHARS = 49_000
+REQUEST_METADATA_HEADERS = [
+    "sec_request_mode",
+    "sec_request_start_date",
+    "sec_request_end_date",
+    "sec_request_start_period",
+    "sec_request_end_period",
+    "sec_request_fetched_at",
+]
+FACTSHEET_DATE_DATASETS = {
+    "ipos",
+    "benchmarks",
+    "subscription_redemption_minimums",
+    "subscription_redemption_periods",
+    "risk_spectrum",
+    "statistics",
+    "dividend_policy",
+    "fees",
+    "performance",
+    "asset_allocation",
+    "top5_holdings",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -200,6 +224,62 @@ def values_from_rows(
     ]
 
 
+def request_metadata(dataset: str, args: argparse.Namespace) -> dict[str, str]:
+    mode = "not_applicable"
+    start_date = ""
+    end_date = ""
+    start_period = ""
+    end_period = ""
+    if dataset in FACTSHEET_DATE_DATASETS:
+        is_latest = truthy(args.latest)
+        mode = "factsheet_latest" if is_latest else "factsheet_date_range"
+        if not is_latest:
+            start_date = str(args.start_date or "").strip()
+            end_date = str(args.end_date or "").strip()
+    elif dataset in {"outstanding_portfolio", "portfolio_asset_type"}:
+        mode = "period_range"
+        start_period = str(args.start_period or "").strip()
+        end_period = str(args.end_period or "").strip()
+    elif dataset == "nav_daily":
+        mode = "nav_date_range"
+        start_date = str(args.start_nav_date or "").strip()
+        end_date = str(args.end_nav_date or "").strip()
+    elif dataset == "dividend_history":
+        mode = "full_history_available_from_sec"
+    return {
+        "sec_request_mode": mode,
+        "sec_request_start_date": start_date,
+        "sec_request_end_date": end_date,
+        "sec_request_start_period": start_period,
+        "sec_request_end_period": end_period,
+        "sec_request_fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def add_request_metadata(
+    rows: list[dict[str, Any]],
+    dataset: str,
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
+    metadata = request_metadata(dataset, args)
+    return [{**row, **metadata} for row in rows]
+
+
+def execute_google_request(label: str, request_factory, retries: int = 5) -> Any:
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            return request_factory().execute()
+        except Exception as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            delay = min(60, 2 ** attempt)
+            print(f"Retry Google Sheets {label} {attempt}/{retries - 1} after {delay}s: {exc}")
+            time.sleep(delay)
+    raise RuntimeError(f"Google Sheets {label} failed after {retries} attempts: {last_error}")
+
+
 def rows_from_values(values: list[list[Any]]) -> list[dict[str, Any]]:
     if not values:
         return []
@@ -221,10 +301,13 @@ def read_values_from_sheet(
     spreadsheet_id: str,
     tab_name: str,
 ) -> list[list[Any]]:
-    result = sheets.spreadsheets().values().get(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{tab_name}'",
-    ).execute()
+    result = execute_google_request(
+        f"read {tab_name}",
+        lambda: sheets.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'",
+        ),
+    )
     return result.get("values", [])
 
 
@@ -257,7 +340,10 @@ def filter_profiles_by_status(rows: list[dict[str, Any]], fund_status: str) -> l
 
 
 def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> int:
-    metadata = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    metadata = execute_google_request(
+        f"metadata for {tab_name}",
+        lambda: sheets.spreadsheets().get(spreadsheetId=spreadsheet_id),
+    )
     existing = {
         sheet["properties"]["title"]: sheet["properties"]["sheetId"]
         for sheet in metadata.get("sheets", [])
@@ -265,10 +351,13 @@ def ensure_sheet(sheets: Any, spreadsheet_id: str, tab_name: str) -> int:
     if tab_name in existing:
         return existing[tab_name]
 
-    result = sheets.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
-    ).execute()
+    result = execute_google_request(
+        f"add sheet {tab_name}",
+        lambda: sheets.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+        ),
+    )
     return result["replies"][0]["addSheet"]["properties"]["sheetId"]
 
 
@@ -279,25 +368,28 @@ def resize_sheet_grid(
     row_count: int,
     column_count: int,
 ) -> None:
-    sheets.spreadsheets().batchUpdate(
-        spreadsheetId=spreadsheet_id,
-        body={
-            "requests": [
-                {
-                    "updateSheetProperties": {
-                        "properties": {
-                            "sheetId": sheet_id,
-                            "gridProperties": {
-                                "rowCount": max(row_count, 1),
-                                "columnCount": max(column_count, 1),
+    execute_google_request(
+        f"resize sheet {sheet_id}",
+        lambda: sheets.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "updateSheetProperties": {
+                            "properties": {
+                                "sheetId": sheet_id,
+                                "gridProperties": {
+                                    "rowCount": max(row_count, 1),
+                                    "columnCount": max(column_count, 1),
+                                },
                             },
-                        },
-                        "fields": "gridProperties(rowCount,columnCount)",
+                            "fields": "gridProperties(rowCount,columnCount)",
+                        }
                     }
-                }
-            ]
-        },
-    ).execute()
+                ]
+            },
+        ),
+    )
 
 
 def write_values_to_sheet(
@@ -310,11 +402,14 @@ def write_values_to_sheet(
     row_count = len(values) if values else 1
     column_count = max((len(row) for row in values), default=1)
     resize_sheet_grid(sheets, spreadsheet_id, sheet_id, row_count, column_count)
-    sheets.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{tab_name}'",
-        body={},
-    ).execute()
+    execute_google_request(
+        f"clear {tab_name}",
+        lambda: sheets.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id,
+            range=f"'{tab_name}'",
+            body={},
+        ),
+    )
     if not values:
         return
 
@@ -324,12 +419,15 @@ def write_values_to_sheet(
             [truncate_cell_value(cell) for cell in row]
             for row in chunk
         ]
-        sheets.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=f"'{tab_name}'!A{start + 1}",
-            valueInputOption="RAW",
-            body={"values": chunk},
-        ).execute()
+        execute_google_request(
+            f"write {tab_name} rows {start + 1}-{start + len(chunk)}",
+            lambda: sheets.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{tab_name}'!A{start + 1}",
+                valueInputOption="RAW",
+                body={"values": chunk},
+            ),
+        )
         print(f"Wrote {tab_name} rows {start + 1} - {start + len(chunk)}")
 
 
@@ -341,18 +439,24 @@ def write_sheet_header(
 ) -> int:
     sheet_id = ensure_sheet(sheets, spreadsheet_id, tab_name)
     resize_sheet_grid(sheets, spreadsheet_id, sheet_id, 1, len(headers) or 1)
-    sheets.spreadsheets().values().clear(
-        spreadsheetId=spreadsheet_id,
-        range=f"'{tab_name}'",
-        body={},
-    ).execute()
-    if headers:
-        sheets.spreadsheets().values().update(
+    execute_google_request(
+        f"clear {tab_name} header",
+        lambda: sheets.spreadsheets().values().clear(
             spreadsheetId=spreadsheet_id,
-            range=f"'{tab_name}'!A1",
-            valueInputOption="RAW",
-            body={"values": [headers]},
-        ).execute()
+            range=f"'{tab_name}'",
+            body={},
+        ),
+    )
+    if headers:
+        execute_google_request(
+            f"write {tab_name} header",
+            lambda: sheets.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{tab_name}'!A1",
+                valueInputOption="RAW",
+                body={"values": [headers]},
+            ),
+        )
     return sheet_id
 
 
@@ -389,12 +493,15 @@ def append_rows_to_sheet(
             for row in chunk
         ]
         row_number = start_row + offset
-        sheets.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id,
-            range=f"'{tab_name}'!A{row_number}",
-            valueInputOption="RAW",
-            body={"values": chunk},
-        ).execute()
+        execute_google_request(
+            f"append {tab_name} rows {row_number}-{row_number + len(chunk) - 1}",
+            lambda: sheets.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{tab_name}'!A{row_number}",
+                valueInputOption="RAW",
+                body={"values": chunk},
+            ),
+        )
         print(f"Wrote {tab_name} rows {row_number} - {row_number + len(chunk) - 1}")
     return start_row + len(values)
 
@@ -459,7 +566,7 @@ def fetch_and_write_project_dataset(
     endpoint = ENDPOINTS[dataset]
     tab_name = dataset_tab_name(dataset)
     _, preferred_headers = transform_dataset_rows(dataset, [])
-    headers = ordered_headers([], preferred_headers)
+    headers = ordered_headers([], [*(preferred_headers or []), *REQUEST_METADATA_HEADERS])
     sheet_id = write_sheet_header(sheets, spreadsheet_id, tab_name, headers)
     next_write_row = 2
     row_count = 0
@@ -488,7 +595,7 @@ def fetch_and_write_project_dataset(
     for index, (proj_id, fund_class_name) in enumerate(project_pairs, start=1):
         params = dataset_params(dataset, args)
         params["proj_id"] = proj_id
-        if fund_class_name:
+        if fund_class_name and dataset in FUND_CLASS_PARAM_DATASETS:
             params["fund_class_name"] = fund_class_name
         try:
             raw_rows = fetch_sec_all_pages(
@@ -498,6 +605,7 @@ def fetch_and_write_project_dataset(
                 max_pages=args.max_pages,
             )
             rows, _ = transform_dataset_rows(dataset, raw_rows)
+            rows = add_request_metadata(rows, dataset, args)
             buffer.extend(rows)
             class_note = f" / {fund_class_name}" if fund_class_name else ""
             print(f"Fetched {dataset} for proj_id pair {index}/{total}: {proj_id}{class_note}")
@@ -660,6 +768,8 @@ def main() -> int:
             profile_rows,
             errors,
         )
+        rows = add_request_metadata(rows, dataset, args)
+        preferred_headers = [*(preferred_headers or []), *REQUEST_METADATA_HEADERS]
         row_counts[dataset] = len(rows)
         values = values_from_rows(rows, preferred_headers)
         write_values_to_sheet(sheets, args.spreadsheet_id.strip(), tab_name, values)

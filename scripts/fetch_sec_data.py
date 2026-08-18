@@ -70,6 +70,21 @@ PROJECT_ID_DATASETS = {
     "dividend_history",
 }
 
+# SEC accepts fund_class_name only for endpoints whose data is class-specific.
+# Project-level endpoints (for example benchmarks, risk and holdings) reject it
+# with HTTP 400 even when the class belongs to the requested proj_id.
+FUND_CLASS_PARAM_DATASETS = {
+    "mutual_fund_fees",
+    "factsheet_urls",
+    "subscription_redemption_minimums",
+    "subscription_redemption_periods",
+    "statistics",
+    "dividend_policy",
+    "fees",
+    "performance",
+    "nav_daily",
+}
+
 DATASET_FILES = {
     "amcs": "01_amcs.csv",
     "profiles": "02_profiles.csv",
@@ -548,6 +563,9 @@ def fetch_sec_data(
             if response.status_code == 200:
                 return response.json()
 
+            if response.status_code == 204:
+                return {"items": [], "next_cursor": ""}
+
             if response.status_code not in retryable_statuses:
                 raise RuntimeError(
                     f"SEC API error {response.status_code} for {endpoint_path}: {response.text[:1000]}"
@@ -887,19 +905,21 @@ def dataset_params(dataset: str, args: argparse.Namespace) -> dict[str, Any]:
     if dataset in {"involve_parties", "dividend_history"}:
         return project_params(args)
     if dataset in {
-        "ipos",
-        "benchmarks",
         "subscription_redemption_minimums",
         "subscription_redemption_periods",
-        "risk_spectrum",
         "statistics",
         "dividend_policy",
         "fees",
         "performance",
-        "top5_holdings",
     }:
         return factsheet_params(args)
-    if dataset == "asset_allocation":
+    if dataset in {
+        "ipos",
+        "benchmarks",
+        "risk_spectrum",
+        "asset_allocation",
+        "top5_holdings",
+    }:
         return factsheet_params(args, include_fund_class=False)
     if dataset == "outstanding_portfolio":
         params = {"page_size": args.page_size}
