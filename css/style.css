@@ -4222,6 +4222,11 @@ hr.divider {
   font-weight: 800;
   flex-shrink: 0;
 }
+.data-import-step-no-sub {
+  width: 38px;
+  flex-basis: 38px;
+  font-size: 0.78rem;
+}
 .data-import-step-label {
   display: inline-flex !important;
   align-items: center;
@@ -4598,6 +4603,50 @@ hr.divider {
 }
 .sec-data-field-full {
   grid-column: 1 / -1;
+}
+.sec-factsheet-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #f8fbff;
+}
+.sec-factsheet-mode legend {
+  padding: 0 6px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+.sec-factsheet-mode-option {
+  display: flex;
+  flex: 1 1 280px;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #dbe5f2;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: pointer;
+}
+.sec-factsheet-mode-option:has(input:checked) {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+.sec-factsheet-mode-option input {
+  margin-top: 3px;
+  accent-color: #2563eb;
+}
+.sec-factsheet-mode-option span {
+  display: grid;
+  gap: 2px;
+}
+.sec-factsheet-mode-option small {
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 .sec-data-highlight {
   border-color: #e5bf55 !important;
@@ -5387,6 +5436,95 @@ hr.divider {
 .import-preview-note {
   margin-top: 10px;
   color: var(--text-muted);
+}
+.percent-rank-step-card {
+  border-color: rgba(26, 60, 110, 0.2);
+}
+.percent-rank-intro {
+  margin-bottom: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #f7f9fd;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+.percent-rank-readiness,
+.percent-rank-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.percent-rank-readiness > div,
+.percent-rank-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: #ffffff;
+}
+.percent-rank-readiness span,
+.percent-rank-summary span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.percent-rank-readiness strong,
+.percent-rank-summary strong {
+  color: var(--primary);
+  font-size: 0.94rem;
+}
+.percent-rank-readiness.is-ready > div {
+  border-color: rgba(50, 150, 90, 0.28);
+  background: #f3fbf5;
+}
+.percent-rank-actions {
+  align-items: center;
+  margin: 14px 0;
+}
+.percent-rank-hint {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.percent-rank-summary {
+  margin-bottom: 14px;
+}
+.percent-rank-sample-table {
+  max-height: 320px;
+  margin-top: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+.percent-rank-sample-table th {
+  position: sticky;
+  top: 0;
+  background: var(--primary);
+  color: #ffffff;
+}
+.percent-rank-sample-table th,
+.percent-rank-sample-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-light);
+  text-align: left;
+  white-space: nowrap;
+}
+.percent-rank-columns {
+  margin-top: 12px;
+}
+.percent-rank-columns summary {
+  color: var(--primary);
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.percent-rank-columns > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
 }
 .fund-manager-grid {
   display: grid;
