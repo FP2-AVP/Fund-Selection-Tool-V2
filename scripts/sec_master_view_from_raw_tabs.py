@@ -192,6 +192,37 @@ def row_date(row: dict[str, Any]) -> str:
     )
 
 
+def row_effective_date(row: dict[str, Any]) -> str:
+    """Date/period represented by the record, independent of revision time."""
+    return normalized_text(
+        row.get("end_date")
+        or row.get("as_of_date")
+        or row.get("period")
+        or row.get("nav_date")
+        or row.get("dividend_date")
+        or row.get("start_date")
+        or row.get("last_upd_date")
+    )
+
+
+def row_revision_date(row: dict[str, Any]) -> str:
+    return normalized_text(row.get("last_upd_date"))
+
+
+def snapshot_signature(row: dict[str, Any]) -> tuple[str, ...]:
+    """Fields that identify one SEC snapshot/revision of an effective period."""
+    return tuple(normalized_text(row.get(field)) for field in [
+        "start_date",
+        "end_date",
+        "as_of_date",
+        "period",
+        "nav_date",
+        "dividend_date",
+        "prospectus_type",
+        "last_upd_date",
+    ])
+
+
 def row_proj(row: dict[str, Any]) -> str:
     return normalized_text(row.get("proj_id"))
 
@@ -256,7 +287,7 @@ def read_tab_rows(sheets: Any, spreadsheet_id: str, tab_name: str) -> list[dict[
 
 
 def latest_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    return sorted(rows, key=row_date, reverse=True)[0] if rows else {}
+    return max(rows, key=lambda row: (row_effective_date(row), row_revision_date(row))) if rows else {}
 
 
 def latest_lookup_by_key(rows: list[dict[str, Any]], key_fn) -> dict[Any, dict[str, Any]]:
@@ -268,7 +299,12 @@ def latest_lookup_by_key(rows: list[dict[str, Any]], key_fn) -> dict[Any, dict[s
     return {key: latest_row(items) for key, items in grouped.items()}
 
 
-def latest_group_lookup_by_key(rows: list[dict[str, Any]], key_fn) -> dict[Any, list[dict[str, Any]]]:
+def latest_group_lookup_by_key(
+    rows: list[dict[str, Any]],
+    key_fn,
+    item_key_fn=None,
+    prefer_completeness: bool = False,
+) -> dict[Any, list[dict[str, Any]]]:
     grouped: dict[Any, list[dict[str, Any]]] = {}
     for row in rows:
         key = key_fn(row)
@@ -277,8 +313,34 @@ def latest_group_lookup_by_key(rows: list[dict[str, Any]], key_fn) -> dict[Any, 
 
     out: dict[Any, list[dict[str, Any]]] = {}
     for key, items in grouped.items():
-        latest_date = row_date(latest_row(items))
-        out[key] = [item for item in items if row_date(item) == latest_date] or items
+        latest_effective_date = max(row_effective_date(item) for item in items)
+        effective_items = [
+            item for item in items
+            if row_effective_date(item) == latest_effective_date
+        ]
+        snapshots: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+        for item in effective_items:
+            snapshots.setdefault(snapshot_signature(item), []).append(item)
+
+        def completeness(snapshot_items: list[dict[str, Any]]) -> int:
+            if item_key_fn is not None:
+                return len({item_key_fn(item) for item in snapshot_items})
+            return len({
+                tuple(sorted((field, normalized_text(value)) for field, value in item.items()))
+                for item in snapshot_items
+            })
+
+        # Normally the newest revision wins inside the latest effective period.
+        # Completeness is considered first only for datasets with a known
+        # expected sequence (currently Top 5 holdings).
+        selected = max(
+            snapshots.values(),
+            key=lambda snapshot_items: (
+                completeness(snapshot_items) if prefer_completeness else 0,
+                max(row_revision_date(item) for item in snapshot_items),
+            ),
+        )
+        out[key] = selected
     return out
 
 
@@ -292,7 +354,11 @@ def join_parts(parts: list[str]) -> str:
 
 def benchmarks_lookup(rows: list[dict[str, Any]]) -> dict[str, str]:
     grouped: dict[str, list[str]] = {}
-    rows_by_proj = latest_group_lookup_by_key(rows, row_proj)
+    rows_by_proj = latest_group_lookup_by_key(
+        rows,
+        row_proj,
+        lambda row: numeric_text(row.get("group_seq")) or normalized_text(row.get("benchmark")),
+    )
     for proj_id, project_rows in rows_by_proj.items():
         seen: set[str] = set()
         for row in sorted(project_rows, key=lambda item: numeric_sort_value(item.get("group_seq"))):
@@ -343,7 +409,11 @@ def fees_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, s
         ("ค่าธรรมเนียมการโอนหน่วยลงทุน (Transfer Fee)", ["Transfer Fee"]),
     ]
     out: dict[tuple[str, str], dict[str, str]] = {}
-    for key, fee_rows in latest_group_lookup_by_key(rows, proj_class_key).items():
+    for key, fee_rows in latest_group_lookup_by_key(
+        rows,
+        proj_class_key,
+        lambda row: normalized_key(row.get("fee_type_desc")),
+    ).items():
         out[key] = {
             "rate_fee_type_desc_nav": format_fee_group(fee_rows, nav_specs, "rate"),
             "actual_value_fee_type_desc_nav": format_fee_group(fee_rows, nav_specs, "actual_value"),
@@ -426,7 +496,14 @@ def format_annual_performance(rows: list[dict[str, Any]], output_column: str) ->
 
 def performance_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, str]]:
     out: dict[tuple[str, str], dict[str, str]] = {}
-    for key, perf_rows in latest_group_lookup_by_key(rows, proj_class_key).items():
+    for key, perf_rows in latest_group_lookup_by_key(
+        rows,
+        proj_class_key,
+        lambda row: (
+            normalized_key(row.get("performance_type_desc")),
+            normalized_key(row.get("reference_period")),
+        ),
+    ).items():
         values = {
             column: format_pinned_performance(perf_rows, column)
             for column in PINNED_PERFORMANCE_COLUMNS
@@ -440,9 +517,19 @@ def performance_lookup(rows: list[dict[str, Any]]) -> dict[tuple[str, str], dict
     return out
 
 
-def seq_asset_lookup(rows: list[dict[str, Any]], output_column: str, date_column: str) -> dict[str, dict[str, str]]:
+def seq_asset_lookup(
+    rows: list[dict[str, Any]],
+    output_column: str,
+    date_column: str,
+    prefer_completeness: bool = False,
+) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
-    for proj_id, project_rows in latest_group_lookup_by_key(rows, row_proj).items():
+    for proj_id, project_rows in latest_group_lookup_by_key(
+        rows,
+        row_proj,
+        lambda row: numeric_text(row.get("asset_seq")) or normalized_text(row.get("asset_name")),
+        prefer_completeness=prefer_completeness,
+    ).items():
         parts: list[str] = []
         seen: set[str] = set()
         for row in sorted(project_rows, key=lambda item: numeric_sort_value(item.get("asset_seq"))):
@@ -548,7 +635,7 @@ def write_values_to_sheet(sheets: Any, spreadsheet_id: str, tab_name: str, value
 
 
 def build_data_preparation_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    profiles = raw_tabs["02_profiles"]
+    profiles = list(latest_lookup_by_key(raw_tabs["02_profiles"], proj_class_key).values())
     factsheet_urls = latest_field_lookup(
         raw_tabs["06_factsheet_urls"],
         proj_class_key,
@@ -603,6 +690,7 @@ def build_data_preparation_rows(raw_tabs: dict[str, list[dict[str, Any]]]) -> li
         raw_tabs["17_top5_holdings"],
         "top5_holdings",
         "top5_holdings_last_upd_date",
+        prefer_completeness=True,
     )
 
     data_preparation_rows: list[dict[str, Any]] = []
