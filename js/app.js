@@ -4367,12 +4367,12 @@ function renderFeeCompareMiniTable(rows, options = {}) {
             <tr>
               <th rowspan="2">Master Fund</th>
               <th rowspan="2">กองไทย</th>
-              <th colspan="3">TER (%)</th>
+              <th colspan="3">ค่าใช้จ่าย (%)</th>
             </tr>
             <tr>
-              <th>Master Fund</th>
-              <th>กองไทย</th>
-              <th>COMBINED TER</th>
+              <th>Master Ongoing Cost</th>
+              <th>กองไทย TER</th>
+              <th>รวมโดยประมาณ</th>
             </tr>
           </thead>
           <tbody>
@@ -4380,7 +4380,13 @@ function renderFeeCompareMiniTable(rows, options = {}) {
               const combinedStyle = feeCombinedStyle(row.combined, maxCombined);
               return `
                 <tr>
-                  <td class="fee-compare-master">${row.masterNameHtml || esc(row.masterName)}</td>
+                  <td class="fee-compare-master">
+                    ${row.masterNameHtml || esc(row.masterName)}
+                    ${row.masterId ? `<small>FundId: ${esc(row.masterId)}</small>` : ''}
+                    ${row.mappingStatus === 'missing-master-id' ? '<small class="fee-compare-warning">ไม่มี Master FundId ใน AVP Thai Fund for Quality</small>' : ''}
+                    ${row.mappingStatus === 'master-not-found' ? '<small class="fee-compare-warning">ไม่พบ FundId นี้ใน AVP Master Fund ID</small>' : ''}
+                    ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-compare-warning">ระบุ Share Class ไม่ได้ — ไม่คำนวณค่ารวม</small>' : ''}
+                  </td>
                   <td class="fee-compare-thai"${row.highlightColor ? ` style="background:${row.highlightColor}"` : ''}>${esc(row.thaiCode)}</td>
                   <td class="fee-compare-num">${esc(row.masterTerText || '-')}</td>
                   <td class="fee-compare-num">${esc(row.thaiTerText || '-')}</td>
@@ -4402,7 +4408,7 @@ function buildFeeV2ExportPayload(title, source, feeRows) {
     source,
     headerGroups: [
       { label: '', span: 2, bg: '#1f3f74', color: '#ffffff' },
-      { label: 'TER (%) Q1-2026', span: 3, bg: '#1f3f74', color: '#ffffff' },
+      { label: 'ค่าใช้จ่าย (%)', span: 3, bg: '#1f3f74', color: '#ffffff' },
       { label: '', span: 1, bg: '#eef2f7', color: '#eef2f7' },
       { label: 'การซื้อ-ขาย (%)', span: 2, bg: '#2d5a33', color: '#ffffff' },
       { label: '', span: 4, bg: '#1f3f74', color: '#ffffff' },
@@ -4410,9 +4416,9 @@ function buildFeeV2ExportPayload(title, source, feeRows) {
     columns: [
       { key: 'master', label: 'Master Fund', weight: 1.55, align: 'left', bg: '#1f3f74', color: '#ffffff' },
       { key: 'thai', label: 'กองไทย', weight: 1.2, widthPx: preset.columnWidthsPx?.thai, align: 'center', bg: '#1f3f74', color: '#ffffff' },
-      { key: 'masterTer', label: 'Master Fund', weight: 0.9, widthPx: preset.columnWidthsPx?.masterTer, bg: '#1f3f74', color: '#ffffff' },
-      { key: 'thaiTer', label: 'กองไทย (Sec)', weight: 0.9, widthPx: preset.columnWidthsPx?.thaiTer, bg: '#1f3f74', color: '#ffffff' },
-      { key: 'combined', label: 'Combined TER', weight: 0.9, widthPx: preset.columnWidthsPx?.combined, bg: '#1f3f74', color: '#ffffff' },
+      { key: 'masterTer', label: 'Master Ongoing Cost', weight: 0.9, widthPx: preset.columnWidthsPx?.masterTer, bg: '#1f3f74', color: '#ffffff' },
+      { key: 'thaiTer', label: 'กองไทย TER (SEC)', weight: 0.9, widthPx: preset.columnWidthsPx?.thaiTer, bg: '#1f3f74', color: '#ffffff' },
+      { key: 'combined', label: 'รวมโดยประมาณ', weight: 0.9, widthPx: preset.columnWidthsPx?.combined, bg: '#1f3f74', color: '#ffffff' },
       { key: 'spacer', label: '', weight: 0.28, widthPx: preset.columnWidthsPx?.spacer, bg: '#eef2f7', color: '#eef2f7' },
       { key: 'frontLoad', label: 'IN (ซื้อ)', weight: 0.9, widthPx: preset.columnWidthsPx?.frontLoad, bg: '#2d5a33', color: '#ffffff' },
       { key: 'backLoad', label: 'OUT (ขาย)', weight: 0.9, widthPx: preset.columnWidthsPx?.backLoad, bg: '#2d5a33', color: '#ffffff' },
@@ -5157,6 +5163,32 @@ function findBestMasterRow(masterRows, masterName) {
   return bestScore >= 0.45 ? best : null;
 }
 
+function findFeeMasterShareClass(masterRows, secMasterName) {
+  const tokenize = (value) => String(value || '')
+    .toLowerCase()
+    .replace(/jpmorgan/g, 'jpm')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(token => token && !['fund', 'funds', 'class', 'the'].includes(token));
+  const target = tokenize(secMasterName);
+  if (!target.length) return null;
+  let best = null;
+  let bestScore = 0;
+  masterRows.forEach(master => {
+    const candidate = tokenize(master.name);
+    if (!candidate.length) return;
+    const candidateSet = new Set(candidate);
+    const overlap = target.filter(token => candidateSet.has(token)).length;
+    const score = overlap / Math.max(target.length, candidate.length);
+    if (score > bestScore) {
+      best = master;
+      bestScore = score;
+    }
+  });
+  return bestScore >= 0.65 ? best : null;
+}
+
 /* ============================================================
    TABLE BUILDER
    ============================================================ */
@@ -5440,6 +5472,7 @@ function buildRawSecLookup(rows) {
     projName: findColumnIndex(headers, ['proj_abbr_name']),
     className: findColumnIndex(headers, ['fund_class_name']),
     fundName: findColumnIndex(headers, ['Fund Name']),
+    feederMaster: findColumnIndex(headers, ['feederfund_master_fund']),
     ter: findColumnIndex(headers, ['TER']),
     front: findColumnIndex(headers, ['Front']),
     back: findColumnIndex(headers, ['Back']),
@@ -5479,6 +5512,7 @@ function buildRawSecLookup(rows) {
       projName: get(row, ci.projName),
       className: get(row, ci.className),
       fundName: get(row, ci.fundName),
+      feederMaster: get(row, ci.feederMaster),
       ter,
       front,
       back,
@@ -5595,23 +5629,108 @@ function buildSelectedFeeUniverseFromRows(selectRows, masterRows) {
   });
 }
 
+function buildSelectedFeeUniverseFromQualityRows(selectRows, qualityRows, masterRows, rawLookup) {
+  const allFunds = applyFundOverrides(buildSelectedFundsCatalog(selectRows))
+    .filter(fund => fund.code)
+    .sort((a, b) => String(a.code).localeCompare(String(b.code), 'th'));
+  const scopedFunds = State.selectedKeys.size > 0
+    ? allFunds.filter(fund => State.selectedKeys.has(fund.key))
+    : allFunds.slice(0, 18);
+
+  const qualityHeaders = qualityRows[0] || [];
+  const qualityCi = {
+    code: findColumnIndex(qualityHeaders, ['Fund Code', 'FundCode', 'Code']),
+    masterId: findColumnIndex(qualityHeaders, ['Master FundId', 'Master Fund ID', 'MasterFundId']),
+    masterName: findColumnIndex(qualityHeaders, ['Master Fund Name', 'Master Fund', 'MasterFund']),
+  };
+  const getQuality = (row, index) => index >= 0 ? String(row[index] ?? '').trim() : '';
+  const qualityByCode = new Map();
+  qualityRows.slice(1).forEach(row => {
+    const code = getQuality(row, qualityCi.code).toUpperCase();
+    if (code) qualityByCode.set(code, row);
+  });
+
+  const mastersByFundId = new Map();
+  const masterByIsin = new Map();
+  masterRows.forEach(master => {
+    const fundId = String(master.fundId || '').trim().toUpperCase();
+    const isin = String(master.isin || '').trim().toUpperCase();
+    if (fundId) {
+      if (!mastersByFundId.has(fundId)) mastersByFundId.set(fundId, []);
+      mastersByFundId.get(fundId).push(master);
+    }
+    if (isin) masterByIsin.set(isin, master);
+  });
+
+  return scopedFunds.map(fund => {
+    const quality = qualityByCode.get(String(fund.code || '').trim().toUpperCase()) || null;
+    const masterId = quality ? getQuality(quality, qualityCi.masterId) : '';
+    const qualityMasterName = quality ? getQuality(quality, qualityCi.masterName) : '';
+    const normalizedMasterId = masterId.toUpperCase();
+    const candidates = normalizedMasterId ? (mastersByFundId.get(normalizedMasterId) || []) : [];
+    const legacyIsinMatch = masterByIsin.get(String(fund.masterId || '').trim().toUpperCase()) || null;
+    const verifiedLegacyMatch = legacyIsinMatch
+      && String(legacyIsinMatch.fundId || '').trim().toUpperCase() === normalizedMasterId
+      ? legacyIsinMatch
+      : null;
+    const secRecord = rawLookup?.get(String(fund.code || '').trim().toUpperCase()) || null;
+    const secShareClassMatch = !verifiedLegacyMatch && secRecord?.feederMaster
+      ? findFeeMasterShareClass(candidates, secRecord.feederMaster)
+      : null;
+    const master = verifiedLegacyMatch || secShareClassMatch || (candidates.length === 1 ? candidates[0] : null);
+    const mappingStatus = !masterId
+      ? 'missing-master-id'
+      : (!candidates.length
+        ? 'master-not-found'
+        : (master ? 'matched' : 'share-class-unresolved'));
+    return {
+      fund,
+      master,
+      masterId,
+      qualityMasterName,
+      mappingStatus,
+    };
+  });
+}
+
+function buildResolvedMasterLinks(universe, displayMasterRows) {
+  const rowsByIsin = new Map();
+  displayMasterRows.forEach(row => {
+    const isin = String(row.isin || '').trim().toUpperCase();
+    if (!isin) return;
+    if (!rowsByIsin.has(isin)) rowsByIsin.set(isin, []);
+    rowsByIsin.get(isin).push(row);
+  });
+  const links = {};
+  universe.forEach(({ fund, master }) => {
+    const isin = String(master?.isin || '').trim().toUpperCase();
+    if (!isin) return;
+    (rowsByIsin.get(isin) || []).forEach(row => {
+      if (!links[row.key]) links[row.key] = [];
+      links[row.key].push(fund);
+    });
+  });
+  return links;
+}
+
 function buildFeeComparisonRows(universe, rawLookup, options = {}) {
   const includeThaiOnly = !!options.includeThaiOnly;
-  const rows = universe.map(({ fund, master }) => {
+  const rows = universe.map(({ fund, master, masterId = '', qualityMasterName = '', mappingStatus = '' }) => {
     const raw = rawLookup.get(String(fund.code || '').trim().toUpperCase()) || null;
     const masterTer = parseNum(master?.ongoingCost);
     const thaiTer = parseNum(raw?.ter);
     const hasMasterTer = !Number.isNaN(masterTer);
     const hasThaiTer = !Number.isNaN(thaiTer);
-    const combined = hasMasterTer && hasThaiTer
-      ? masterTer + thaiTer
-      : (includeThaiOnly && hasThaiTer ? thaiTer : NaN);
+    // Keep Thai-only rows visible, but never present Thai TER alone as a combined cost.
+    const combined = hasMasterTer && hasThaiTer ? masterTer + thaiTer : NaN;
     const front = toFixedSafe(raw?.front, 4);
     const back = toFixedSafe(raw?.back, 4);
     const fxHedging = toFixedSafe(raw?.fxHedging, 2);
     return {
       thaiCode: fund.code,
-      masterName: master?.name || fund.masterName || '-',
+      masterName: master?.name || qualityMasterName || '-',
+      masterId,
+      mappingStatus,
       masterTer,
       thaiTer,
       combined,
@@ -7946,16 +8065,32 @@ const Pages = {
       const [
         rawSecRowsCurrent,
         rawSecRowsPrevious,
+        thaiQualityRowsCurrent,
+        thaiQualityRowsPrevious,
         masterRowsCurrent,
         masterRowsPrevious,
       ] = await Promise.all([
         fetchCachedForTab(pageKey, currentQuarter),
         fetchCachedForTab(pageKey, previousQuarter),
+        fetchCachedForTab('thai-annualized', currentQuarter),
+        fetchCachedForTab('thai-annualized', previousQuarter),
         fetchCachedForTab('master-placeholder-2', currentQuarter),
         fetchCachedForTab('master-placeholder-2', previousQuarter),
       ]);
-      const universeCurrent = buildSelectedFeeUniverseFromRows(selectRows, buildMasterRecords(masterRowsCurrent));
-      const universePrevious = buildSelectedFeeUniverseFromRows(selectRows, buildMasterRecords(masterRowsPrevious));
+      const rawLookupCurrent = buildRawSecLookup(rawSecRowsCurrent);
+      const rawLookupPrevious = buildRawSecLookup(rawSecRowsPrevious);
+      const universeCurrent = buildSelectedFeeUniverseFromQualityRows(
+        selectRows,
+        thaiQualityRowsCurrent,
+        buildMasterRecords(masterRowsCurrent),
+        rawLookupCurrent,
+      );
+      const universePrevious = buildSelectedFeeUniverseFromQualityRows(
+        selectRows,
+        thaiQualityRowsPrevious,
+        buildMasterRecords(masterRowsPrevious),
+        rawLookupPrevious,
+      );
 
       const decorateRows = (rows) => rows
         .sort((a, b) => compareValues(a.combined, b.combined, 'asc'))
@@ -7968,18 +8103,19 @@ const Pages = {
           };
         });
 
-      const feeRowsCurrent = decorateRows(buildFeeComparisonRows(universeCurrent, buildRawSecLookup(rawSecRowsCurrent), { includeThaiOnly: true }));
-      const feeRowsPrevious = decorateRows(buildFeeComparisonRows(universePrevious, buildRawSecLookup(rawSecRowsPrevious), { includeThaiOnly: true }));
+      const feeRowsCurrent = decorateRows(buildFeeComparisonRows(universeCurrent, rawLookupCurrent, { includeThaiOnly: true }));
+      const feeRowsPrevious = decorateRows(buildFeeComparisonRows(universePrevious, rawLookupPrevious, { includeThaiOnly: true }));
 
       if (!feeRowsCurrent.length && !feeRowsPrevious.length) {
         setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Data For SEC API และ AVP Master Fund ID', pageKey);
         return;
       }
 
-      const source = `${CONFIG.PAGES[pageKey]?.source || 'Data For SEC API + AVP Master Fund ID'} · ${currentQuarter} vs ${previousQuarter}`;
+      const source = `AVP Thai Fund for Quality (Master FundId) + AVP Master Fund ID (Ongoing Cost) + Data For SEC API (TER) · ${currentQuarter} vs ${previousQuarter}`;
       area.innerHTML = `
         ${pageToolActions(pageKey, source)}
         <div id="report-card" class="fee-compare-page">
+          <p class="fee-compare-note">จับคู่ Master Fund ด้วย FundId แบบตรงกันจากฐาน AVP · ค่ารวมเป็นค่าโดยประมาณจาก Master Ongoing Cost + TER กองไทย</p>
           <div class="fee-compare-grid">
             ${renderFeeCompareMiniTable(feeRowsCurrent, { title: `ตารางค่าธรรมเนียม · ${currentQuarter}` })}
             ${renderFeeCompareMiniTable(feeRowsPrevious, { title: `ตารางค่าธรรมเนียม · ${previousQuarter}` })}
@@ -12684,10 +12820,15 @@ const Pages = {
   async masterAnnualized(area) {
     setLoading(area, 'กำลังโหลดรายงาน Master Annualized...');
 
-    let rawRows;
+    let rawRows, selectRows, thaiQualityRows, secRows;
     try {
-      await ensureSelectedFundsCatalog();
-      rawRows = await fetchCached('master-annualized');
+      const quarter = String(State.currentQuarter || CONFIG.PAGES['master-annualized']?.tabName || '').trim();
+      [rawRows, selectRows, thaiQualityRows, secRows] = await Promise.all([
+        fetchCachedForTab('master-annualized', quarter),
+        fetchCached('select-fund'),
+        fetchCachedForTab('thai-annualized', quarter),
+        fetchCachedForTab('master-placeholder-1', quarter),
+      ]);
     } catch (e) {
       setError(area, e.message, 'master-annualized');
       return;
@@ -12696,6 +12837,7 @@ const Pages = {
     const headers = rawRows[0] || [];
     const CI = {
       name: findColumnIndex(headers, ['Group/Investment']),
+      isin: findColumnIndex(headers, ['ISIN']),
       r3m: findColumnIndex(headers, ['Return(Cumulative) 3M']),
       r6m: findColumnIndex(headers, ['Return(Cumulative) 6M']),
       rytd: findColumnIndex(headers, ['Return(Cumulative) YTD']),
@@ -12707,29 +12849,28 @@ const Pages = {
     const metricKeys = ['r3m','r6m','rytd','r1y','r3y','r5y','r10y'];
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
 
-    const masterRows = rawRows.slice(1).map(row => ({
+    const masterRows = rawRows.slice(1).map((row, index) => ({
       row,
       name: get(row, CI.name),
-      key: normalizeMasterMatchText(get(row, CI.name)),
-      code: normalizeMasterMatchText(get(row, CI.name)),
-    })).filter(item => item.name);
+      isin: get(row, CI.isin),
+      key: `${get(row, CI.isin)}::${get(row, CI.name)}::${index}`,
+      code: `${get(row, CI.isin)}::${get(row, CI.name)}::${index}`,
+    })).filter(item => item.name && item.isin);
 
-    const thaiSource = Object.values(State.selectedFunds).filter(f => f.masterName && f.masterName !== '0');
-    const thaiFunds = State.selectedKeys.size > 0
-      ? thaiSource.filter(f => State.selectedKeys.has(f.key))
-      : thaiSource;
+    const rawLookup = buildRawSecLookup(secRows);
+    const universe = buildSelectedFeeUniverseFromQualityRows(
+      selectRows,
+      thaiQualityRows,
+      buildMasterRecords(rawRows),
+      rawLookup,
+    );
+    const masterLinks = buildResolvedMasterLinks(universe, masterRows);
 
-    const masterLinks = {};
-    thaiFunds.forEach(fund => {
-      const matched = findBestMasterRow(masterRows, fund.masterName);
-      if (!matched) return;
-      if (!masterLinks[matched.key]) masterLinks[matched.key] = [];
-      masterLinks[matched.key].push(fund);
-    });
-
-    const displayRowsRaw = Object.keys(masterLinks).length > 0
-      ? masterRows.filter(item => masterLinks[item.key]?.length)
-      : masterRows;
+    const displayRowsRaw = masterRows.filter(item => masterLinks[item.key]?.length);
+    if (!displayRowsRaw.length) {
+      setError(area, 'ไม่พบ Master Share Class ที่จับคู่ได้จาก AVP Thai Fund for Quality → AVP Master Fund ID', 'master-annualized');
+      return;
+    }
     const displayRows = annotateComparableNameDiffs(displayRowsRaw, {
       nameKey: 'name',
       htmlKey: 'nameHtml',
@@ -12786,7 +12927,7 @@ const Pages = {
     }).join('');
 
     area.innerHTML = `
-      ${pageToolActions('master-annualized', CONFIG.PAGES['master-annualized']?.source || 'AVP Master Fund ID')}
+      ${pageToolActions('master-annualized', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API (Share Class Check)')}
       <div class="card report-card report-card-master" id="report-card">
         <table class="annualized-report master-annualized-report">
           <thead>
@@ -12834,10 +12975,15 @@ const Pages = {
   async masterAnnualizedV2(area) {
     setLoading(area, 'กำลังโหลดรายงาน Master Annualized V2...');
 
-    let rawRows;
+    let rawRows, selectRows, thaiQualityRows, secRows;
     try {
-      await ensureSelectedFundsCatalog();
-      rawRows = await fetchCached('master-annualized-v2');
+      const quarter = String(State.currentQuarter || CONFIG.PAGES['master-annualized-v2']?.tabName || '').trim();
+      [rawRows, selectRows, thaiQualityRows, secRows] = await Promise.all([
+        fetchCachedForTab('master-annualized-v2', quarter),
+        fetchCached('select-fund'),
+        fetchCachedForTab('thai-annualized', quarter),
+        fetchCachedForTab('master-placeholder-1', quarter),
+      ]);
     } catch (e) {
       setError(area, e.message, 'master-annualized-v2');
       return;
@@ -12869,25 +13015,14 @@ const Pages = {
       code: `${get(row, CI.isin)}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
     })).filter(item => item.name && item.isin);
 
-    const thaiSource = Object.values(State.selectedFunds).filter(f => f.masterId && f.masterId !== '-');
-    const thaiFunds = thaiSource.filter(f => State.selectedKeys.has(f.key));
-
-    if (!thaiFunds.length) {
-      setError(area, 'ยังไม่ได้เลือกกองทุนจากเมนูเลือกกองทุน หรือกองที่เลือกยังไม่ผูก Master Fund ID', 'master-annualized-v2');
-      return;
-    }
-
-    const linksByRowKey = {};
-    thaiFunds.forEach(fund => {
-      const isin = String(fund.masterId || '').trim();
-      if (!isin) return;
-      const matches = masterRows.filter(item => item.isin === isin);
-      if (!matches.length) return;
-      matches.forEach(item => {
-        if (!linksByRowKey[item.key]) linksByRowKey[item.key] = [];
-        linksByRowKey[item.key].push(fund);
-      });
-    });
+    const rawLookup = buildRawSecLookup(secRows);
+    const universe = buildSelectedFeeUniverseFromQualityRows(
+      selectRows,
+      thaiQualityRows,
+      buildMasterRecords(rawRows),
+      rawLookup,
+    );
+    const linksByRowKey = buildResolvedMasterLinks(universe, masterRows);
 
     const displayRows = annotateComparableNameDiffs(
       masterRows.filter(item => linksByRowKey[item.key]?.length),
@@ -12897,6 +13032,10 @@ const Pages = {
         diffKey: 'nameDiffs',
       }
     );
+    if (!displayRows.length) {
+      setError(area, 'ไม่พบ Master Share Class ที่จับคู่ได้จาก AVP Thai Fund for Quality → AVP Master Fund ID', 'master-annualized-v2');
+      return;
+    }
     const { ranks: rankMap, totals: rankTotals } = buildMetricRanks(displayRows, metricKeys, (item, key) => get(item.row, CI[key]));
     const sortState = State.reportSorts['master-annualized-v2'];
     const sortableMasterAnnualizedV2 = (item, key) => {
@@ -12950,7 +13089,7 @@ const Pages = {
     }).join('');
 
     area.innerHTML = `
-      ${pageToolActions('master-annualized-v2', CONFIG.PAGES['master-annualized-v2']?.source || 'AVP Master Fund ID')}
+      ${pageToolActions('master-annualized-v2', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API (Share Class Check)')}
       <div class="card report-card report-card-master" id="report-card">
         <table class="annualized-report master-annualized-report">
           <thead>
@@ -12999,10 +13138,15 @@ const Pages = {
   async masterCalendar(area) {
     setLoading(area, 'กำลังโหลดรายงาน Master Calendar Year...');
 
-    let rawRows;
+    let rawRows, selectRows, thaiQualityRows, secRows;
     try {
-      await ensureSelectedFundsCatalog();
-      rawRows = await fetchCached('master-calendar');
+      const quarter = String(State.currentQuarter || CONFIG.PAGES['master-calendar']?.tabName || '').trim();
+      [rawRows, selectRows, thaiQualityRows, secRows] = await Promise.all([
+        fetchCachedForTab('master-calendar', quarter),
+        fetchCached('select-fund'),
+        fetchCachedForTab('thai-annualized', quarter),
+        fetchCachedForTab('master-placeholder-1', quarter),
+      ]);
     } catch (e) {
       setError(area, e.message, 'master-calendar');
       return;
@@ -13030,24 +13174,14 @@ const Pages = {
       code: `${get(row, CI.isin)}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
     })).filter(item => item.name && item.isin);
 
-    const thaiSource = Object.values(State.selectedFunds).filter(f => f.masterId && f.masterId !== '-');
-    const thaiFunds = thaiSource.filter(f => State.selectedKeys.has(f.key));
-
-    if (!thaiFunds.length) {
-      setError(area, 'ยังไม่ได้เลือกกองทุนจากเมนูเลือกกองทุน หรือกองที่เลือกยังไม่ผูก Master Fund ID', 'master-calendar');
-      return;
-    }
-
-    const linksByRowKey = {};
-    thaiFunds.forEach(fund => {
-      const isin = String(fund.masterId || '').trim();
-      if (!isin) return;
-      const matches = masterRows.filter(item => item.isin === isin);
-      matches.forEach(item => {
-        if (!linksByRowKey[item.key]) linksByRowKey[item.key] = [];
-        linksByRowKey[item.key].push(fund);
-      });
-    });
+    const rawLookup = buildRawSecLookup(secRows);
+    const universe = buildSelectedFeeUniverseFromQualityRows(
+      selectRows,
+      thaiQualityRows,
+      buildMasterRecords(rawRows),
+      rawLookup,
+    );
+    const linksByRowKey = buildResolvedMasterLinks(universe, masterRows);
 
     const displayRows = annotateComparableNameDiffs(
       masterRows.filter(item => linksByRowKey[item.key]?.length),
@@ -13057,6 +13191,10 @@ const Pages = {
         diffKey: 'nameDiffs',
       }
     );
+    if (!displayRows.length) {
+      setError(area, 'ไม่พบ Master Share Class ที่จับคู่ได้จาก AVP Thai Fund for Quality → AVP Master Fund ID', 'master-calendar');
+      return;
+    }
     const { ranks: rankMap, totals: rankTotals } = buildMetricRanks(displayRows, visibleYears, (item, year) => get(item.row, CI[`ret${year}`]));
     const sortState = State.reportSorts['master-calendar'];
     const sortableMasterCalendar = (item, key) => {
@@ -13111,7 +13249,7 @@ const Pages = {
     }).join('');
 
     area.innerHTML = `
-      ${pageToolActions('master-calendar', CONFIG.PAGES['master-calendar']?.source || 'AVP Master Fund ID', toggleActions)}
+      ${pageToolActions('master-calendar', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API (Share Class Check)', toggleActions)}
       <div class="card report-card report-card-master" id="report-card">
         <table class="annualized-report master-annualized-report">
           <thead>
@@ -13158,11 +13296,20 @@ const Pages = {
     setLoading(area, 'กำลังโหลดรายงานค่าธรรมเนียม...');
 
     try {
-      const [rawSecRows, universe] = await Promise.all([
-        fetchCached('master-placeholder-1'),
-        buildSelectedFeeUniverse(),
+      const quarter = String(State.currentQuarter || CONFIG.PAGES['master-placeholder-1']?.tabName || '').trim();
+      const [rawSecRows, selectRows, thaiQualityRows, masterRawRows] = await Promise.all([
+        fetchCachedForTab('master-placeholder-1', quarter),
+        fetchCached('select-fund'),
+        fetchCachedForTab('thai-annualized', quarter),
+        fetchCachedForTab('master-placeholder-2', quarter),
       ]);
       const rawLookup = buildRawSecLookup(rawSecRows);
+      const universe = buildSelectedFeeUniverseFromQualityRows(
+        selectRows,
+        thaiQualityRows,
+        buildMasterRecords(masterRawRows),
+        rawLookup,
+      );
       const feeRows = buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true })
         .sort((a, b) => compareValues(a.combined, b.combined, 'asc'));
 
@@ -13171,9 +13318,14 @@ const Pages = {
         return;
       }
 
-      const totalAvg = feeRows.reduce((sum, row) => sum + (Number.isNaN(row.combined) ? 0 : row.combined), 0) / feeRows.length;
-      const cheapest = feeRows[0];
-      const priciest = [...feeRows].sort((a, b) => compareValues(a.combined, b.combined, 'desc'))[0];
+      const combinedRows = feeRows.filter(row => !Number.isNaN(row.combined));
+      const totalAvg = combinedRows.length
+        ? combinedRows.reduce((sum, row) => sum + row.combined, 0) / combinedRows.length
+        : NaN;
+      const cheapest = combinedRows[0] || null;
+      const priciest = combinedRows.length
+        ? [...combinedRows].sort((a, b) => compareValues(a.combined, b.combined, 'desc'))[0]
+        : null;
       const avgThai = feeRows.reduce((sum, row) => sum + (Number.isNaN(row.thaiTer) ? 0 : row.thaiTer), 0) / feeRows.length;
       const avgMaster = feeRows.reduce((sum, row) => sum + (Number.isNaN(row.masterTer) ? 0 : row.masterTer), 0) / feeRows.length;
       const maxCombined = Math.max(...feeRows.map(row => row.combined || 0), 0);
@@ -13200,13 +13352,13 @@ const Pages = {
       }).join('');
 
       area.innerHTML = `
-        ${pageToolActions('master-placeholder-1', CONFIG.PAGES['master-placeholder-1']?.source || 'Data For SEC API + AVP Master Fund ID')}
+        ${pageToolActions('master-placeholder-1', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API')}
         <div id="report-card" class="insight-page">
         ${buildInsightSummaryCards([
           { label: 'กองทุนที่จับคู่ได้', value: `${feeRows.length} กอง`, note: 'คัดจากกองที่เลือกไว้ก่อน ถ้าไม่ได้เลือกจะใช้ชุดแรกของรายการ' },
-          { label: 'Combined TER เฉลี่ย', value: `${toFixedSafe(totalAvg, 2) || '-'}%`, note: `Master เฉลี่ย ${toFixedSafe(avgMaster, 2) || '-'}% + ไทยเฉลี่ย ${toFixedSafe(avgThai, 2) || '-'}%` },
-          { label: 'ต่ำสุด', value: `${esc(cheapest.thaiCode)} · ${esc(cheapest.combinedText || '-') }%`, note: cheapest.masterName },
-          { label: 'สูงสุด', value: `${esc(priciest.thaiCode)} · ${esc(priciest.combinedText || '-') }%`, note: priciest.masterName },
+          { label: 'ค่ารวมโดยประมาณเฉลี่ย', value: `${toFixedSafe(totalAvg, 2) || '-'}%`, note: `Master เฉลี่ย ${toFixedSafe(avgMaster, 2) || '-'}% + ไทยเฉลี่ย ${toFixedSafe(avgThai, 2) || '-'}%` },
+          { label: 'ต่ำสุด', value: cheapest ? `${esc(cheapest.thaiCode)} · ${esc(cheapest.combinedText)}%` : '-', note: cheapest?.masterName || 'ไม่มีรายการที่ระบุ Share Class ได้' },
+          { label: 'สูงสุด', value: priciest ? `${esc(priciest.thaiCode)} · ${esc(priciest.combinedText)}%` : '-', note: priciest?.masterName || 'ไม่มีรายการที่ระบุ Share Class ได้' },
         ])}
         <div class="insight-layout insight-layout-fee">
           <div class="card insight-panel">
@@ -13224,10 +13376,10 @@ const Pages = {
             ${buildInsightTable(feeRows, [
               { key: 'masterName', label: 'Master Fund', className: 'td-left' },
               { key: 'thaiCode', label: 'กองไทย', className: 'td-chip', render: row => `<span class="linked-fund-chip">${esc(row.thaiCode)}</span>` },
-              { key: 'masterTerText', label: 'Master Fund' },
-              { key: 'thaiTerText', label: 'กองไทย' },
+              { key: 'masterTerText', label: 'Master Ongoing Cost' },
+              { key: 'thaiTerText', label: 'กองไทย TER' },
               { key: 'feeDate', label: 'Date' },
-              { key: 'combinedText', label: 'Combined TER', className: 'td-strong td-accent' },
+              { key: 'combinedText', label: 'รวมโดยประมาณ', className: 'td-strong td-accent' },
             ])}
           </div>
         </div>
@@ -13236,8 +13388,8 @@ const Pages = {
       App._currentExport = null;
       App._currentTableExport = () => buildSimpleTablePayload(
         CONFIG.PAGES['master-placeholder-1']?.title || 'ค่าธรรมเนียม',
-        CONFIG.PAGES['master-placeholder-1']?.source || 'Data For SEC API + AVP Master Fund ID',
-        ['Master Fund', 'กองไทย', 'Master Fund', 'กองไทย', 'Date', 'Combined TER'],
+        'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API',
+        ['Master Fund', 'กองไทย', 'Master Ongoing Cost', 'กองไทย TER', 'Date', 'รวมโดยประมาณ'],
         feeRows.map(row => [
           row.masterName,
           row.thaiCode,
@@ -13257,11 +13409,20 @@ const Pages = {
     setLoading(area, 'กำลังโหลดรายงานค่าธรรมเนียม...');
 
     try {
-      const [rawSecRows, universe] = await Promise.all([
-        fetchCached('master-placeholder-4'),
-        buildSelectedFeeUniverse(),
+      const quarter = String(State.currentQuarter || CONFIG.PAGES['master-placeholder-4']?.tabName || '').trim();
+      const [rawSecRows, selectRows, thaiQualityRows, masterRawRows] = await Promise.all([
+        fetchCachedForTab('master-placeholder-4', quarter),
+        fetchCached('select-fund'),
+        fetchCachedForTab('thai-annualized', quarter),
+        fetchCachedForTab('master-placeholder-2', quarter),
       ]);
       const rawLookup = buildRawSecLookup(rawSecRows);
+      const universe = buildSelectedFeeUniverseFromQualityRows(
+        selectRows,
+        thaiQualityRows,
+        buildMasterRecords(masterRawRows),
+        rawLookup,
+      );
       const feeRows = buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true })
         .sort((a, b) => compareValues(a.combined, b.combined, 'asc'))
         .map(row => {
@@ -13278,7 +13439,7 @@ const Pages = {
         return;
       }
 
-      const source = CONFIG.PAGES['master-placeholder-4']?.source || 'Data For SEC API + AVP Master Fund ID';
+      const source = 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API';
       const maxCombined = Math.max(...feeRows.map(item => item.combined || 0), 0);
 
       area.innerHTML = `
@@ -13305,7 +13466,7 @@ const Pages = {
                 <tr>
                   <th rowspan="2">Master Fund</th>
                   <th rowspan="2" class="fee-v2-main-thai-head">กองไทย</th>
-                  <th colspan="3">TER (%)</th>
+                  <th colspan="3">ค่าใช้จ่าย (%)</th>
                   <th rowspan="2" class="fee-v2-th-spacer"></th>
                   <th colspan="2" class="fee-v2-th-group fee-v2-th-group--trade">การซื้อ-ขาย (%)</th>
                   <th rowspan="2" class="fee-v2-th-two-line"><span>การซื้อ</span><span>ครั้งแรกขั้นตํ่า</span></th>
@@ -13315,9 +13476,9 @@ const Pages = {
                   <th rowspan="2">FACTSHEET</th>
                 </tr>
                 <tr>
-                  <th class="fee-v2-ter-head fee-v2-ter-head-1">Master Fund</th>
-                  <th class="fee-v2-ter-head fee-v2-ter-head-2">กองไทย</th>
-                  <th class="fee-v2-ter-head fee-v2-ter-head-3">COMBINED TER</th>
+                  <th class="fee-v2-ter-head fee-v2-ter-head-1">Master Ongoing Cost</th>
+                  <th class="fee-v2-ter-head fee-v2-ter-head-2">กองไทย TER</th>
+                  <th class="fee-v2-ter-head fee-v2-ter-head-3">รวมโดยประมาณ</th>
                   <th class="fee-v2-th-group--trade">IN (ซื้อ)</th>
                   <th class="fee-v2-th-group--trade">OUT (ขาย)</th>
                 </tr>
@@ -13327,7 +13488,12 @@ const Pages = {
                   const combinedStyle = feeCombinedStyle(row.combined, maxCombined);
                   return `
                     <tr>
-                      <td class="is-master">${row.masterNameHtml || esc(row.masterName)}</td>
+                      <td class="is-master">
+                        ${row.masterNameHtml || esc(row.masterName)}
+                        ${row.mappingStatus === 'missing-master-id' ? '<small class="fee-v2-mapping-warning">ไม่มี Master FundId ใน AVP Thai Fund for Quality</small>' : ''}
+                        ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-v2-mapping-warning">ระบุ Share Class ไม่ได้ — ไม่คำนวณค่ารวม</small>' : ''}
+                        ${row.mappingStatus === 'master-not-found' ? '<small class="fee-v2-mapping-warning">ไม่พบ FundId ใน AVP Master Fund ID</small>' : ''}
+                      </td>
                       <td class="is-thai"${row.highlightColor ? ` style="background:${row.highlightColor}"` : ''}>${esc(row.thaiCode)}</td>
                       <td class="fee-v2-ter-cell fee-v2-ter-cell-1">${esc(row.masterTerText || '-')}</td>
                       <td class="fee-v2-ter-cell fee-v2-ter-cell-2">${esc(row.thaiTerText || '-')}</td>
@@ -21201,8 +21367,8 @@ const App = {
       'thai-annualized-rank': { title: 'กองทุนไทย Annualized Rank', subtitle: '' },
       'thai-annualized-v2': { title: 'กองทุนไทย Annualized Return', subtitle: 'สลับมุมมอง Return และ Rank ได้' },
       'thai-calendar':     { title: 'กองทุนไทย Calendar Year', subtitle: '' },
-      'master-annualized': { title: 'Master Fund Annualized Return', subtitle: 'จับคู่ด้วย ISIN และแยก Base Currency' },
-      'master-annualized-v2': { title: 'Master Fund Annualized Return', subtitle: 'จับคู่ด้วย ISIN และแยก Base Currency' },
+      'master-annualized': { title: 'Master Fund Annualized Return', subtitle: 'จับคู่ด้วย AVP FundId + Share Class ISIN' },
+      'master-annualized-v2': { title: 'Master Fund Annualized Return', subtitle: 'จับคู่ด้วย AVP FundId + Share Class ISIN' },
       'master-calendar':   { title: 'Master Fund Calendar Year', subtitle: '' },
       'master-placeholder-1': { title: 'ค่าธรรมเนียม', subtitle: 'เทียบ TER ของกองไทยกับ Ongoing Cost ของ Master Fund' },
       'master-placeholder-2': { title: 'Top 10 Holding', subtitle: '' },
