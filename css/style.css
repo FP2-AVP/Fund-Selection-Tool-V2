@@ -3463,6 +3463,16 @@ body.flu-row-dragging * {
   min-width: 260px;
   overflow-wrap: anywhere;
 }
+.fee-v2-mapping-warning {
+  display: block;
+  margin-top: 3px;
+  color: #718096;
+  font-size: 10px;
+  font-weight: 500;
+}
+.fee-v2-mapping-warning {
+  color: #b45309;
+}
 .fee-v2-name-diff {
   color: #0f3f8f;
   font-weight: 700;
@@ -3508,6 +3518,21 @@ body.flu-row-dragging * {
 }
 .fee-compare-page {
   display: block;
+}
+.fee-compare-note {
+  margin: 0 0 12px;
+  color: #526581;
+  font-size: 12px;
+}
+.fee-compare-master small {
+  display: block;
+  margin-top: 3px;
+  color: #718096;
+  font-size: 10px;
+  font-weight: 500;
+}
+.fee-compare-master small.fee-compare-warning {
+  color: #b45309;
 }
 .fee-compare-grid {
   display: grid;
