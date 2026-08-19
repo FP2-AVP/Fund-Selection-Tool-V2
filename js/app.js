@@ -143,6 +143,7 @@ const State = {
 	    isSavingMasterView: false,
 	    jsonStatus: null,
 	    isExportingJson: false,
+	    previewScrollLeft: 0,
 	  },
   ftHistoricalImport: {
     url: 'https://markets.ft.com/data/etfs/tearsheet/summary?s=IXN:PCQ:USD',
@@ -868,6 +869,23 @@ function buildHighlightSelect(code, currentValue) {
     <select class="hl-select${selectedColor ? ' has-color' : ''}" data-fund="${esc(code)}" aria-label="เลือกสีไฮไลต์ของ ${esc(code)}"${selectedColor ? ` style="background:${selectedColor.bg};border-color:${selectedColor.dot};color:#1a3c6e"` : ''}>
       ${options.join('')}
     </select>`;
+}
+
+function updateHighlightSelectAppearance(select, currentValue) {
+  if (!select) return;
+  const selectedColor = currentValue !== undefined && HL_COLORS[currentValue]
+    ? HL_COLORS[currentValue]
+    : null;
+  select.classList.toggle('has-color', !!selectedColor);
+  if (selectedColor) {
+    select.style.backgroundColor = selectedColor.bg;
+    select.style.borderColor = selectedColor.dot;
+    select.style.color = '#1a3c6e';
+  } else {
+    select.style.backgroundColor = '';
+    select.style.borderColor = '';
+    select.style.color = '';
+  }
 }
 function buildHighlightDotPicker(code, currentValue, fallbackColor) {
   const selectedColor = currentValue !== undefined && OF_POINT_COLORS[currentValue]
@@ -4700,12 +4718,12 @@ async function renderThaiAnnualizedReport(area, pageKey, view = 'return', showTo
     r1y: findColumnIndex(headers, ['1 Yr Anlsd %']),
     r3y: findColumnIndex(headers, ['3 Yr Anlsd %']),
     r5y: findColumnIndex(headers, ['5 Yr Anlsd %']),
-    p3m: findColumnIndex(headers, ['3M']),
-    p6m: findColumnIndex(headers, ['6M']),
-    pytd: findColumnIndex(headers, ['YTD']),
-    p1y: findColumnIndex(headers, ['1Y']),
-    p3y: findColumnIndex(headers, ['3Y']),
-    p5y: findColumnIndex(headers, ['5Y']),
+    p3m: findColumnIndex(headers, ['Percent Rank % 3M', '3M']),
+    p6m: findColumnIndex(headers, ['Percent Rank % 6M', '6M']),
+    pytd: findColumnIndex(headers, ['Percent Rank % YTD', 'YTD']),
+    p1y: findColumnIndex(headers, ['Percent Rank % 1Y', '1Y']),
+    p3y: findColumnIndex(headers, ['Percent Rank % 3Y', '3Y']),
+    p5y: findColumnIndex(headers, ['Percent Rank % 5Y', '5Y']),
   };
   const metricKeys = ['r3m', 'r6m', 'rytd', 'r1y', 'r3y', 'r5y'];
   const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
@@ -8701,6 +8719,166 @@ const Pages = {
         headerReport: analyzeImportHeaders(rows),
       };
     };
+    const invalidatePercentRankPreview = (preview, rows) => refreshImportPreviewMeta(
+      preview,
+      rows,
+      { percentRank: null }
+    );
+    const parseImportNumber = (value) => {
+      const text = cleanImportText(value).replace(/,/g, '').replace(/%$/, '');
+      if (!text || /^[-–—]+$/.test(text) || /^(?:n\/?a|null|none)$/i.test(text)) return NaN;
+      const number = Number(text);
+      return Number.isFinite(number) ? number : NaN;
+    };
+    const normalizePercentRankHeader = (value) => cleanImportText(value)
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    const getPercentRankMetric = (header) => {
+      const name = cleanImportText(header).replace(/\s+/g, ' ').trim();
+      let match = name.match(/^(\d+)\s*Month\s+Return\s*%$/i);
+      if (match) return { key: `${match[1]}M`, target: `Percent Rank % ${match[1]}M`, source: name };
+      if (/^YTD\s+Return\s*%$/i.test(name)) return { key: 'YTD', target: 'Percent Rank % YTD', source: name };
+      match = name.match(/^(\d+)\s*Yr\s+Anlsd\s*%$/i);
+      if (match) return { key: `${match[1]}Y`, target: `Percent Rank % ${match[1]}Y`, source: name };
+      // Accept both the correct spelling and the legacy "Calender" headers,
+      // with or without a percent sign before the year.
+      match = name.match(/^Calend(?:ar|er)\s+Year\s+Return(?:\s*%)?\s+(\d{4})$/i);
+      if (match) return { key: `CY${match[1]}`, target: `Percent Rank % Calendar Year ${match[1]}`, source: name };
+      return null;
+    };
+    const calculateImportPercentRanks = (rows = []) => {
+      if (rows.length < 2) throw new Error('ไม่พบข้อมูลกองทุนสำหรับคำนวณ Percent Rank');
+      const headers = [...(rows[0] || [])];
+      const normalizedHeaders = headers.map(normalizePercentRankHeader);
+      const categoryAliases = ['avp® category', 'avp category'];
+      const categoryIndexes = normalizedHeaders
+        .map((header, index) => (categoryAliases.includes(header) ? index : -1))
+        .filter(index => index >= 0);
+      if (categoryIndexes.length !== 1) {
+        throw new Error(categoryIndexes.length
+          ? 'พบคอลัมน์ AVP® Category มากกว่า 1 คอลัมน์ กรุณาจัดการคอลัมน์ซ้ำก่อน'
+          : 'ไม่พบคอลัมน์ AVP® Category ซึ่งใช้แบ่งกลุ่มกองทุน');
+      }
+      const categoryIndex = categoryIndexes[0];
+      const fundTypeIndexes = normalizedHeaders
+        .map((header, index) => (header === 'fund type' ? index : -1))
+        .filter(index => index >= 0);
+      if (fundTypeIndexes.length !== 1) {
+        throw new Error(fundTypeIndexes.length
+          ? 'พบคอลัมน์ Fund Type มากกว่า 1 คอลัมน์ กรุณาจัดการคอลัมน์ซ้ำก่อน'
+          : 'ไม่พบคอลัมน์ Fund Type ซึ่งใช้แบ่งกลุ่มกองทุนร่วมกับ AVP® Category');
+      }
+      const fundTypeIndex = fundTypeIndexes[0];
+      const metrics = headers
+        .map((header, sourceIndex) => ({ ...getPercentRankMetric(header), sourceIndex }))
+        .filter(metric => metric.key);
+      if (!metrics.length) throw new Error('ไม่พบคอลัมน์ Return ที่ระบบรู้จักสำหรับคำนวณ Percent Rank');
+
+      const outputRows = rows.map(row => [...row]);
+      let createdColumns = 0;
+      let updatedColumns = 0;
+      metrics.forEach(metric => {
+        const normalizedTarget = normalizePercentRankHeader(metric.target);
+        let targetIndex = normalizedHeaders.indexOf(normalizedTarget);
+        if (targetIndex < 0) {
+          targetIndex = headers.length;
+          headers.push(metric.target);
+          normalizedHeaders.push(normalizedTarget);
+          outputRows.forEach(row => {
+            while (row.length <= targetIndex) row.push('');
+          });
+          createdColumns += 1;
+        } else {
+          updatedColumns += 1;
+        }
+        metric.targetIndex = targetIndex;
+      });
+      outputRows[0] = headers;
+
+      const categoryNames = new Set();
+      let missingCategoryRows = 0;
+      let missingFundTypeRows = 0;
+      let missingReturnValues = 0;
+      let calculatedValues = 0;
+      metrics.forEach(metric => {
+        const groups = new Map();
+        outputRows.slice(1).forEach((row, offset) => {
+          const rowIndex = offset + 1;
+          const category = cleanImportText(row[categoryIndex]);
+          const fundType = cleanImportText(row[fundTypeIndex]);
+          const value = parseImportNumber(row[metric.sourceIndex]);
+          row[metric.targetIndex] = '';
+          if (metric === metrics[0] && !category) missingCategoryRows += 1;
+          if (metric === metrics[0] && !fundType) missingFundTypeRows += 1;
+          if (!category || !fundType) return;
+          const groupKey = JSON.stringify([category, fundType]);
+          categoryNames.add(groupKey);
+          if (Number.isNaN(value)) {
+            missingReturnValues += 1;
+            return;
+          }
+          if (!groups.has(groupKey)) groups.set(groupKey, []);
+          groups.get(groupKey).push({ rowIndex, value });
+        });
+        groups.forEach(entries => {
+          const total = entries.length;
+          if (total < 2) return;
+          const valueCounts = new Map();
+          entries.forEach(entry => valueCounts.set(entry.value, (valueCounts.get(entry.value) || 0) + 1));
+          const percentByValue = new Map();
+          let lower = 0;
+          [...valueCounts.keys()].sort((left, right) => left - right).forEach(value => {
+            const tied = valueCounts.get(value) || 0;
+            const higher = total - lower - tied;
+            const percent = (higher / (total - 1)) * 100;
+            percentByValue.set(value, Math.round(percent));
+            lower += tied;
+          });
+          entries.forEach(entry => {
+            outputRows[entry.rowIndex][metric.targetIndex] = percentByValue.get(entry.value);
+            calculatedValues += 1;
+          });
+        });
+      });
+
+      const sample = outputRows.slice(1)
+        .filter(row => metrics.some(metric => row[metric.targetIndex] !== ''))
+        .slice(0, 5)
+        .map(row => ({
+          category: cleanImportText(row[categoryIndex]),
+          fundType: cleanImportText(row[fundTypeIndex]),
+          values: metrics.slice(0, 3).map(metric => ({
+            key: metric.key,
+            returnValue: row[metric.sourceIndex],
+            percentRank: row[metric.targetIndex],
+            groupSize: outputRows.slice(1).filter(peer => (
+              cleanImportText(peer[categoryIndex]) === cleanImportText(row[categoryIndex])
+              && cleanImportText(peer[fundTypeIndex]) === cleanImportText(row[fundTypeIndex])
+              && !Number.isNaN(parseImportNumber(peer[metric.sourceIndex]))
+            )).length,
+          })),
+        }));
+      return {
+        rows: outputRows,
+        summary: {
+          calculatedAt: new Date().toISOString(),
+          groupColumn: headers[categoryIndex],
+          fundTypeColumn: headers[fundTypeIndex],
+          groupCount: categoryNames.size,
+          metricCount: metrics.length,
+          createdColumns,
+          updatedColumns,
+          missingCategoryRows,
+          missingFundTypeRows,
+          missingReturnValues,
+          calculatedValues,
+          metrics: metrics.map(metric => ({ key: metric.key, source: metric.source, target: metric.target })),
+          sample,
+        },
+      };
+    };
     const renameDuplicateImportHeaders = (rows = []) => {
       if (!rows.length) return rows;
       const headers = [...(rows[0] || [])];
@@ -8840,6 +9018,83 @@ const Pages = {
           ` : ''}
         </div>`;
     };
+    const renderPercentRankStep = (preview) => {
+      const duplicateCount = preview?.headerReport?.exactDuplicates?.length || 0;
+      const result = preview?.percentRank;
+      const summary = result?.summary;
+      const canCalculate = duplicateCount === 0 && preview?.rows?.length > 1;
+      const metricHeaders = (preview?.rows?.[0] || []).map(getPercentRankMetric).filter(Boolean);
+      const categoryCount = (preview?.rows?.[0] || []).filter(header => (
+        ['avp® category', 'avp category'].includes(normalizePercentRankHeader(header))
+      )).length;
+      const fundTypeCount = (preview?.rows?.[0] || []).filter(header => (
+        normalizePercentRankHeader(header) === 'fund type'
+      )).length;
+      const readinessText = duplicateCount
+        ? `ยังมีหัวตารางซ้ำ ${duplicateCount.toLocaleString()} รายการ กรุณาจัดการให้เรียบร้อยก่อน`
+        : (categoryCount !== 1
+          ? `ต้องมีคอลัมน์ AVP® Category เพียง 1 คอลัมน์ (ตอนนี้พบ ${categoryCount})`
+          : (fundTypeCount !== 1
+            ? `ต้องมีคอลัมน์ Fund Type เพียง 1 คอลัมน์ (ตอนนี้พบ ${fundTypeCount})`
+            : (metricHeaders.length
+              ? `พร้อมคำนวณจากคอลัมน์ Return ${metricHeaders.length.toLocaleString()} ช่วงเวลา`
+              : 'ไม่พบคอลัมน์ Return ที่ระบบรู้จัก')));
+      return `
+        <div class="card data-import-card percent-rank-step-card">
+          <div class="card-header">
+            <span class="card-title data-import-card-title-step"><span class="data-import-step-no data-import-step-no-sub">3.1</span>คำนวณ Percent Rank</span>
+            <span class="badge ${summary ? 'badge-success' : (canCalculate && categoryCount === 1 && fundTypeCount === 1 && metricHeaders.length ? 'badge-primary' : 'badge-warning')}">
+              ${summary ? 'คำนวณแล้ว' : 'รอคำนวณ'}
+            </span>
+          </div>
+          <div class="card-body">
+            <div class="percent-rank-intro">
+              เปรียบเทียบผลตอบแทนเฉพาะกองทุนที่มี <strong>AVP® Category</strong> และ <strong>Fund Type</strong> เดียวกัน · <strong>0% = ดีที่สุด</strong> และ <strong>100% = ต่ำที่สุด</strong> ในกลุ่ม
+            </div>
+            <div class="percent-rank-readiness ${summary ? 'is-ready' : ''}">
+              <div><span>คอลัมน์แบ่งกลุ่ม</span><strong>${categoryCount === 1 ? 'AVP® Category ✓' : `${categoryCount.toLocaleString()} คอลัมน์`}</strong></div>
+              <div><span>คอลัมน์แบ่งกลุ่มร่วม</span><strong>${fundTypeCount === 1 ? 'Fund Type ✓' : `${fundTypeCount.toLocaleString()} คอลัมน์`}</strong></div>
+              <div><span>คอลัมน์ผลตอบแทนที่ตรวจพบ</span><strong>${metricHeaders.length.toLocaleString()} ช่วงเวลา</strong></div>
+              ${summary ? `<div><span>กลุ่มที่นำมาเปรียบเทียบ</span><strong>${summary.groupCount.toLocaleString()} กลุ่ม</strong></div>` : ''}
+            </div>
+            <div class="data-import-actions percent-rank-actions">
+              <button class="btn btn-primary" id="import-calculate-percent-rank" type="button" ${canCalculate && categoryCount === 1 && fundTypeCount === 1 && metricHeaders.length ? '' : 'disabled'}>
+                ${summary ? 'คำนวณ Percent Rank ใหม่' : 'คำนวณ Percent Rank'}
+              </button>
+              <span class="percent-rank-hint">${esc(readinessText)}</span>
+            </div>
+            ${summary ? `
+              <div class="percent-rank-summary">
+                <div><span>คอลัมน์สร้างใหม่</span><strong>${summary.createdColumns.toLocaleString()}</strong></div>
+                <div><span>คอลัมน์ที่อัปเดต</span><strong>${summary.updatedColumns.toLocaleString()}</strong></div>
+                <div><span>ค่าที่คำนวณสำเร็จ</span><strong>${summary.calculatedValues.toLocaleString()}</strong></div>
+                <div><span>ค่า Return ที่ไม่มีข้อมูล</span><strong>${summary.missingReturnValues.toLocaleString()}</strong></div>
+                <div><span>แถวที่ไม่มี AVP® Category</span><strong>${summary.missingCategoryRows.toLocaleString()}</strong></div>
+                <div><span>แถวที่ไม่มี Fund Type</span><strong>${summary.missingFundTypeRows.toLocaleString()}</strong></div>
+              </div>
+              <div class="table-wrapper percent-rank-sample-table">
+                <table>
+                  <thead><tr><th>AVP® Category</th><th>Fund Type</th><th>ช่วงเวลา</th><th>ขนาดกลุ่ม</th><th>Return</th><th>Percent Rank</th></tr></thead>
+                  <tbody>
+                    ${summary.sample.flatMap(item => item.values.map((value, index) => `
+                      <tr>
+                        <td>${index === 0 ? esc(item.category) : ''}</td>
+                        <td>${index === 0 ? esc(item.fundType) : ''}</td>
+                        <td>${esc(value.key)}</td>
+                        <td>${esc(value.groupSize)}</td>
+                        <td>${esc(value.returnValue)}</td>
+                        <td><strong>${esc(value.percentRank)}%</strong></td>
+                      </tr>`)).join('')}
+                  </tbody>
+                </table>
+              </div>
+              <details class="percent-rank-columns"><summary>ดูคอลัมน์ Percent Rank ทั้งหมด ${summary.metrics.length.toLocaleString()} คอลัมน์</summary>
+                <div>${summary.metrics.map(metric => `<span class="badge badge-data-origin">${esc(metric.source)} → ${esc(metric.target)}</span>`).join('')}</div>
+              </details>
+            ` : ''}
+          </div>
+        </div>`;
+    };
 
       const render = () => {
       const job = active.job;
@@ -8874,7 +9129,7 @@ const Pages = {
                   <div>
                     <strong>1. Fund Key Performance AVP _ Morningstar (Use)</strong> <span>(ข้อควรระวัง)</span>
                     <p>ใช้ข้อมูลจากแท็บ <strong>Fund</strong></p>
-                    <p><strong>สำคัญ:</strong> ต้องเพิ่มคอลัมน์ในหัวตารางให้เป็นปีปัจจุบัน ได้แก่ <strong>Percent Rank % YYYY</strong> และ <strong>Calendar Year Return YYYY</strong> เช่น <strong>YYYY</strong> = ปี ค.ศ.</p>
+                    <p><strong>สำคัญ:</strong> ให้มีคอลัมน์ <strong>Calendar Year Return YYYY</strong> ของปีปัจจุบัน ส่วนคอลัมน์ Percent Rank ระบบจะสร้างและคำนวณให้อัตโนมัติในขั้นตอน 3.1</p>
                   </div>
                   <div>
                     <strong>2. AVP Thai Fund for Quality.xlsx และ AVP Master Fund ID.xlsx</strong>
@@ -8934,6 +9189,8 @@ const Pages = {
             </div>
           </div>` : ''}
 
+          ${preview && job.key === 'percentrank' ? renderPercentRankStep(preview) : ''}
+
           <div class="card data-import-card">
             <div class="card-header">
               <span class="card-title data-import-card-title-step"><span class="data-import-step-no">4</span>กำหนดข้อมูลปลายทางประจำไตรมาส</span>
@@ -8955,7 +9212,8 @@ const Pages = {
                 <div class="fund-field import-status-action-cell">
                   <span>บันทึกข้อมูลปลายทาง</span>
                   <div class="data-import-actions data-import-status-actions">
-                    ${preview ? `<button class="btn btn-primary import-commit-btn" id="import-commit" type="button" ${State.dataImport.isImporting ? 'disabled' : ''}>บันทึกข้อมูล</button>` : ''}
+                    ${preview ? `<button class="btn btn-primary import-commit-btn" id="import-commit" type="button" ${State.dataImport.isImporting || (job.key === 'percentrank' && !preview.percentRank?.summary) ? 'disabled' : ''}>บันทึกข้อมูล</button>` : ''}
+                    ${preview && job.key === 'percentrank' && !preview.percentRank?.summary ? '<span class="json-export-hint">คำนวณ Percent Rank ในขั้นตอน 3.1 ก่อนบันทึก</span>' : ''}
                     ${preview?.targetExists ? `
                       <label class="fund-manager-check import-confirm">
                         <input type="checkbox" id="import-overwrite-confirm">
@@ -9029,6 +9287,7 @@ const Pages = {
           const key = e.target.dataset.columnKey;
           const value = e.target.value;
           if (!key) return;
+          rememberImportPreviewScroll();
           if (value === 'auto') {
             delete State.dataImport.columnTypes[key];
           } else {
@@ -9037,6 +9296,7 @@ const Pages = {
           if (State.dataImport.preview?.rows) {
             State.dataImport.preview = {
               ...State.dataImport.preview,
+              percentRank: null,
               columns: analyzeImportColumns(State.dataImport.preview.rows),
             };
           }
@@ -9047,7 +9307,7 @@ const Pages = {
         const previewNow = State.dataImport.preview;
         if (!previewNow?.rows?.length) return;
         const rows = renameDuplicateImportHeaders(previewNow.rows);
-        State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
+        State.dataImport.preview = invalidatePercentRankPreview(previewNow, rows);
         toast('เปลี่ยนชื่อหัวตารางซ้ำอัตโนมัติแล้ว', 'success');
         render();
       });
@@ -9058,7 +9318,7 @@ const Pages = {
         if (!previewNow?.rows?.length || !removeIndexes.length) return;
         rememberImportPreviewScroll();
         const rows = removeImportColumns(previewNow.rows, removeIndexes);
-        State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
+        State.dataImport.preview = invalidatePercentRankPreview(previewNow, rows);
         toast(`ลบคอลัมน์ซ้ำ ${removeIndexes.length.toLocaleString()} คอลัมน์ออกจาก Preview แล้ว`, 'success', 4200);
         render();
       });
@@ -9070,7 +9330,7 @@ const Pages = {
           const headerName = cleanImportText(previewNow.rows[0]?.[colIdx]) || `Column ${colIdx + 1}`;
           rememberImportPreviewScroll();
           const rows = removeImportColumns(previewNow.rows, [colIdx]);
-          State.dataImport.preview = refreshImportPreviewMeta(previewNow, rows);
+          State.dataImport.preview = invalidatePercentRankPreview(previewNow, rows);
           toast(`ลบคอลัมน์ ${headerName} ออกจาก Preview แล้ว`, 'success', 4200);
           render();
         });
@@ -9112,10 +9372,32 @@ const Pages = {
           render();
         }
       });
+      $('#import-calculate-percent-rank', area)?.addEventListener('click', () => {
+        const previewNow = State.dataImport.preview;
+        if (!previewNow?.rows?.length) return;
+        if (previewNow.headerReport?.exactDuplicates?.length) {
+          toast('กรุณาจัดการหัวตารางซ้ำก่อนคำนวณ Percent Rank', 'warning', 5000);
+          return;
+        }
+        try {
+          const result = calculateImportPercentRanks(previewNow.rows);
+          State.dataImport.preview = refreshImportPreviewMeta(previewNow, result.rows, {
+            percentRank: { summary: result.summary },
+          });
+          toast(`คำนวณ Percent Rank สำเร็จ ${result.summary.metricCount.toLocaleString()} ช่วงเวลา`, 'success', 5000);
+          render();
+        } catch (err) {
+          toast(err.message || 'คำนวณ Percent Rank ไม่สำเร็จ', 'error', 6000);
+        }
+      });
       $('#import-commit', area)?.addEventListener('click', async () => {
         const previewNow = State.dataImport.preview;
         if (!previewNow?.rows?.length) {
           toast('ไม่มีข้อมูลสำหรับนำเข้า', 'warning');
+          return;
+        }
+        if (job.key === 'percentrank' && !previewNow.percentRank?.summary) {
+          toast('กรุณาคำนวณ Percent Rank ในขั้นตอน 3.1 ก่อนบันทึกข้อมูล', 'warning', 5000);
           return;
         }
         if (previewNow.targetExists && !$('#import-overwrite-confirm', area)?.checked) {
@@ -9224,6 +9506,18 @@ const Pages = {
       { id: '20_nav_daily', title: 'NAV รายวัน', file: '20_nav_daily.csv', endpoint: '/v2/fund/daily-info/nav', group: 'Daily', cadence: 'ทุกวัน', keys: ['proj_id', 'fund_class_name', 'nav_date'], columns: ['proj_id', 'fund_class_name', 'nav_date', 'last_val', 'last_upd_date'] },
       { id: '21_dividend_history', title: 'ประวัติปันผล', file: '21_dividend_history.csv', endpoint: '/v2/fund/daily-info/dividend-history', group: 'Weekly', cadence: 'สัปดาห์ละครั้ง', keys: ['proj_id'], columns: ['proj_id', 'class_abbr_name', 'dividend_date', 'dividend_value', 'last_upd_date'] },
     ];
+    const rememberSecImportPreviewScroll = () => {
+      const wrap = area.querySelector('.import-preview-table');
+      State.secDataImport.previewScrollLeft = wrap?.scrollLeft || 0;
+    };
+    const restoreSecImportPreviewScroll = () => {
+      const left = State.secDataImport.previewScrollLeft || 0;
+      if (!left) return;
+      requestAnimationFrame(() => {
+        const wrap = area.querySelector('.import-preview-table');
+        if (wrap) wrap.scrollLeft = Math.min(left, wrap.scrollWidth);
+      });
+    };
 
     const secImportPrefsKey = 'sec-data-import-prefs-v1';
     const defaultSelectedDatasetIds = secDatasets
@@ -9587,31 +9881,63 @@ const Pages = {
       if ((minText || maxText) === (maxText || minText)) return minText || maxText;
       return `${minText || '-'} ถึง ${maxText || '-'}`;
     };
+    const secRequestEvidence = values => {
+      const headers = values?.[0] || [];
+      const firstRow = values?.[1] || [];
+      const valueOf = name => {
+        const index = secColumnIndex(headers, [name]);
+        return index >= 0 ? String(firstRow[index] ?? '').trim() : '';
+      };
+      const mode = valueOf('sec_request_mode');
+      if (!mode || mode === 'not_applicable') return '';
+      const startDate = valueOf('sec_request_start_date');
+      const endDate = valueOf('sec_request_end_date');
+      const startPeriod = valueOf('sec_request_start_period');
+      const endPeriod = valueOf('sec_request_end_period');
+      if (mode === 'factsheet_date_range') return `คำขอ: latest=false · ${startDate || '-'} ถึง ${endDate || '-'}`;
+      if (mode === 'factsheet_latest') return 'คำขอ: latest=true';
+      if (mode === 'nav_date_range') return `คำขอ NAV: ${startDate || '-'} ถึง ${endDate || '-'}`;
+      if (mode === 'period_range') return `คำขอ period: ${startPeriod || '-'} ถึง ${endPeriod || '-'}`;
+      if (mode === 'full_history_available_from_sec') return 'คำขอ: ประวัติทั้งหมดที่ SEC มี';
+      return `คำขอ: ${mode}`;
+    };
     const secDataCoverage = (values, item) => {
       const headers = values?.[0] || [];
       if (!headers.length) return { label: 'ข้อมูลจริง', value: '-', note: '' };
+      const requestNote = secRequestEvidence(values);
       if (item.id === '06_factsheet_urls') {
         const range = secColumnRange(values, headers, ['as_of_date']);
-        return { label: 'as_of_date', value: secRangeText(range) || '-', note: '' };
+        return { label: 'as_of_date', value: secRangeText(range) || '-', note: requestNote };
       }
       if (['18_outstanding_portfolio', '19_portfolio_asset_type'].includes(item.id)) {
         const range = secColumnRange(values, headers, ['period'], 'period');
-        return { label: 'period', value: secRangeText(range) || '-', note: '' };
+        return { label: 'period', value: secRangeText(range) || '-', note: requestNote };
       }
       if (item.id === '20_nav_daily') {
         const range = secColumnRange(values, headers, ['nav_date']);
-        return { label: 'nav_date', value: secRangeText(range) || '-', note: '' };
+        return { label: 'nav_date', value: secRangeText(range) || '-', note: requestNote };
       }
       if (item.id === '21_dividend_history') {
         const range = secColumnRange(values, headers, ['dividend_date']);
-        return { label: 'dividend_date', value: secRangeText(range) || '-', note: '' };
+        return { label: 'dividend_date', value: secRangeText(range) || '-', note: requestNote };
       }
       if (secFactsheetLatestDatasetIds.has(item.id)) {
+        const startRange = secColumnRange(values, headers, ['start_date']);
+        const endRange = secColumnRange(values, headers, ['end_date']);
+        const startText = secRangeText(startRange);
+        const endText = secRangeText(endRange);
+        if (startText || endText) {
+          return {
+            label: 'start/end ในข้อมูลจริง',
+            value: `${startText || '-'} ถึง ${endText || '-'}`,
+            note: requestNote,
+          };
+        }
         const range = secColumnRange(values, headers, ['last_upd_date']);
         return {
           label: 'last_upd_date',
           value: secMonthRangeText(range) || '-',
-          note: 'แสดงเดือนที่ข้อมูล factsheet ถูกอัปเดตล่าสุด',
+          note: [requestNote, 'ไม่พบ start_date/end_date ในผลลัพธ์; ค่านี้คือเวลาอัปเดต ไม่ใช่ช่วงข้อมูล'].filter(Boolean).join(' · '),
         };
       }
       const startRange = secColumnRange(values, headers, ['start_date']);
@@ -9619,8 +9945,8 @@ const Pages = {
       const fallbackRange = secColumnRange(values, headers, ['as_of_date', 'nav_date', 'dividend_date', 'period']);
       const startText = secRangeText(startRange);
       const endText = secRangeText(endRange);
-      if (startText || endText) return { label: 'start/end ในข้อมูล', value: `${startText || '-'} ถึง ${endText || '-'}`, note: '' };
-      return { label: 'ข้อมูลจริง', value: secRangeText(fallbackRange) || '-', note: '' };
+      if (startText || endText) return { label: 'start/end ในข้อมูล', value: `${startText || '-'} ถึง ${endText || '-'}`, note: requestNote };
+      return { label: 'ข้อมูลจริง', value: secRangeText(fallbackRange) || '-', note: requestNote };
     };
     const secCoverageHtml = (status) => {
       if (!status?.exists) return '<span class="sec-dataset-status is-missing">-</span>';
@@ -10012,6 +10338,17 @@ const Pages = {
               <div class="sec-period-guidance sec-data-field-full">
                 แนวทางการกำหนดช่วงข้อมูล: <strong>XXXX-Q1</strong> ใช้ช่วงเดือน <strong>08 ของปีก่อน ถึง 02 ของปีนั้น</strong> และ <strong>XXXX-Q3</strong> ใช้ช่วงเดือน <strong>02 ถึง 08 ของปีนั้น</strong>
               </div>
+              <fieldset class="sec-factsheet-mode sec-data-field-full">
+                <legend>รูปแบบข้อมูล Factsheet</legend>
+                <label class="sec-factsheet-mode-option">
+                  <input type="radio" name="sec-factsheet-latest" value="true" ${prefValue('latest', 'true') !== 'false' ? 'checked' : ''}>
+                  <span><strong>ข้อมูลล่าสุด</strong><small>ส่ง latest=true และไม่ใช้ช่วงวันที่กับ Factsheet</small></span>
+                </label>
+                <label class="sec-factsheet-mode-option">
+                  <input type="radio" name="sec-factsheet-latest" value="false" ${prefValue('latest', 'true') === 'false' ? 'checked' : ''}>
+                  <span><strong>ข้อมูลย้อนหลังตามวันที่</strong><small>ส่ง latest=false พร้อมวันที่เริ่มต้นและวันที่สิ้นสุด</small></span>
+                </label>
+              </fieldset>
               <label class="fund-field sec-data-field-half">
                 <span>วันที่เริ่มต้น</span>
                 <input class="fund-input" id="sec-start-date" type="date" value="${esc(prefValue('startDate', '2026-01-01'))}">
@@ -10052,7 +10389,7 @@ const Pages = {
             </div>
             <div class="sec-workflow-panel">
               <div class="sec-workflow-copy">
-                เมื่อกด <strong>รัน GitHub Actions</strong> ระบบจะอัปเดต raw tabs ตาม endpoint ที่เลือก และเขียนข้อมูลชุดล่าสุดใหม่ให้พร้อมใช้ในขั้นตอนถัดไป
+                เมื่อกด <strong>รัน GitHub Actions</strong> ระบบจะอัปเดต raw tabs ตาม endpoint และเงื่อนไขที่เลือก พร้อมเขียนคอลัมน์ <strong>sec_request_*</strong> ไว้เป็นหลักฐานในแต่ละ raw tab
               </div>
               <div class="sec-workflow-status" id="sec-workflow-status" hidden></div>
             </div>
@@ -10252,6 +10589,7 @@ const Pages = {
         </div>
 
       </div>`;
+    restoreSecImportPreviewScroll();
 
     const presetMap = {
       custom: null,
@@ -10329,6 +10667,7 @@ const Pages = {
         fundClassName: '',
         startDate: $('#sec-start-date', area)?.value || '',
         endDate: $('#sec-end-date', area)?.value || '',
+        latest: $('input[name="sec-factsheet-latest"]:checked', area)?.value || 'true',
         startPeriod: $('#sec-start-period', area)?.value || '',
         endPeriod: $('#sec-end-period', area)?.value || '',
         registeredMaxFunds: $('#sec-registered-max-funds', area)?.value || '0',
@@ -10468,7 +10807,7 @@ const Pages = {
 	        use_existing_profiles: 'true',
 	        registered_max_funds: registeredMaxFunds,
 	        fund_class_name: '',
-	        latest: 'true',
+	        latest: $('input[name="sec-factsheet-latest"]:checked', area)?.value || 'true',
 	        start_date: ($('#sec-start-date', area)?.value || '').trim(),
 	        end_date: ($('#sec-end-date', area)?.value || '').trim(),
 	        start_period: ($('#sec-start-period', area)?.value || '').trim(),
@@ -10497,6 +10836,10 @@ const Pages = {
         syncSelectedState();
         saveSecImportPrefs();
       });
+    });
+
+    $$('input[name="sec-factsheet-latest"]', area).forEach(input => {
+      input.addEventListener('change', saveSecImportPrefs);
     });
 
     $('#sec-add-project-pair', area)?.addEventListener('click', () => {
@@ -10573,9 +10916,13 @@ const Pages = {
 	      try {
 	        await dispatchSecWorkflow(inputs, token);
 
+	        const requestSummary = inputs.latest === 'false'
+	          ? `Factsheet: <strong>latest=false</strong> · ${esc(inputs.start_date || '-')} ถึง ${esc(inputs.end_date || '-')}`
+	          : 'Factsheet: <strong>latest=true</strong>';
 	        updateWorkflowStatus(secGithubProxyUrl && !token
 	          ? `ส่งคำสั่งรันผ่าน Apps Script สำเร็จแล้ว <a href="${esc(secWorkflowUrl)}" target="_blank" rel="noopener noreferrer">เปิด GitHub Actions</a>`
-	          : 'ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...', 'is-running');
+	          : 'ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...'
+	          + `<br>${requestSummary}`, 'is-running');
 	        toast(successMessage || 'รัน GitHub Actions สำเร็จแล้ว', 'success', 5000);
 	        if (token) {
 	          startWorkflowPolling(token);
@@ -10643,7 +10990,10 @@ const Pages = {
 	          }
 	        }
 	        updateWorkflowStatus(
-	          `ส่งคำสั่งรันแยก ${datasetKeys.length} endpoint ครบแล้ว โดยแบ่งเป็น ${batches.length} ชุด <a href="${esc(secWorkflowUrl)}" target="_blank" rel="noopener noreferrer">เปิด GitHub Actions</a>`,
+	          `ส่งคำสั่งรันแยก ${datasetKeys.length} endpoint ครบแล้ว โดยแบ่งเป็น ${batches.length} ชุด <a href="${esc(secWorkflowUrl)}" target="_blank" rel="noopener noreferrer">เปิด GitHub Actions</a><br>`
+	          + (inputs.latest === 'false'
+	            ? `Factsheet: <strong>latest=false</strong> · ${esc(inputs.start_date || '-')} ถึง ${esc(inputs.end_date || '-')}`
+	            : 'Factsheet: <strong>latest=true</strong>'),
 	          'is-running'
 	        );
 	        toast(`ส่งคำสั่งรันแยก ${datasetKeys.length} endpoint ครบแล้ว`, 'success', 5000);
@@ -10899,6 +11249,7 @@ const Pages = {
 	        const key = e.target.dataset.columnKey;
 	        const value = e.target.value;
 	        if (!key) return;
+	        rememberSecImportPreviewScroll();
 	        if (value === 'auto') {
 	          delete State.secDataImport.columnTypes[key];
 	        } else {
@@ -10917,6 +11268,7 @@ const Pages = {
 	    $('#import-rename-duplicates', area)?.addEventListener('click', () => {
 	      const previewNow = State.secDataImport.preview;
 	      if (!previewNow?.rows?.length) return;
+	      rememberSecImportPreviewScroll();
 	      const rows = renameDuplicateImportHeaders(previewNow.rows);
 	      State.secDataImport.preview = refreshSecDataPreparationPreview(rows, { isPartial: previewNow.isPartial });
 	      State.secDataImport.dataPreparationPreview = State.secDataImport.preview;
@@ -10929,6 +11281,7 @@ const Pages = {
 	      const duplicates = previewNow?.headerReport?.exactDuplicates || [];
 	      const removeIndexes = duplicates.flatMap(item => (item.columns || []).slice(1).map(col => Number(col) - 1));
 	      if (!previewNow?.rows?.length || !removeIndexes.length) return;
+	      rememberSecImportPreviewScroll();
 	      const rows = removeImportColumns(previewNow.rows, removeIndexes);
 	      State.secDataImport.preview = refreshSecDataPreparationPreview(rows, { isPartial: previewNow.isPartial });
 	      State.secDataImport.dataPreparationPreview = State.secDataImport.preview;
@@ -10941,6 +11294,7 @@ const Pages = {
 	        const previewNow = State.secDataImport.preview;
 	        const colIdx = Number(e.currentTarget.dataset.secDeleteColumn);
 	        if (!previewNow?.rows?.length || !Number.isInteger(colIdx)) return;
+	        rememberSecImportPreviewScroll();
 	        const headerName = String(previewNow.rows[0]?.[colIdx] || `Column ${colIdx + 1}`).trim();
 	        const rows = removeImportColumns(previewNow.rows, [colIdx]);
 	        State.secDataImport.preview = refreshSecDataPreparationPreview(rows, { isPartial: previewNow.isPartial });
@@ -11742,9 +12096,9 @@ const Pages = {
             <span class="row-count-badge is-info" id="sf-selected-count">เลือกแล้ว ${State.selectedKeys.size.toLocaleString()} กองทุน</span>
             ${sourceBadgeHtml('select-fund', cfg.source)}
             ${getPageDataSourceBadge('select-fund') ? `<span class="badge badge-data-origin">${esc(getPageDataSourceBadge('select-fund'))}</span>` : ''}
-            ${Object.keys(State.highlights).length > 0
-              ? `<span class="badge badge-accent">ตั้งค่าสีไว้ ${Object.keys(State.highlights).length} กองทุน</span>`
-              : ''}
+            <span class="badge badge-accent" id="sf-highlight-count" ${Object.keys(State.highlights).length > 0 ? '' : 'hidden'}>
+              ตั้งค่าสีไว้ ${Object.keys(State.highlights).length} กองทุน
+            </span>
             ${Object.keys(State.fundOverrides?.items || {}).length > 0
               ? `<span class="badge badge-success">ข้อมูลแก้ไข ${Object.keys(State.fundOverrides.items).length} รายการ</span>`
               : ''}
@@ -11873,7 +12227,16 @@ const Pages = {
           const rawValue = el.value;
           if (rawValue === '') delete State.highlights[fund];
           else State.highlights[fund] = parseInt(rawValue, 10);
-          render(pg, { preserveScroll: true });
+          updateHighlightSelectAppearance(el, State.highlights[fund]);
+          const highlightCount = Object.keys(State.highlights).length;
+          const highlightCountEl = $('#sf-highlight-count', area);
+          if (highlightCountEl) {
+            highlightCountEl.textContent = `ตั้งค่าสีไว้ ${highlightCount} กองทุน`;
+            highlightCountEl.hidden = highlightCount === 0;
+          }
+          if (State.selectFundSort.key === 'highlight') {
+            render(pg, { preserveScroll: true });
+          }
         });
       });
 
@@ -11955,7 +12318,10 @@ const Pages = {
 
     const allYears = ['2010','2011','2012','2013','2014','2015','2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'];
     const returnCols = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, [`Calendar Year Return ${y}`])]));
-    const rankPct = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, [`Rank % Calender Year ${y}`])]));
+    const rankPct = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, [
+      `Percent Rank % Calendar Year ${y}`,
+      `Rank % Calender Year ${y}`,
+    ])]));
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
     const sortState = State.reportSorts['thai-calendar'];
     const selectedYears = (State.reportOptions['thai-calendar-years'] || []).filter(y => allYears.includes(y));
@@ -16880,7 +17246,10 @@ const Pages = {
           const rawValue = el.value;
           if (rawValue === '') delete State.highlights[fund];
           else State.highlights[fund] = parseInt(rawValue, 10);
-          render(pg, { preserveScroll: true });
+          updateHighlightSelectAppearance(el, State.highlights[fund]);
+          if (sortState.key === 'highlight') {
+            render(pg, { preserveScroll: true });
+          }
         });
       });
       $('#pg-prev', area)?.addEventListener('click', () => render(pg - 1));
