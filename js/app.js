@@ -800,12 +800,21 @@ function previousMonthLabelFromDateValue(value) {
   return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][previousIndex];
 }
 
+function monthLabelFromDateValue(value) {
+  const monthIndex = parseMonthIndexFromDateValue(value);
+  if (monthIndex === null) return '';
+  return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][monthIndex];
+}
+
 function sourceBadgeHtml(pageKey, sourceLabel = '') {
   if (!sourceLabel) return '';
   const isPercentrank = /percentrank freestyle/i.test(sourceLabel);
-  const fundSizeDate = isPercentrank ? getPercentrankFundSizeDate() : '';
-  const previousMonth = fundSizeDate ? previousMonthLabelFromDateValue(fundSizeDate) : '';
-  const label = previousMonth ? `${sourceLabel} - ${previousMonth}` : sourceLabel;
+  const isSelectFund = pageKey === 'select-fund' && /fund key performance avp/i.test(sourceLabel);
+  const fundSizeDate = (isPercentrank || isSelectFund) ? getPercentrankFundSizeDate() : '';
+  const monthLabel = fundSizeDate
+    ? (isPercentrank ? previousMonthLabelFromDateValue(fundSizeDate) : monthLabelFromDateValue(fundSizeDate))
+    : '';
+  const label = monthLabel ? `${sourceLabel} - ${monthLabel}` : sourceLabel;
   return `<span class="badge badge-source">แหล่งข้อมูลจาก: ${esc(label)}</span>`;
 }
 
@@ -3189,6 +3198,76 @@ function buildSelectedFundsCatalog(rows) {
       assetHouse: (CI.ASSET_HOUSE >= 0 ? r[CI.ASSET_HOUSE] : '') || '',
     };
   }).filter(f => f.code);
+}
+
+function parseSecRegistrationDate(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+
+  let year;
+  let month;
+  let day;
+  let match = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[T\s].*)?$/.exec(text);
+  if (match) {
+    [, year, month, day] = match;
+  } else {
+    match = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/.exec(text);
+    if (!match) return null;
+    [, day, month, year] = match;
+  }
+
+  let numericYear = Number(year);
+  const numericMonth = Number(month);
+  const numericDay = Number(day);
+  if (numericYear >= 2400) numericYear -= 543;
+  if (numericMonth < 1 || numericMonth > 12 || numericDay < 1 || numericDay > 31) return null;
+  const date = new Date(Date.UTC(numericYear, numericMonth - 1, numericDay));
+  if (
+    date.getUTCFullYear() !== numericYear ||
+    date.getUTCMonth() !== numericMonth - 1 ||
+    date.getUTCDate() !== numericDay
+  ) return null;
+  return date;
+}
+
+function ipoRegistrationWindowForQuarter(quarter) {
+  const match = /^(\d{4})-Q([13])$/i.exec(String(quarter || '').trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const quarterNo = Number(match[2]);
+  if (quarterNo === 1) {
+    return {
+      start: new Date(Date.UTC(year - 1, 7, 1)),
+      end: new Date(Date.UTC(year, 2, 0)),
+    };
+  }
+  return {
+    start: new Date(Date.UTC(year, 1, 1)),
+    end: new Date(Date.UTC(year, 8, 0)),
+  };
+}
+
+function buildIpoFundCodeSet(secRows, quarter) {
+  const window = ipoRegistrationWindowForQuarter(quarter);
+  const headers = secRows?.[0] || [];
+  const regisDateIdx = findColumnIndex(headers, ['regis_date', 'Regis Date', 'Registration Date']);
+  if (!window || regisDateIdx < 0) return new Set();
+
+  const codeIndexes = [
+    findColumnIndex(headers, ['fund_code', 'Fund Code']),
+    findColumnIndex(headers, ['fund_class_abbr_name', 'class_abbr_name', 'fund_class_name']),
+    findColumnIndex(headers, ['proj_abbr_name']),
+  ].filter(index => index >= 0);
+  const result = new Set();
+  secRows.slice(1).forEach(row => {
+    const date = parseSecRegistrationDate(row?.[regisDateIdx]);
+    if (!date || date < window.start || date > window.end) return;
+    codeIndexes.forEach(index => {
+      const code = String(row?.[index] ?? '').trim();
+      if (code && !/^main$/i.test(code)) result.add(normalizeFundKey(code));
+    });
+  });
+  return result;
 }
 
 function rowValue(row, index) {
@@ -8748,7 +8827,7 @@ const Pages = {
       if (match) return { key: `CY${match[1]}`, target: `Percent Rank % Calendar Year ${match[1]}`, source: name };
       return null;
     };
-    const calculateImportPercentRanks = (rows = []) => {
+    const calculateImportPercentRanks = (rows = [], calculationRows = rows) => {
       if (rows.length < 2) throw new Error('ไม่พบข้อมูลกองทุนสำหรับคำนวณ Percent Rank');
       const headers = [...(rows[0] || [])];
       const normalizedHeaders = headers.map(normalizePercentRankHeader);
@@ -8808,7 +8887,8 @@ const Pages = {
           const rowIndex = offset + 1;
           const category = cleanImportText(row[categoryIndex]);
           const fundType = cleanImportText(row[fundTypeIndex]);
-          const value = parseImportNumber(row[metric.sourceIndex]);
+          const calculationRow = calculationRows[rowIndex] || row;
+          const value = parseImportNumber(calculationRow[metric.sourceIndex]);
           row[metric.targetIndex] = '';
           if (metric === metrics[0] && !category) missingCategoryRows += 1;
           if (metric === metrics[0] && !fundType) missingFundTypeRows += 1;
@@ -8851,12 +8931,17 @@ const Pages = {
           fundType: cleanImportText(row[fundTypeIndex]),
           values: metrics.slice(0, 3).map(metric => ({
             key: metric.key,
-            returnValue: row[metric.sourceIndex],
+            returnValue: (() => {
+              const rawValue = parseImportNumber((calculationRows[outputRows.indexOf(row)] || row)[metric.sourceIndex]);
+              return Number.isNaN(rawValue) ? row[metric.sourceIndex] : rawValue.toFixed(4);
+            })(),
             percentRank: row[metric.targetIndex],
             groupSize: outputRows.slice(1).filter(peer => (
               cleanImportText(peer[categoryIndex]) === cleanImportText(row[categoryIndex])
               && cleanImportText(peer[fundTypeIndex]) === cleanImportText(row[fundTypeIndex])
-              && !Number.isNaN(parseImportNumber(peer[metric.sourceIndex]))
+              && !Number.isNaN(parseImportNumber(
+                (calculationRows[outputRows.indexOf(peer)] || peer)[metric.sourceIndex]
+              ))
             )).length,
           })),
         }));
@@ -9055,6 +9140,7 @@ const Pages = {
               <div><span>คอลัมน์แบ่งกลุ่ม</span><strong>${categoryCount === 1 ? 'AVP® Category ✓' : `${categoryCount.toLocaleString()} คอลัมน์`}</strong></div>
               <div><span>คอลัมน์แบ่งกลุ่มร่วม</span><strong>${fundTypeCount === 1 ? 'Fund Type ✓' : `${fundTypeCount.toLocaleString()} คอลัมน์`}</strong></div>
               <div><span>คอลัมน์ผลตอบแทนที่ตรวจพบ</span><strong>${metricHeaders.length.toLocaleString()} ช่วงเวลา</strong></div>
+              <div><span>ความละเอียดที่ใช้คำนวณ</span><strong>${preview.calculationValueSource === 'UNFORMATTED_VALUE' ? 'ค่าดิบจาก Google Sheets ✓' : 'ค่าที่แสดงใน Preview'}</strong></div>
               ${summary ? `<div><span>กลุ่มที่นำมาเปรียบเทียบ</span><strong>${summary.groupCount.toLocaleString()} กลุ่ม</strong></div>` : ''}
             </div>
             <div class="data-import-actions percent-rank-actions">
@@ -9074,7 +9160,7 @@ const Pages = {
               </div>
               <div class="table-wrapper percent-rank-sample-table">
                 <table>
-                  <thead><tr><th>AVP® Category</th><th>Fund Type</th><th>ช่วงเวลา</th><th>ขนาดกลุ่ม</th><th>Return</th><th>Percent Rank</th></tr></thead>
+                  <thead><tr><th>AVP® Category</th><th>Fund Type</th><th>ช่วงเวลา</th><th>ขนาดกลุ่ม</th><th>Return (ค่าดิบ 4 ตำแหน่ง)</th><th>Percent Rank</th></tr></thead>
                   <tbody>
                     ${summary.sample.flatMap(item => item.values.map((value, index) => `
                       <tr>
@@ -9307,7 +9393,9 @@ const Pages = {
         const previewNow = State.dataImport.preview;
         if (!previewNow?.rows?.length) return;
         const rows = renameDuplicateImportHeaders(previewNow.rows);
+        const calculationRows = renameDuplicateImportHeaders(previewNow.calculationRows || previewNow.rows);
         State.dataImport.preview = invalidatePercentRankPreview(previewNow, rows);
+        State.dataImport.preview.calculationRows = calculationRows;
         toast('เปลี่ยนชื่อหัวตารางซ้ำอัตโนมัติแล้ว', 'success');
         render();
       });
@@ -9318,7 +9406,9 @@ const Pages = {
         if (!previewNow?.rows?.length || !removeIndexes.length) return;
         rememberImportPreviewScroll();
         const rows = removeImportColumns(previewNow.rows, removeIndexes);
+        const calculationRows = removeImportColumns(previewNow.calculationRows || previewNow.rows, removeIndexes);
         State.dataImport.preview = invalidatePercentRankPreview(previewNow, rows);
+        State.dataImport.preview.calculationRows = calculationRows;
         toast(`ลบคอลัมน์ซ้ำ ${removeIndexes.length.toLocaleString()} คอลัมน์ออกจาก Preview แล้ว`, 'success', 4200);
         render();
       });
@@ -9330,7 +9420,9 @@ const Pages = {
           const headerName = cleanImportText(previewNow.rows[0]?.[colIdx]) || `Column ${colIdx + 1}`;
           rememberImportPreviewScroll();
           const rows = removeImportColumns(previewNow.rows, [colIdx]);
+          const calculationRows = removeImportColumns(previewNow.calculationRows || previewNow.rows, [colIdx]);
           State.dataImport.preview = invalidatePercentRankPreview(previewNow, rows);
+          State.dataImport.preview.calculationRows = calculationRows;
           toast(`ลบคอลัมน์ ${headerName} ออกจาก Preview แล้ว`, 'success', 4200);
           render();
         });
@@ -9343,13 +9435,19 @@ const Pages = {
         State.dataImport.jsonReadiness = null;
         setLoading(area, 'กำลังอ่านข้อมูลจาก Raw...');
         try {
-          const [sourceRows, latestTargetMeta] = await Promise.all([
+          const [sourceRows, calculationSourceRows, latestTargetMeta] = await Promise.all([
             job.sourceType === 'xlsx'
               ? getRowsFromXlsx(job, rawTab)
               : SheetsAPI.fetchSheetData(job.rawSheetId, rawTab),
+            job.key === 'percentrank' && job.sourceType !== 'xlsx'
+              ? SheetsAPI.fetchSheetData(job.rawSheetId, rawTab, { valueRenderOption: 'UNFORMATTED_VALUE' })
+              : Promise.resolve(null),
             SheetsAPI.getSheetTabs(job.targetSheetId),
           ]);
           const rows = cleanRowsForJob(job, sourceRows);
+          const calculationRows = calculationSourceRows
+            ? cleanRowsForJob(job, calculationSourceRows)
+            : rows;
           State.dataImport.preview = refreshImportPreviewMeta({
             rawTab,
             targetTab,
@@ -9365,6 +9463,8 @@ const Pages = {
               cleanedHeader: (rows[0] || []).slice(0, 60),
             },
             targetExists: (latestTargetMeta.tabs || []).includes(targetTab),
+            calculationRows,
+            calculationValueSource: calculationSourceRows ? 'UNFORMATTED_VALUE' : 'FORMATTED_VALUE',
           }, rows);
           render();
         } catch (err) {
@@ -9380,7 +9480,10 @@ const Pages = {
           return;
         }
         try {
-          const result = calculateImportPercentRanks(previewNow.rows);
+          const result = calculateImportPercentRanks(
+            previewNow.rows,
+            previewNow.calculationRows || previewNow.rows
+          );
           State.dataImport.preview = refreshImportPreviewMeta(previewNow, result.rows, {
             percentRank: { summary: result.summary },
           });
@@ -9483,6 +9586,10 @@ const Pages = {
   },
 
   secDataImport(area) {
+    if (State.secDataImport.workflowRunsTimer) {
+      window.clearInterval(State.secDataImport.workflowRunsTimer);
+      State.secDataImport.workflowRunsTimer = null;
+    }
     const secDatasets = [
       { id: '01_amcs', title: 'รายชื่อ บลจ.', file: '01_amcs.csv', endpoint: '/v2/fund/general-info/amcs', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['unique_id'], columns: ['unique_id', 'comp_name_th', 'comp_name_en'] },
       { id: '02_profiles', title: 'ข้อมูลกองทุนรวม', file: '02_profiles.csv', endpoint: '/v2/fund/general-info/profiles', group: 'Master', cadence: 'เดือนละครั้ง', keys: ['proj_id', 'fund_class_name'], columns: ['proj_id', 'proj_abbr_name', 'fund_status', 'last_upd_date'] },
@@ -10336,7 +10443,10 @@ const Pages = {
                 <button class="btn btn-secondary sec-project-pair-add" id="sec-add-project-pair" type="button">เพิ่ม proj_id และ fund_class_name ที่ต้องการค้นหา</button>
               </div>
               <div class="sec-period-guidance sec-data-field-full">
-                แนวทางการกำหนดช่วงข้อมูล: <strong>XXXX-Q1</strong> ใช้ช่วงเดือน <strong>08 ของปีก่อน ถึง 02 ของปีนั้น</strong> และ <strong>XXXX-Q3</strong> ใช้ช่วงเดือน <strong>02 ถึง 08 ของปีนั้น</strong>
+                <strong>แนวทางการกำหนดช่วงข้อมูล</strong><br>
+                สามารถเลือกเป็น <strong>ข้อมูลล่าสุด</strong> หรือ <strong>ข้อมูลย้อนหลังตามวันที่</strong><br>
+                • <strong>XXXX-Q1</strong> วันที่เริ่มต้น <strong>01/01/XXXX</strong> และวันที่สิ้นสุด <strong>01/03/XXXX</strong><br>
+                • <strong>XXXX-Q2</strong> วันที่เริ่มต้น <strong>01/05/XXXX</strong> และวันที่สิ้นสุด <strong>01/08/XXXX</strong>
               </div>
               <fieldset class="sec-factsheet-mode sec-data-field-full">
                 <legend>รูปแบบข้อมูล Factsheet</legend>
@@ -10358,7 +10468,10 @@ const Pages = {
                 <input class="fund-input" id="sec-end-date" type="date" value="${esc(prefValue('endDate', '2026-06-30'))}">
               </label>
               <div class="sec-period-guidance sec-data-field-full">
-                แนวทางการกำหนด period: สำหรับข้อมูล <strong>Q1</strong> ตัวอย่าง <strong>2026-Q1</strong> ให้ใส่ period เริ่มต้น <strong>202508</strong> และ period สิ้นสุด <strong>202602</strong>; สำหรับข้อมูล <strong>Q3</strong> ตัวอย่าง <strong>2026-Q3</strong> ให้ใส่ period เริ่มต้น <strong>202602</strong> และ period สิ้นสุด <strong>202608</strong>
+                <strong>แนวทางการกำหนด period</strong><br>
+                ให้กำหนช่วง period ให้สอดคล้องกับช่วงวันที่ของข้อมูลย้อนหลัง<br>
+                • <strong>XXXX-Q1</strong> period เริ่มต้น <strong>XXXX01</strong> และ period สิ้นสุด <strong>XXXX03</strong> เช่น <strong>202601–202603</strong><br>
+                • <strong>XXXX-Q2</strong> period เริ่มต้น <strong>XXXX05</strong> และ period สิ้นสุด <strong>XXXX08</strong> เช่น <strong>202605–202608</strong>
               </div>
               <label class="fund-field sec-data-field-half">
                 <span>period เริ่มต้น</span>
@@ -10393,6 +10506,20 @@ const Pages = {
               </div>
               <div class="sec-workflow-status" id="sec-workflow-status" hidden></div>
             </div>
+            <section class="sec-runs-panel" aria-labelledby="sec-runs-title">
+              <div class="sec-runs-head">
+                <div>
+                  <strong id="sec-runs-title">GitHub Actions — SEC Data Preparation</strong>
+                  <small>ติดตามว่าแต่ละ endpoint กำลังทำงานอะไรอยู่</small>
+                </div>
+                <div class="sec-runs-actions">
+                  <button class="btn btn-secondary btn-sm" id="sec-refresh-runs" type="button">รีเฟรช</button>
+                  <button class="btn btn-secondary btn-sm" id="sec-toggle-runs" type="button" aria-expanded="true">ย่อ</button>
+                </div>
+              </div>
+              <div class="sec-runs-list" id="sec-runs-list"><div class="sec-runs-empty">กำลังโหลดสถานะ...</div></div>
+              <div class="sec-runs-updated" id="sec-runs-updated"></div>
+            </section>
           </div>
         </div>
 
@@ -10470,7 +10597,7 @@ const Pages = {
           <div class="card-body">
             <div class="sec-master-note">
               อ่านข้อมูลจาก raw tabs ที่ตรวจในขั้นตอนที่ 2 แล้วสร้าง tab <strong>data_preparation</strong> เป็นโต๊ะทำงาน และสร้าง <strong>master_view</strong> เป็นข้อมูลพร้อมใช้สำหรับบันทึกปลายทาง/JSON
-              <br>ตรวจสอบสถานะในหน้า Tabs รวมถึงหลักฐานช่วงข้อมูลทั้งหมดให้เป็นข้อมูลล่าสุดตามที่ต้องการก่อน จากนั้นจึงกดปุ่ม <strong>รวบรวมข้อมูล</strong>
+              <br>ตรวจสอบสถานะในหน้า Tabs รวมถึงหลักฐานช่วงข้อมูลทั้งหมดให้เป็นข้อมูลล่าสุดตามที่ต้องการก่อน จากนั้นจึงกดปุ่ม <strong>รวบรวมข้อมูล</strong> โดยใช้เวลาประมาณ <strong>25 - 30 นาที</strong>
             </div>
           </div>
         </div>
@@ -10739,15 +10866,16 @@ const Pages = {
       return `${prefix}: <strong>${esc(label)}</strong> ${esc(runNumber)} - ${esc(title)}${link}`;
     };
 
-    const fetchLatestWorkflowRun = async token => {
-      const url = `${secWorkflowRunsUrl}?branch=main&event=workflow_dispatch&per_page=1`;
+    const fetchWorkflowRuns = async (token = '', perPage = 10) => {
+      const url = `${secWorkflowRunsUrl}?branch=main&event=workflow_dispatch&per_page=${perPage}`;
+      const headers = {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
       const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${token}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
+        headers,
       });
 
       if (!response.ok) {
@@ -10756,7 +10884,73 @@ const Pages = {
       }
 
       const payload = await response.json();
-      return payload.workflow_runs?.[0] || null;
+      return payload.workflow_runs || [];
+    };
+
+    const fetchLatestWorkflowRun = async token => (await fetchWorkflowRuns(token, 1))[0] || null;
+
+    const workflowDuration = run => {
+      const startedAt = new Date(run.run_started_at || run.created_at).getTime();
+      const finishedAt = run.status === 'completed' ? new Date(run.updated_at).getTime() : Date.now();
+      const totalSeconds = Math.max(0, Math.floor((finishedAt - startedAt) / 1000));
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      if (hours) return `${hours} ชม. ${minutes} นาที`;
+      if (minutes) return `${minutes} นาที ${seconds} วินาที`;
+      return `${seconds} วินาที`;
+    };
+
+    const workflowAge = run => {
+      const seconds = Math.max(0, Math.floor((Date.now() - new Date(run.created_at).getTime()) / 1000));
+      if (seconds < 60) return `${seconds} วินาทีที่แล้ว`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)} นาทีที่แล้ว`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)} ชั่วโมงที่แล้ว`;
+      return `${Math.floor(seconds / 86400)} วันที่แล้ว`;
+    };
+
+    const workflowIcon = run => {
+      if (run.status !== 'completed') return '🟡';
+      if (run.conclusion === 'success') return '🟢';
+      if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') return '⚪';
+      return '🔴';
+    };
+
+    const renderWorkflowRuns = runs => {
+      const list = $('#sec-runs-list', area);
+      if (!list) return;
+      if (!runs.length) {
+        list.innerHTML = '<div class="sec-runs-empty">ยังไม่พบ Workflow Run</div>';
+        return;
+      }
+      list.innerHTML = runs.map(run => {
+        const title = run.display_title || run.name || 'SEC Data Preparation';
+        const actor = run.actor?.login ? ` · ${run.actor.login}` : '';
+        const durationLabel = run.status === 'completed' ? `ใช้เวลา ${workflowDuration(run)}` : `ทำงานมาแล้ว ${workflowDuration(run)}`;
+        return `<div class="sec-run-row">
+          <div class="sec-run-main">
+            <div class="sec-run-title"><span class="sec-run-dot">${workflowIcon(run)}</span>#${esc(run.run_number || '-')} · ${esc(workflowStatusLabel(run))} — ${esc(title)}</div>
+            <div class="sec-run-meta">${esc(run.head_branch || 'main')}${esc(actor)} · ${esc(workflowAge(run))}</div>
+          </div>
+          <div class="sec-run-time">${esc(durationLabel)}${run.html_url ? `<a href="${esc(run.html_url)}" target="_blank" rel="noopener noreferrer">เปิดรายละเอียด</a>` : ''}</div>
+        </div>`;
+      }).join('');
+    };
+
+    const loadWorkflowRuns = async () => {
+      const refreshButton = $('#sec-refresh-runs', area);
+      if (refreshButton) refreshButton.disabled = true;
+      try {
+        const token = (($('#sec-github-token', area)?.value || '').trim() || configuredGithubToken);
+        renderWorkflowRuns(await fetchWorkflowRuns(token, 3));
+        const updated = $('#sec-runs-updated', area);
+        if (updated) updated.textContent = `ตรวจล่าสุด ${new Date().toLocaleTimeString('th-TH')} · รีเฟรชอัตโนมัติทุก ${token ? '10 วินาที' : '1 นาที'}`;
+      } catch (err) {
+        const list = $('#sec-runs-list', area);
+        if (list) list.innerHTML = `<div class="sec-runs-empty">โหลดสถานะไม่สำเร็จ: ${esc(err.message || 'GitHub API error')}</div>`;
+      } finally {
+        if (refreshButton) refreshButton.disabled = false;
+      }
     };
 
     const stopWorkflowPolling = () => {
@@ -10924,6 +11118,7 @@ const Pages = {
 	          : 'ส่งคำสั่งรันสำเร็จแล้ว กำลังตรวจสถานะจาก GitHub Actions...'
 	          + `<br>${requestSummary}`, 'is-running');
 	        toast(successMessage || 'รัน GitHub Actions สำเร็จแล้ว', 'success', 5000);
+	        window.setTimeout(loadWorkflowRuns, 2000);
 	        if (token) {
 	          startWorkflowPolling(token);
 	        }
@@ -10997,6 +11192,7 @@ const Pages = {
 	          'is-running'
 	        );
 	        toast(`ส่งคำสั่งรันแยก ${datasetKeys.length} endpoint ครบแล้ว`, 'success', 5000);
+	        window.setTimeout(loadWorkflowRuns, 2000);
 	        if (token) {
 	          startWorkflowPolling(token);
 	        }
@@ -11011,6 +11207,22 @@ const Pages = {
 	    $('#sec-run-workflow', area)?.addEventListener('click', async () => {
 	      const runButton = $('#sec-run-workflow', area);
 	      await runSecRawTabsWorkflow(runButton);
+	    });
+
+	    $('#sec-refresh-runs', area)?.addEventListener('click', loadWorkflowRuns);
+	    const runsPanel = $('.sec-runs-panel', area);
+	    const runsToggle = $('#sec-toggle-runs', area);
+	    const setRunsCollapsed = collapsed => {
+	      State.secDataImport.workflowRunsCollapsed = collapsed;
+	      runsPanel?.classList.toggle('is-collapsed', collapsed);
+	      if (runsToggle) {
+	        runsToggle.textContent = collapsed ? 'แสดง' : 'ย่อ';
+	        runsToggle.setAttribute('aria-expanded', String(!collapsed));
+	      }
+	    };
+	    setRunsCollapsed(Boolean(State.secDataImport.workflowRunsCollapsed));
+	    runsToggle?.addEventListener('click', () => {
+	      setRunsCollapsed(!runsPanel?.classList.contains('is-collapsed'));
 	    });
 
 	    $('#sec-build-master-view', area)?.addEventListener('click', async () => {
@@ -11305,6 +11517,16 @@ const Pages = {
 	    });
 
 	    syncSelectedState();
+	    loadWorkflowRuns();
+	    const runsRefreshMs = configuredGithubToken ? 10000 : 60000;
+	    State.secDataImport.workflowRunsTimer = window.setInterval(() => {
+	      if (!$('#sec-runs-list', area)) {
+	        window.clearInterval(State.secDataImport.workflowRunsTimer);
+	        State.secDataImport.workflowRunsTimer = null;
+	        return;
+	      }
+	      loadWorkflowRuns();
+	    }, runsRefreshMs);
 	  },
 
   /* ── MASTER MAPPING MANAGER ── */
@@ -11943,12 +12165,15 @@ const Pages = {
     setLoading(area, 'กำลังโหลดรายการกองทุน...');
 
     let rawRows;
+    let secRows = [];
     try {
       rawRows = await fetchCached('select-fund');
-      await Promise.all([
+      const [, , loadedSecRows] = await Promise.all([
         loadFundOverrides(),
         loadMasterAllocations(true),
+        fetchCached('master-placeholder-1').catch(() => []),
       ]);
+      secRows = loadedSecRows;
     } catch (e) {
       setError(area, e.message, 'select-fund');
       return;
@@ -11959,6 +12184,8 @@ const Pages = {
       CATEGORY: findColumnIndex(headers, ['AVP® Category', 'AVP®  Category', 'AVP Category']),
     };
     const allFunds = applyFundOverrides(buildSelectedFundsCatalog(rawRows));
+    const selectedQuarter = State.currentQuarter || cfg.tabName || '';
+    const ipoFundCodes = buildIpoFundCodeSet(secRows, selectedQuarter);
 
     State.selectedFunds = Object.fromEntries(allFunds.map(f => [f.key, f]));
 
@@ -12047,7 +12274,7 @@ const Pages = {
             <td class="td-check">
               <input type="checkbox" class="row-chk" data-key="${esc(f.key)}" ${isSelected ? 'checked' : ''}>
             </td>
-            <td class="td-code">${esc(f.code)}</td>
+            <td class="td-code">${esc(f.code)}${ipoFundCodes.has(normalizeFundKey(f.code)) ? ' <span class="badge badge-accent fund-override-mini" title="regis_date อยู่ในช่วงของไตรมาสที่เลือก">IPO</span>' : ''}</td>
             <td class="td-hl">${buildHighlightSelect(f.key, State.highlights[f.key])}</td>
             <td>${esc(f.dividend)}</td>
             <td>${esc(f.style)}</td>
@@ -12110,7 +12337,16 @@ const Pages = {
               : ''}
           </div>
           <div class="table-wrapper">
-            <table>
+            <table class="select-fund-table">
+              <colgroup>
+                <col class="sf-col-check">
+                <col class="sf-col-code">
+                <col class="sf-col-highlight">
+                <col class="sf-col-dividend">
+                <col class="sf-col-style">
+                <col class="sf-col-isin">
+                <col class="sf-col-master">
+              </colgroup>
               <thead><tr>
                 <th class="th-check">
                   <input type="checkbox" id="sf-chk-all" title="เลือกทั้งหมดที่แสดง" ${allVisibleChecked ? 'checked' : ''} ${pageData.length === 0 ? 'disabled' : ''}>
@@ -18732,13 +18968,76 @@ const Pages = {
           <rect x="0" y="0" width="${width}" height="${height}" rx="8" class="uc-chart-bg"></rect>
           ${highlights}
           ${yGrid}
-          ${markerLines}
           ${paths}
+          ${markerLines}
           <line x1="${pad.left}" y1="${pad.top + chartH}" x2="${pad.left + chartW}" y2="${pad.top + chartH}" class="uc-chart-axis"></line>
           <text x="${pad.left}" y="${height - 14}" text-anchor="start" class="uc-chart-axis-label">${esc(formatShortDate(startDate))}</text>
           <text x="${pad.left + chartW}" y="${height - 14}" text-anchor="end" class="uc-chart-axis-label">${esc(formatShortDate(endDate))}</text>
+          <rect x="${pad.left}" y="${pad.top}" width="${chartW}" height="${chartH}" class="uc-chart-hover-target"></rect>
+          <g class="uc-chart-hover" aria-hidden="true">
+            <line y1="${pad.top}" y2="${pad.top + chartH}" class="uc-chart-hover-line"></line>
+            <rect y="${pad.top + 8}" width="116" height="30" rx="7" class="uc-chart-hover-box"></rect>
+            <text y="${pad.top + 28}" text-anchor="middle" class="uc-chart-hover-date"></text>
+          </g>
         </svg>
       `;
+    };
+
+    const bindNavChartHover = (chartEl, series, hiddenSymbols = []) => {
+      const svg = $('.uc-chart-svg', chartEl);
+      if (!svg) return;
+      const target = $('.uc-chart-hover-target', svg);
+      const hover = $('.uc-chart-hover', svg);
+      const hoverLine = $('.uc-chart-hover-line', hover);
+      const hoverBox = $('.uc-chart-hover-box', hover);
+      const hoverDate = $('.uc-chart-hover-date', hover);
+      if (!target || !hover || !hoverLine || !hoverBox || !hoverDate) return;
+
+      const hiddenSet = new Set(hiddenSymbols);
+      const dates = [...new Set(series
+        .filter(item => !hiddenSet.has(item.symbol))
+        .flatMap(item => item.points.map(point => point.date)))]
+        .sort();
+      if (!dates.length) return;
+
+      const width = 1080;
+      const padLeft = 68;
+      const padRight = 22;
+      const chartWidth = width - padLeft - padRight;
+      const dateTimes = dates.map(date => new Date(`${date}T00:00:00`).getTime());
+      const minTime = dateTimes[0];
+      const maxTime = dateTimes[dateTimes.length - 1];
+      const dateAtX = (svgX) => minTime + ((svgX - padLeft) / chartWidth) * ((maxTime - minTime) || 1);
+      const xAtTime = (time) => padLeft + ((time - minTime) / ((maxTime - minTime) || 1)) * chartWidth;
+      const nearestIndex = (time) => {
+        let low = 0;
+        let high = dateTimes.length - 1;
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2);
+          if (dateTimes[mid] < time) low = mid + 1;
+          else high = mid;
+        }
+        if (low > 0 && Math.abs(dateTimes[low - 1] - time) <= Math.abs(dateTimes[low] - time)) return low - 1;
+        return low;
+      };
+      const showAtPointer = (event) => {
+        const rect = svg.getBoundingClientRect();
+        const svgX = ((event.clientX - rect.left) / rect.width) * width;
+        const idx = nearestIndex(dateAtX(Math.max(padLeft, Math.min(padLeft + chartWidth, svgX))));
+        const selectedX = xAtTime(dateTimes[idx]);
+        const tooltipCenterX = Math.max(padLeft + 58, Math.min(padLeft + chartWidth - 58, selectedX));
+        const parts = dates[idx].split('-');
+        const label = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : dates[idx];
+        hoverLine.setAttribute('x1', selectedX.toFixed(2));
+        hoverLine.setAttribute('x2', selectedX.toFixed(2));
+        hoverBox.setAttribute('x', (tooltipCenterX - 58).toFixed(2));
+        hoverDate.setAttribute('x', tooltipCenterX.toFixed(2));
+        hoverDate.textContent = label;
+        hover.classList.add('is-visible');
+      };
+      target.addEventListener('pointermove', showAtPointer);
+      target.addEventListener('pointerenter', showAtPointer);
+      target.addEventListener('pointerleave', () => hover.classList.remove('is-visible'));
     };
 
     const refreshChartRowOptions = () => {
@@ -18853,6 +19152,7 @@ const Pages = {
           chartViewMode,
           getHiddenChartSymbols(),
         );
+        bindNavChartHover(chartEl, series, getHiddenChartSymbols());
       } catch (err) {
         chartEl.innerHTML = `<div class="state-box compact">${esc(err.message || 'วาดกราฟไม่สำเร็จ')}</div>`;
       }

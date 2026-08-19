@@ -126,11 +126,14 @@ const SheetsAPI = {
   },
 
   /* ── Fetch sheet values ── */
-  async fetchSheetData(sheetId, tabName = 'Sheet1') {
+  async fetchSheetData(sheetId, tabName = 'Sheet1', options = {}) {
     if (!this.accessToken) throw new Error('ยังไม่ได้เข้าสู่ระบบ');
 
     const range = encodeURIComponent(tabName);
-    const params = 'valueRenderOption=FORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING';
+    const valueRenderOption = options.valueRenderOption === 'UNFORMATTED_VALUE'
+      ? 'UNFORMATTED_VALUE'
+      : 'FORMATTED_VALUE';
+    const params = `valueRenderOption=${valueRenderOption}&dateTimeRenderOption=FORMATTED_STRING`;
     const url   = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${range}?${params}`;
 
     let resp = await fetch(url, {
@@ -182,18 +185,16 @@ const SheetsAPI = {
     if (!this.accessToken) throw new Error('ยังไม่ได้เข้าสู่ระบบ');
 
     const url  = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?fields=sheets.properties(title,sheetId),properties.title`;
-    let resp;
+    let data;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      resp = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${this.accessToken}` },
-      });
-      if (resp.ok) break;
-      if (![429, 500, 502, 503, 504].includes(resp.status) || attempt === 3) break;
-      await new Promise(resolve => setTimeout(resolve, attempt * 700));
+      try {
+        data = await this._fetchGoogleJson(url);
+        break;
+      } catch (err) {
+        if (attempt === 3 || !/429|500|502|503|504/.test(String(err?.message || ''))) throw err;
+        await new Promise(resolve => setTimeout(resolve, attempt * 700));
+      }
     }
-    if (!resp.ok) throw new Error(`ดึง metadata ไม่สำเร็จ: ${resp.status}`);
-
-    const data = await resp.json();
     return {
       title: data.properties?.title || '',
       tabs:  (data.sheets || []).map(s => s.properties.title),
