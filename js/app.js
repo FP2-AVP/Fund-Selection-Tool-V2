@@ -6230,7 +6230,7 @@ const Pages = {
     };
 
     const rememberExistingWorkingTabs = async (...tabNames) => {
-      if (!cfg.sheetId || !window.SheetsAPI?.fetchSheetData) return;
+      if (!cfg.sheetId || typeof SheetsAPI === 'undefined' || !SheetsAPI.fetchSheetData) return;
       const candidates = [...new Set(tabNames.map(normalizeQuarterTabName).filter(isQuarterTabName))]
         .filter(tabName => !availableSheetTabs.includes(tabName));
       for (const tabName of candidates) {
@@ -6255,7 +6255,7 @@ const Pages = {
     };
 
     const refreshFundListSheetTabs = async () => {
-      if (!cfg.sheetId || !window.SheetsAPI?.getSheetTabs) return [];
+      if (!cfg.sheetId || typeof SheetsAPI === 'undefined' || !SheetsAPI.getSheetTabs) return [];
       const meta = await SheetsAPI.getSheetTabs(cfg.sheetId);
       availableSheetTabs = (meta.tabs || [])
         .map(normalizeQuarterTabName)
@@ -6265,7 +6265,7 @@ const Pages = {
       return availableSheetTabs;
     };
 
-    if (cfg.sheetId && window.SheetsAPI?.getSheetTabs) {
+    if (cfg.sheetId && typeof SheetsAPI !== 'undefined' && SheetsAPI.getSheetTabs) {
       try {
         await refreshFundListSheetTabs();
         const preferredTab = normalizeQuarterTabName(State.currentQuarter || listTo);
@@ -6279,7 +6279,7 @@ const Pages = {
       } catch { /* metadata is helpful, but not required for fallback loading */ }
     }
 
-    if (cfg.sheetId && window.SheetsAPI?.fetchSheetData) {
+    if (cfg.sheetId && typeof SheetsAPI !== 'undefined' && SheetsAPI.fetchSheetData) {
       try {
         activeSheetTab = normalizeQuarterTabName(activeSheetTab || currentQuarterTabName());
         rows = await fetchFundListTabRows(activeSheetTab);
@@ -6382,7 +6382,7 @@ const Pages = {
       const proceed = confirm(`กำลังจะสร้างชุดข้อมูล Fund List ใหม่\n\nจาก: ${fromQuarter}\nไปเป็น: ${toQuarter}\n\nระบบจะตั้งต้นชื่อกองจาก Fund List ปัจจุบันของรอบ ${fromQuarter} แล้วปล่อยช่อง Fund List ${toQuarter} ให้ตรวจ/กรอกต่อ ต้องการสร้างต่อหรือไม่?`);
       if (!proceed) return;
       let baseRows = cleanRows(rows);
-      if (normalizeQuarterTabName(activeSheetTab) !== fromQuarter && cfg.sheetId && window.SheetsAPI?.fetchSheetData) {
+      if (normalizeQuarterTabName(activeSheetTab) !== fromQuarter && cfg.sheetId && typeof SheetsAPI !== 'undefined' && SheetsAPI.fetchSheetData) {
         if (!SheetsAPI.accessToken) await SheetsAPI.requestToken(false);
         baseRows = await fetchFundListTabRows(fromQuarter);
       }
