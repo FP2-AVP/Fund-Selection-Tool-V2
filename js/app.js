@@ -2456,6 +2456,7 @@ function renderFtWorkflowStatusDetail(resultDetail, statusData, databasePayload 
 async function watchFtWorkflowUntilReady({ resultSummary, resultDetail, onReady } = {}) {
   if (!ftHistoricalApiUrl()) return null;
   const maxAttempts = 60;
+  const watchStartedAt = Date.now();
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let statusData = null;
     try {
@@ -2482,8 +2483,38 @@ async function watchFtWorkflowUntilReady({ resultSummary, resultDetail, onReady 
         return { statusData, payload: null };
       }
     } catch (err) {
-      if (resultDetail) {
-        resultDetail.innerHTML = `<div><span>สถานะ</span><strong>${esc(err.message || 'อ่านสถานะ GitHub Actions ไม่สำเร็จ')}</strong></div>`;
+      const statusError = String(err?.message || '');
+      if (/Unknown action:\s*workflowStatus/i.test(statusError)) {
+        try {
+          const payload = await loadFtHistoricalDatabase(true);
+          const health = ftDatabaseHealthSummary(payload);
+          const updatedTime = Date.parse(health.updatedAt || '');
+          const databaseIsFresh = Number.isFinite(updatedTime) && updatedTime >= watchStartedAt - 5000;
+          if (databaseIsFresh) {
+            if (resultSummary) resultSummary.textContent = `ดึงข้อมูลเสร็จและตรวจไฟล์แล้ว: ${health.text}`;
+            if (resultDetail) {
+              resultDetail.innerHTML = `
+                <div><span>สถานะ</span><strong>อัปเดตฐานข้อมูลแล้ว</strong></div>
+                <div><span>รายละเอียด</span><strong>${esc(health.text)}</strong></div>
+                <div><span>ไฟล์ JSON</span><strong>${esc(health.fileName)} · ${esc(health.updatedAt || '-')}</strong></div>
+              `;
+            }
+            if (typeof onReady === 'function') onReady(payload);
+            return { statusData: null, payload };
+          }
+          if (resultSummary) resultSummary.textContent = `GitHub Actions กำลังทำงาน · รอไฟล์ฐานข้อมูลใหม่ (${attempt}/${maxAttempts})`;
+          if (resultDetail) {
+            resultDetail.innerHTML = `
+              <div><span>สถานะ</span><strong>รอ GitHub Actions export/upload ไฟล์กลับเข้า Drive</strong></div>
+              <div><span>ฐานข้อมูลล่าสุด</span><strong>${esc(health.updatedAt || '-')}</strong></div>
+              <div><span>หมายเหตุ</span><strong>Apps Script รุ่นนี้ยังไม่มี workflowStatus จึงตรวจจากเวลาไฟล์แทน</strong></div>
+            `;
+          }
+        } catch (databaseErr) {
+          if (resultDetail) resultDetail.innerHTML = `<div><span>สถานะ</span><strong>${esc(databaseErr.message || 'รอไฟล์ฐานข้อมูลใหม่')}</strong></div>`;
+        }
+      } else if (resultDetail) {
+        resultDetail.innerHTML = `<div><span>สถานะ</span><strong>${esc(statusError || 'อ่านสถานะ GitHub Actions ไม่สำเร็จ')}</strong></div>`;
       }
     }
     await new Promise(resolve => setTimeout(resolve, 10000));
