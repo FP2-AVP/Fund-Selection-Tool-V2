@@ -1277,6 +1277,15 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
         try:
             payload = self.read_request_json()
             symbol = str(payload.get("symbol") or "").strip()
+            symbols_raw = str(payload.get("symbols") or "").strip()
+            all_symbols_from_db_raw = payload.get("allSymbolsFromDb", payload.get("all_symbols_from_db", False))
+            all_symbols_from_db = str(all_symbols_from_db_raw).strip().lower() in {"1", "true", "yes", "on"}
+            continue_on_error_raw = payload.get("continueOnError", payload.get("continue_on_error", True))
+            continue_on_error = str(continue_on_error_raw).strip().lower() not in {"0", "false", "no", "off"}
+            try:
+                sleep_seconds = max(0.0, float(payload.get("sleepSeconds", payload.get("sleep_seconds", 0)) or 0))
+            except (TypeError, ValueError):
+                sleep_seconds = 0.0
             ft_url = str(payload.get("url") or "").strip()
             product_match = re.search(r"/data/(etfs|funds)/tearsheet/", ft_url)
             product_path = product_match.group(1) if product_match else None
@@ -1285,7 +1294,7 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
             if not symbol and ft_url:
                 parsed_url = urlparse(ft_url)
                 symbol = (parse_qs(parsed_url.query).get("s") or [""])[0].strip()
-            if not symbol:
+            if not symbol and not symbols_raw and not all_symbols_from_db:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "FT symbol is required"})
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", start_date):
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "startDate must be YYYY-MM-DD"})
@@ -1294,9 +1303,34 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
             if start_date > end_date:
                 return self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "startDate must be before endDate"})
 
-            from scripts.ft_historical_prices_store import sync_historical_prices
+            from scripts.ft_historical_prices_store import (
+                list_symbols_from_db,
+                parse_symbol_list,
+                sync_historical_prices,
+                sync_historical_symbols,
+            )
 
-            result = sync_historical_prices(symbol, start_date, end_date, product_path=product_path)
+            batch_symbols = parse_symbol_list(symbols_raw)
+            if all_symbols_from_db:
+                seen = {item.upper() for item in batch_symbols}
+                for item in list_symbols_from_db(FT_HISTORICAL_PRICES_DB):
+                    if item.upper() not in seen:
+                        batch_symbols.append(item)
+                        seen.add(item.upper())
+                if not batch_symbols:
+                    return self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": "No FT symbols found in the local database"})
+
+            if batch_symbols:
+                result = sync_historical_symbols(
+                    batch_symbols,
+                    start_date,
+                    end_date,
+                    db_path=FT_HISTORICAL_PRICES_DB,
+                    continue_on_error=continue_on_error,
+                    sleep_seconds=sleep_seconds,
+                )
+            else:
+                result = sync_historical_prices(symbol, start_date, end_date, product_path=product_path)
             for key in ("csvPath", "profileCsvPath", "sqlitePath", "rawDir"):
                 if result.get(key):
                     try:
