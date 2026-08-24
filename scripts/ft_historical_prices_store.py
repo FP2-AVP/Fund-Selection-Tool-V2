@@ -308,6 +308,56 @@ def parse_risk_measures(symbol: str, ft_issue_id: str, page: str, fetched_at: st
     return rows
 
 
+def performance_rows_from_config(
+    symbol: str,
+    ft_issue_id: str,
+    config: dict[str, Any],
+    fetched_at: str,
+    as_of_date: str,
+) -> list[dict[str, str]]:
+    headers, data = config.get("headers") or [], config.get("data") or []
+    rows: list[dict[str, str]] = []
+    for index, period in enumerate(headers):
+        item = data[index] if index < len(data) and isinstance(data[index], dict) else {}
+        for series, key in (
+            ("fund", "rawFundPerformance"),
+            ("category", "categoryPerformance"),
+            ("benchmark", "rawBenchmarkPerformance"),
+        ):
+            value = item.get(key)
+            if series == "category":
+                value = clean_html_text(str(value or "")).replace("%", "")
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "ft_issue_id": ft_issue_id,
+                    "period": str(period),
+                    "series": series,
+                    "value": "" if value is None else str(value).replace("%", "").replace("+", ""),
+                    "as_of_date": as_of_date,
+                    "source": "FT Markets",
+                    "fetched_at": fetched_at,
+                }
+            )
+    return rows
+
+
+def parse_performance_measures(symbol: str, ft_issue_id: str, page: str, fetched_at: str) -> list[dict[str, str]]:
+    """Parse FT's visible trailing-total-return dataset without inferring chart values."""
+    match = re.search(
+        r'data-module-name="TrailingTotalReturnsApp"[^>]*data-mod-config="(?P<config>[^"]+)"',
+        page,
+        re.IGNORECASE,
+    )
+    if not match:
+        return []
+    try:
+        config = json.loads(html.unescape(match.group("config")))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return performance_rows_from_config(symbol, ft_issue_id, config, fetched_at, parse_as_of_date(page))
+
+
 def parse_top_holdings(symbol: str, ft_issue_id: str, page: str, fetched_at: str) -> list[dict[str, str]]:
     as_of_date = ""
     as_of_match = re.search(r"as of\s+([A-Z][a-z]{2}\s+\d{1,2}\s+\d{4})", page, re.IGNORECASE)
@@ -464,6 +514,34 @@ def fetch_risk_measures(symbol: str, ft_issue_id: str, product_path: str = "etfs
     return raw, rows
 
 
+def fetch_performance_measures(symbol: str, ft_issue_id: str, product_path: str = "etfs") -> tuple[dict[str, Any], list[dict[str, str]]]:
+    fetched_at = utc_now()
+    performance_url = ft_tearsheet_url("performance", product_path)
+    page = request_text(performance_url, {"s": symbol})
+    rows = parse_performance_measures(symbol, ft_issue_id, page, fetched_at)
+    as_of_date = parse_as_of_date(page)
+    annual_response = request_text(
+        f"{FT_MARKETS_BASE_URL}/funds/ajax/trailing-total-returns",
+        {"chartType": "annual", "symbol": symbol},
+        referer=f"{performance_url}?{urllib.parse.urlencode({'s': symbol})}",
+    )
+    try:
+        annual_payload = json.loads(annual_response)
+        annual_chart_data = (annual_payload.get("data") or {}).get("chartData") or "{}"
+        annual_config = json.loads(annual_chart_data)
+        rows.extend(performance_rows_from_config(symbol, ft_issue_id, annual_config, fetched_at, as_of_date))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    raw = {
+        "symbol": symbol,
+        "ft_issue_id": ft_issue_id,
+        "fetched_at": fetched_at,
+        "as_of_date": as_of_date,
+        "performance_measures": rows,
+    }
+    return raw, rows
+
+
 def fetch_top_holdings(symbol: str, ft_issue_id: str, product_path: str = "etfs") -> tuple[dict[str, Any], list[dict[str, str]]]:
     fetched_at = utc_now()
     page = request_text(ft_tearsheet_url("holdings", product_path), {"s": symbol})
@@ -545,6 +623,22 @@ def init_db(path: Path) -> None:
             """
         )
         conn.execute("create index if not exists idx_ft_risk_symbol on ft_risk_measures(symbol)")
+        conn.execute(
+            """
+            create table if not exists ft_performance_measures (
+                symbol text not null,
+                ft_issue_id text not null,
+                period text not null,
+                series text not null,
+                value text,
+                as_of_date text,
+                source text not null,
+                fetched_at text not null,
+                primary key (symbol, period, series)
+            )
+            """
+        )
+        conn.execute("create index if not exists idx_ft_performance_symbol on ft_performance_measures(symbol)")
         conn.execute(
             """
             create table if not exists ft_top_holdings (
@@ -671,6 +765,32 @@ def save_risk_rows(db_path: Path, rows: list[dict[str, str]]) -> None:
                 )
                 for row in rows
             ],
+        )
+
+
+def save_performance_rows(db_path: Path, rows: list[dict[str, str]]) -> None:
+    init_db(db_path)
+    if not rows:
+        return
+    with sqlite3.connect(db_path) as conn:
+        symbols = sorted({row["symbol"] for row in rows})
+        conn.executemany("delete from ft_performance_measures where symbol = ?", [(symbol,) for symbol in symbols])
+        conn.executemany(
+            """
+            insert into ft_performance_measures (
+                symbol, ft_issue_id, period, series, value, as_of_date, source, fetched_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(symbol, period, series) do update set
+                ft_issue_id = excluded.ft_issue_id,
+                value = excluded.value,
+                as_of_date = excluded.as_of_date,
+                source = excluded.source,
+                fetched_at = excluded.fetched_at
+            """,
+            [(
+                row["symbol"], row["ft_issue_id"], row["period"], row["series"], row["value"],
+                row["as_of_date"], row["source"], row["fetched_at"],
+            ) for row in rows],
         )
 
 
@@ -1120,6 +1240,7 @@ def sync_qualitative_data(
     ft_issue_id, resolved_product_path = resolve_issue_id(symbol, product_path)
 
     profile_raw, profile_rows = fetch_profile_investment(symbol, ft_issue_id, resolved_product_path)
+    performance_raw, performance_rows = fetch_performance_measures(symbol, ft_issue_id, resolved_product_path)
     risk_raw, risk_rows = fetch_risk_measures(symbol, ft_issue_id, resolved_product_path)
     holdings_raw, holdings_rows = fetch_top_holdings(symbol, ft_issue_id, resolved_product_path)
     as_of_date = (
@@ -1135,6 +1256,10 @@ def sync_qualitative_data(
     save_profile_rows(db_path, profile_rows)
     profile_csv_path = snapshot_dir / "profile_investment.csv"
     write_profile_csv(profile_csv_path, profile_rows)
+
+    performance_raw_path = snapshot_dir / "performance.raw.json"
+    write_raw(performance_raw_path, performance_raw)
+    save_performance_rows(db_path, performance_rows)
 
     risk_raw_path = snapshot_dir / "risk.raw.json"
     write_raw(risk_raw_path, risk_raw)
@@ -1155,6 +1280,7 @@ def sync_qualitative_data(
         "productPath": resolved_product_path,
         "displayName": profile_raw.get("display_name") or risk_raw.get("display_name") or "",
         "profileRows": len(profile_rows),
+        "performanceRows": len(performance_rows),
         "riskRows": len(risk_rows),
         "holdingsRows": len(holdings_rows),
         "asOfDate": as_of_date,
