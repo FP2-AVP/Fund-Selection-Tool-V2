@@ -1552,6 +1552,7 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
                 )
                 rows = []
                 profile_rows = []
+                performance_rows = []
                 risk_rows = []
                 holdings_rows = []
                 stats = []
@@ -1593,6 +1594,28 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
                             order by
                                 case period when '1 year' then 1 when '3 year' then 2 when '5 years' then 3 else 4 end,
                                 metric
+                            """,
+                            (selected_symbol,),
+                        )
+                    ]
+                    performance_rows = [
+                        dict(row)
+                        for row in conn.execute(
+                            """
+                            select
+                                period,
+                                series,
+                                value,
+                                as_of_date as asOfDate,
+                                source,
+                                fetched_at as fetchedAt
+                            from ft_performance_measures
+                            where upper(symbol) = upper(?)
+                            order by
+                                case period when '1 month' then 1 when '3 months' then 2
+                                    when '6 months' then 3 when '1 year' then 4
+                                    when '3 years' then 5 when '5 years' then 6 else 7 end,
+                                series
                             """,
                             (selected_symbol,),
                         )
@@ -1685,6 +1708,7 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
                     "selectedDisplayLabel": f"{selected_symbol} — {selected_display_name}" if selected_display_name else selected_symbol,
                     "rows": rows,
                     "profile": profile_rows if selected_symbol else [],
+                    "performance": performance_rows if selected_symbol else [],
                     "risk": risk_rows if selected_symbol else [],
                     "holdings": holdings_rows if selected_symbol else [],
                     "stats": stats,
