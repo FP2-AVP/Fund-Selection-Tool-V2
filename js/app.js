@@ -12921,6 +12921,16 @@ const Pages = {
       holdingsCount: get(row, ci.holdingsCount), top10Concentration: get(row, ci.top10Concentration), portfolioDate: get(row, ci.portfolioDate),
       return1m: get(row, ci.return1m), return3m: get(row, ci.return3m), return6m: get(row, ci.return6m), return1y: get(row, ci.return1y), return3y: get(row, ci.return3y), return5y: get(row, ci.return5y),
     })).filter(item => item.isin || item.fundId || item.name);
+    let masterOverrideItems = {};
+    try {
+      const response = await fetch('/api/master-fund-overrides', {cache:'no-store'});
+      const data = await response.json();
+      if (response.ok && data.ok) masterOverrideItems = data.items || {};
+    } catch (_) { /* server เก่ายังไม่มี endpoint นี้ */ }
+    Object.values(masterOverrideItems).forEach(profile => sourceMasters.push({
+      isin:profile.isin || '', fundId:profile.masterFundId || '', name:profile.masterFundName || profile.shareClassName || '',
+      baseCurrency:profile.baseCurrency || '', _profile:profile, _override:true,
+    }));
     const draftKey = 'avp-master-fund-profile-drafts-v1';
     const drafts = readJsonPreference(draftKey, {}) || {};
     let selectedIsin = State.masterFundDataManagerIsin || '';
@@ -12981,7 +12991,8 @@ const Pages = {
     const findSource = value => {
       const query = norm(value);
       if (!query) return undefined;
-      return sourceMasters.find(item => [item.isin, item.fundId].some(key => norm(key) && norm(key) === query));
+      const matches = item => [item.isin, item.fundId].some(key => norm(key) && norm(key) === query);
+      return sourceMasters.find(item => item._override && matches(item)) || sourceMasters.find(matches);
     };
     const stripPercent = value => String(value ?? '').replace(/[+,%]/g, '').trim();
     const ftSymbolFromUrl = value => {
@@ -13037,7 +13048,7 @@ const Pages = {
     };
     const render = () => {
       const source = findSource(selectedIsin) || {};
-      const sourceProfile = (source.isin || source.fundId) ? {
+      const sourceProfile = source._profile ? {...source._profile} : (source.isin || source.fundId) ? {
         masterFundId:source.fundId, masterFundName:source.name, shareClassName:source.name, isin:source.isin,
         baseCurrency:source.baseCurrency, shareClass:source.shareClass, ongoingCost:source.ongoingCost,
         ongoingCostDate:source.ongoingCostDate, holdingsCount:source.holdingsCount,
@@ -13045,6 +13056,7 @@ const Pages = {
         return1m:source.return1m, return3m:source.return3m, return6m:source.return6m,
         return1y:source.return1y, return3y:source.return3y, return5y:source.return5y,
       } : {};
+      const isNew = selectedIsin.startsWith('NEW-');
       const profile = { fundStatus:'Active', shareClassStatus:'Active', mappingStatus:'Draft', quarter:State.currentQuarter || '', weight:'100', ...sourceProfile, ...drafts[selectedIsin] };
       if (!profile.isin) profile.isin = source.isin || (selectedIsin.startsWith('NEW-') ? '' : selectedIsin);
       if (!profile.masterFundId) profile.masterFundId = source.fundId || '';
@@ -13066,18 +13078,18 @@ const Pages = {
       };
       area.innerHTML = `<div class="master-data-page">
         <div class="card master-data-toolbar"><div class="sf-filterbar">
-          <label class="master-selector"><span>ค้นหา Master Share Class</span><input id="mfd-master-search" class="search-input" list="mfd-master-list" value="${esc(selectedIsin)}" placeholder="ระบุ ISIN หรือ SecId / FundId"></label>
+          <label class="master-selector"><span>ค้นหา Master Share Class</span><input id="mfd-master-search" class="search-input" list="mfd-master-list" value="${esc(isNew ? '' : selectedIsin)}" placeholder="ระบุ ISIN หรือ SecId / FundId"></label>
           <datalist id="mfd-master-list">${sourceMasters.flatMap(m => [m.isin,m.fundId].filter(Boolean).map(v => `<option value="${esc(v)}">${esc(m.name)}</option>`)).join('')}</datalist>
           <button class="btn btn-primary btn-sm" id="mfd-search" type="button">ค้นหา</button>
           <button class="btn btn-ghost btn-sm" id="mfd-new" type="button">สร้าง Master Fund ใหม่</button>
           <span class="badge ${percent === 100 ? 'badge-success' : 'badge-warning'}">ข้อมูลบังคับ ${filled}/${required.length}</span>
         </div><div class="master-completion"><span style="width:${percent}%"></span></div></div>
-        <div class="master-search-result ${source.isin || source.fundId || drafts[selectedIsin] ? 'is-found' : 'is-not-found'}">${source.isin || source.fundId || drafts[selectedIsin] ? `พบข้อมูลแล้ว: ${esc(source.name || profile.shareClassName || selectedIsin)}` : selectedIsin ? `ยังไม่พบ ${esc(selectedIsin)} ในถังข้อมูล` : 'กรุณาระบุ ISIN หรือ SecId / FundId แล้วกดค้นหา'}</div>
+        <div class="master-search-result ${source.isin || source.fundId || drafts[selectedIsin] || isNew ? 'is-found' : 'is-not-found'}">${isNew ? 'กำลังสร้าง Master Fund ใหม่ · กรอกช่องบังคับแล้วบันทึกเข้า Override' : source.isin || source.fundId || drafts[selectedIsin] ? `พบข้อมูลแล้ว: ${esc(source.name || profile.shareClassName || selectedIsin)}` : selectedIsin ? `ยังไม่พบ ${esc(selectedIsin)} ในถังข้อมูล` : 'กรุณาระบุ ISIN หรือ SecId / FundId แล้วกดค้นหา'}</div>
         <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมเฉพาะช่องว่าง</button><small id="mfd-ft-status">ข้อมูลเดิมจะไม่ถูกเขียนทับ</small></div>
         <form id="mfd-form">
           <div class="master-data-notice"><strong>หลักการ:</strong> กรอกเฉพาะที่มีข้อมูลได้ · ช่องที่มี <span class="master-required">*</span> ใช้เป็น key เชื่อมทุกหน้า</div>
           ${sections.map((section, idx) => `<details class="card master-data-section" ${idx < 3 ? 'open' : ''}><summary><span>${esc(section.title)}</span><small>${esc(section.hint)}</small></summary><div class="master-fields">${section.fields.map(fieldHtml).join('')}</div></details>`).join('')}
-          <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">ขั้นนี้เก็บใน Browser เพื่อทดสอบแบบฟอร์ม</span></div>
+          <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-success" id="mfd-save-override" type="button">บันทึกเข้า Master Fund Override</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">แบบร่างเก็บใน Browser · Override เก็บเป็นไฟล์จริง</span></div>
         </form></div>`;
       const runSearch = () => { const value = $('#mfd-master-search', area).value.trim(); const found = findSource(value); selectedIsin = found?.isin || found?.fundId || value; State.masterFundDataManagerIsin = selectedIsin; render(); };
       $('#mfd-master-search', area)?.addEventListener('change', runSearch);
@@ -13110,6 +13122,22 @@ const Pages = {
         drafts[storageKey] = { ...next, updatedAt:new Date().toISOString() };
         saveJsonPreference(draftKey, drafts); selectedIsin = storageKey; State.masterFundDataManagerIsin = storageKey;
         toast('บันทึกแบบร่าง Master Fund แล้ว', 'success'); render();
+      });
+      $('#mfd-save-override', area)?.addEventListener('click', async () => {
+        const next = {}; $$('.mfd-field', area).forEach(input => { next[input.dataset.key] = input.value.trim(); });
+        const requiredForOverride = ['masterFundId','masterFundName','isin','shareClassName','baseCurrency'];
+        const missing = requiredForOverride.filter(key => !next[key]);
+        if (missing.length) return toast(`กรุณากรอกช่องบังคับ: ${missing.join(', ')}`, 'error');
+        const button = $('#mfd-save-override', area); button.disabled = true;
+        try {
+          const response = await fetch('/api/master-fund-overrides', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile:next})});
+          const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'บันทึก Override ไม่สำเร็จ');
+          const oldKey = selectedIsin; selectedIsin = next.isin; State.masterFundDataManagerIsin = selectedIsin;
+          if (oldKey !== selectedIsin) delete drafts[oldKey]; delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts);
+          masterOverrideItems[selectedIsin.toUpperCase()] = data.profile;
+          sourceMasters.push({isin:data.profile.isin, fundId:data.profile.masterFundId, name:data.profile.masterFundName, baseCurrency:data.profile.baseCurrency, _profile:data.profile, _override:true});
+          toast(`บันทึกแล้วที่ ${data.source}`, 'success'); render();
+        } catch (err) { toast(err.message, 'error'); } finally { button.disabled = false; }
       });
       $('#mfd-delete', area)?.addEventListener('click', () => { delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts); toast('ลบแบบร่างแล้ว', 'success'); render(); });
     };
