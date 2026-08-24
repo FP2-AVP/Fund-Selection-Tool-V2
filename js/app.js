@@ -75,6 +75,7 @@ const State = {
     'master-annualized-v2': { key: 'r5y', dir: 'desc' },
     'master-calendar': { key: 'ret-2025', dir: 'desc' },
     'master-placeholder-9': { key: '', dir: 'asc' },
+    'master-placeholder-12': { key: 'masterName', dir: 'asc' },
   },
   reportOptions: {
     'thai-annualized-v2-view': 'return',
@@ -4376,7 +4377,9 @@ function feeCombinedStyle(value, maxValue) {
 
 function renderFeeCompareMiniTable(rows, options = {}) {
   const title = options.title || 'ตารางเปรียบเทียบค่าธรรมเนียม';
-  const maxCombined = Math.max(...rows.map(item => item.combined || 0), 0);
+  const sortState = options.sortState || { key: '', dir: 'asc' };
+  const sortableHeader = (label, key, attrs = '') =>
+    `<th ${attrs} class="fee-compare-sort ${sortState.key === key ? 'is-active' : ''}" data-fee-sort="${key}">${renderSortLabel(label, sortState.key === key, sortState.dir)}</th>`;
   return `
     <div class="card fee-compare-card">
       <div class="fee-compare-card-head">
@@ -4393,34 +4396,37 @@ function renderFeeCompareMiniTable(rows, options = {}) {
           </colgroup>
           <thead>
             <tr>
-              <th rowspan="2">Master Fund</th>
-              <th rowspan="2">กองไทย</th>
+              ${sortableHeader('Master Fund', 'masterName', 'rowspan="2"')}
+              ${sortableHeader('กองไทย', 'thaiCode', 'rowspan="2"')}
               <th colspan="3">ค่าใช้จ่าย (%)</th>
             </tr>
             <tr>
-              <th>Master Ongoing Cost</th>
-              <th>กองไทย TER</th>
-              <th>รวมโดยประมาณ</th>
+              ${sortableHeader('Master Ongoing Cost', 'masterTer')}
+              ${sortableHeader('กองไทย TER', 'thaiTer')}
+              ${sortableHeader('รวมโดยประมาณ', 'combined')}
             </tr>
           </thead>
           <tbody>
             ${rows.map(row => {
-              const combinedStyle = feeCombinedStyle(row.combined, maxCombined);
+              const missingMasterCost = !row.masterTerText;
+              const missingCostIds = [
+                row.masterId ? `FundId: ${row.masterId}` : '',
+                row.masterIsin ? `ISIN: ${row.masterIsin}` : '',
+              ].filter(Boolean).join(' · ');
               return `
                 <tr${row.isPlaceholder ? ' class="fee-compare-placeholder"' : ''}>
                   <td class="fee-compare-master">
                     ${row.masterNameHtml || esc(row.masterName)}
-                    ${row.masterId ? `<small>FundId: ${esc(row.masterId)}</small>` : ''}
-                    ${row.changeBadge ? `<span class="fee-quarter-change fee-quarter-change--${esc(row.changeType || 'changed')}">${esc(row.changeBadge)}</span>` : ''}
-                    ${row.changeDetail ? `<small class="fee-quarter-change-detail">${esc(row.changeDetail)}</small>` : ''}
+                    ${missingMasterCost && missingCostIds ? `<small class="fee-compare-missing-ids">${esc(missingCostIds)}</small>` : ''}
+                    ${row.changeBadge ? `<span class="fee-quarter-change-line"><span class="fee-quarter-change fee-quarter-change--${esc(row.changeType || 'changed')}">${esc(row.changeBadge)}</span>${row.changeDetail ? `<span class="fee-quarter-change-detail">${esc(row.changeDetail)}</span>` : ''}</span>` : ''}
                     ${row.mappingStatus === 'missing-master-id' ? '<small class="fee-compare-warning">ไม่มี Master FundId ใน AVP Thai Fund for Quality</small>' : ''}
                     ${row.mappingStatus === 'master-not-found' ? '<small class="fee-compare-warning">ไม่พบ FundId นี้ใน AVP Master Fund ID</small>' : ''}
                     ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-compare-warning">ระบุ Share Class ไม่ได้ — ไม่คำนวณค่ารวม</small>' : ''}
                   </td>
                   <td class="fee-compare-thai"${row.highlightColor ? ` style="background:${row.highlightColor}"` : ''}>${esc(row.thaiCode)}</td>
-                  <td class="fee-compare-num">${esc(row.masterTerText || '-')}</td>
-                  <td class="fee-compare-num">${esc(row.thaiTerText || '-')}</td>
-                  <td class="fee-compare-num fee-compare-combined"${combinedStyle.bg ? ` style="background:${combinedStyle.bg};color:${combinedStyle.color}"` : ''}>${esc(row.combinedText || '-')}</td>
+                  <td class="fee-compare-num${options.isCurrent && row.masterTerTrend ? ` fee-compare-trend-bg fee-compare-trend-bg--${row.masterTerTrend}` : ''}">${esc(row.masterTerText || '-')}</td>
+                  <td class="fee-compare-num${options.isCurrent && row.thaiTerTrend ? ` fee-compare-trend-bg fee-compare-trend-bg--${row.thaiTerTrend}` : ''}">${esc(row.thaiTerText || '-')}</td>
+                  <td class="fee-compare-num fee-compare-combined">${esc(row.combinedText || '-')}${options.isCurrent && row.combinedTrend ? `<small class="fee-compare-delta fee-compare-delta--${row.combinedTrend}">${row.combinedTrend === 'down' ? '↓' : '↑'} ${esc(row.combinedDeltaText)}</small>` : ''}</td>
                 </tr>`;
             }).join('')}
           </tbody>
@@ -5681,7 +5687,7 @@ function buildSelectedFeeUniverseFromQualityRows(selectRows, qualityRows, master
   });
 
   const mastersByFundId = new Map();
-  const masterByIsin = new Map();
+  const mastersByIsin = new Map();
   masterRows.forEach(master => {
     const fundId = String(master.fundId || '').trim().toUpperCase();
     const isin = String(master.isin || '').trim().toUpperCase();
@@ -5689,7 +5695,10 @@ function buildSelectedFeeUniverseFromQualityRows(selectRows, qualityRows, master
       if (!mastersByFundId.has(fundId)) mastersByFundId.set(fundId, []);
       mastersByFundId.get(fundId).push(master);
     }
-    if (isin) masterByIsin.set(isin, master);
+    if (isin) {
+      if (!mastersByIsin.has(isin)) mastersByIsin.set(isin, []);
+      mastersByIsin.get(isin).push(master);
+    }
   });
 
   return scopedFunds.map(fund => {
@@ -5698,27 +5707,39 @@ function buildSelectedFeeUniverseFromQualityRows(selectRows, qualityRows, master
     const qualityMasterName = quality ? getQuality(quality, qualityCi.masterName) : '';
     const normalizedMasterId = masterId.toUpperCase();
     const candidates = normalizedMasterId ? (mastersByFundId.get(normalizedMasterId) || []) : [];
-    const legacyIsinMatch = masterByIsin.get(String(fund.masterId || '').trim().toUpperCase()) || null;
-    const verifiedLegacyMatch = legacyIsinMatch
-      && String(legacyIsinMatch.fundId || '').trim().toUpperCase() === normalizedMasterId
-      ? legacyIsinMatch
+    const performanceIsin = String(fund.masterId || '').trim().toUpperCase();
+    const isinCandidates = performanceIsin ? (mastersByIsin.get(performanceIsin) || []) : [];
+    const isinFundIds = new Set(isinCandidates
+      .map(item => String(item.fundId || '').trim().toUpperCase())
+      .filter(Boolean));
+    // ISIN identifies the exact share class. Use it as a safe fallback when the
+    // Thai Quality FundId is missing/stale, but reject genuinely conflicting IDs.
+    const isinMatch = isinCandidates.length && isinFundIds.size <= 1
+      ? pickBestMasterRecord(isinCandidates)
+      : null;
+    const verifiedIsinMatch = isinMatch
+      && (!normalizedMasterId || String(isinMatch.fundId || '').trim().toUpperCase() === normalizedMasterId)
+      ? isinMatch
       : null;
     const secRecord = rawLookup?.get(String(fund.code || '').trim().toUpperCase()) || null;
-    const secShareClassMatch = !verifiedLegacyMatch && secRecord?.feederMaster
+    const secShareClassMatch = !verifiedIsinMatch && secRecord?.feederMaster
       ? findFeeMasterShareClass(candidates, secRecord.feederMaster)
       : null;
-    const master = verifiedLegacyMatch || secShareClassMatch || (candidates.length === 1 ? candidates[0] : null);
-    const mappingStatus = !masterId
-      ? 'missing-master-id'
-      : (!candidates.length
-        ? 'master-not-found'
-        : (master ? 'matched' : 'share-class-unresolved'));
+    const fundIdMatch = verifiedIsinMatch || secShareClassMatch || (candidates.length === 1 ? candidates[0] : null);
+    const master = fundIdMatch || isinMatch;
+    const mappingMethod = fundIdMatch ? 'fund-id' : (isinMatch ? 'performance-isin' : '');
+    const mappingStatus = master
+      ? 'matched'
+      : (!masterId
+        ? 'missing-master-id'
+        : (!candidates.length ? 'master-not-found' : 'share-class-unresolved'));
     return {
       fund,
       master,
       masterId,
       qualityMasterName,
       mappingStatus,
+      mappingMethod,
     };
   });
 }
@@ -5760,7 +5781,7 @@ function buildFeeComparisonRows(universe, rawLookup, options = {}) {
       thaiCode: fund.code,
       masterName: master?.name || qualityMasterName || '-',
       masterId,
-      masterIsin: master?.isin || '',
+      masterIsin: master?.isin || fund.masterId || '',
       mappingStatus,
       masterTer,
       thaiTer,
@@ -8588,7 +8609,6 @@ const Pages = {
       );
 
       const decorateRows = (rows) => rows
-        .sort((a, b) => compareValues(a.combined, b.combined, 'asc'))
         .map(row => {
           const matchedFund = Object.values(State.selectedFunds).find(f => f.code === row.thaiCode);
           const colorIdx = matchedFund ? State.highlights[matchedFund.key] : undefined;
@@ -8601,25 +8621,103 @@ const Pages = {
       const feeRowsCurrentBase = decorateRows(buildFeeComparisonRows(universeCurrent, rawLookupCurrent, { includeThaiOnly: true }));
       const feeRowsPreviousBase = decorateRows(buildFeeComparisonRows(universePrevious, rawLookupPrevious, { includeThaiOnly: true }));
       const {
-        currentRows: feeRowsCurrent,
-        previousRows: feeRowsPrevious,
+        currentRows: alignedCurrentRows,
+        previousRows: alignedPreviousRows,
       } = annotateFeeQuarterChanges(feeRowsCurrentBase, feeRowsPreviousBase);
 
-      if (!feeRowsCurrent.length && !feeRowsPrevious.length) {
+      if (!alignedCurrentRows.length && !alignedPreviousRows.length) {
         setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Data For SEC API และ AVP Master Fund ID', pageKey);
         return;
       }
 
-      const source = `AVP Thai Fund for Quality (Master FundId) + AVP Master Fund ID (Ongoing Cost) + Data For SEC API (TER) · ${currentQuarter} vs ${previousQuarter}`;
+      const comparisonTrend = (currentValue, previousValue) => {
+        if (Number.isNaN(currentValue) || Number.isNaN(previousValue) || currentValue === previousValue) return '';
+        return currentValue < previousValue ? 'down' : 'up';
+      };
+      const pairedRows = alignedCurrentRows.map((current, index) => {
+        const previous = alignedPreviousRows[index];
+        if (!current || current.isPlaceholder || !previous || previous.isPlaceholder) return { current, previous };
+        const combinedDelta = (!Number.isNaN(current.combined) && !Number.isNaN(previous.combined))
+          ? current.combined - previous.combined
+          : NaN;
+        return {
+          current: {
+            ...current,
+            masterTerTrend: comparisonTrend(current.masterTer, previous.masterTer),
+            thaiTerTrend: comparisonTrend(current.thaiTer, previous.thaiTer),
+            combinedTrend: comparisonTrend(current.combined, previous.combined),
+            combinedDeltaText: Number.isNaN(combinedDelta)
+              ? ''
+              : `${combinedDelta >= 0 ? '+' : ''}${combinedDelta.toFixed(2)}`,
+          },
+          previous,
+        };
+      });
+      const sortState = State.reportSorts[pageKey]
+        || (State.reportSorts[pageKey] = { key: 'masterName', dir: 'asc' });
+      const sortedPairs = () => [...pairedRows].sort((left, right) => {
+        const key = sortState.key;
+        if (!key) return 0;
+        const leftRow = left.current?.isPlaceholder ? null : left.current;
+        const rightRow = right.current?.isPlaceholder ? null : right.current;
+        if (!leftRow && rightRow) return 1;
+        if (leftRow && !rightRow) return -1;
+        return compareValues(leftRow?.[key], rightRow?.[key], sortState.dir);
+      });
+
+      const source = `AVP Thai Fund for Quality (Master FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID (Ongoing Cost) + Data For SEC API (TER) · ${currentQuarter} vs ${previousQuarter}`;
       area.innerHTML = `
         ${pageToolActions(pageKey, source)}
         <div id="report-card" class="fee-compare-page">
-          <p class="fee-compare-note">จับคู่ Master Fund ด้วย FundId แบบตรงกันจากฐาน AVP · ค่ารวมเป็นค่าโดยประมาณจาก Master Ongoing Cost + TER กองไทย</p>
-          <div class="fee-compare-grid">
-            ${renderFeeCompareMiniTable(feeRowsCurrent, { title: `ตารางค่าธรรมเนียม · ${currentQuarter}` })}
-            ${renderFeeCompareMiniTable(feeRowsPrevious, { title: `ตารางค่าธรรมเนียม · ${previousQuarter}` })}
-          </div>
+          <p class="fee-compare-note">จับคู่ Master Fund ด้วย FundId และใช้ ISIN เป็น fallback เมื่อ FundId ไม่พบ · ค่ารวมเป็นค่าโดยประมาณจาก Master Ongoing Cost + TER กองไทย</p>
+          <div class="fee-compare-grid"></div>
         </div>`;
+      let rowSyncFrame = 0;
+      const syncFeeComparisonRowHeights = () => {
+        cancelAnimationFrame(rowSyncFrame);
+        rowSyncFrame = requestAnimationFrame(() => {
+          const tables = $$('.fee-compare-table', area);
+          if (tables.length !== 2) return;
+          const leftRows = $$('thead tr', tables[0]);
+          const rightRows = $$('thead tr', tables[1]);
+          [...leftRows, ...rightRows].forEach(row => { row.style.height = ''; });
+          $$('tbody tr', tables[0]).forEach(row => {
+            row.style.height = '67px';
+            $$('td', row).forEach(cell => { cell.style.height = '67px'; });
+          });
+          $$('tbody tr', tables[1]).forEach(row => {
+            row.style.height = '67px';
+            $$('td', row).forEach(cell => { cell.style.height = '67px'; });
+          });
+          const pairCount = Math.min(leftRows.length, rightRows.length);
+          for (let index = 0; index < pairCount; index += 1) {
+            const height = Math.ceil(Math.max(
+              leftRows[index].getBoundingClientRect().height,
+              rightRows[index].getBoundingClientRect().height,
+            ));
+            leftRows[index].style.height = `${height}px`;
+            rightRows[index].style.height = `${height}px`;
+          }
+        });
+      };
+      if (App._feeCompareResizeHandler) window.removeEventListener('resize', App._feeCompareResizeHandler);
+      App._feeCompareResizeHandler = syncFeeComparisonRowHeights;
+      window.addEventListener('resize', App._feeCompareResizeHandler);
+      const renderTables = () => {
+        const pairs = sortedPairs();
+        const grid = $('.fee-compare-grid', area);
+        grid.innerHTML = `
+          ${renderFeeCompareMiniTable(pairs.map(pair => pair.current), { title: `ตารางค่าธรรมเนียม · ${currentQuarter}`, sortState, isCurrent: true })}
+          ${renderFeeCompareMiniTable(pairs.map(pair => pair.previous), { title: `ตารางค่าธรรมเนียม · ${previousQuarter}`, sortState })}`;
+        $$('.fee-compare-sort', grid).forEach(header => {
+          header.addEventListener('click', () => {
+            toggleNamedSort(sortState, header.dataset.feeSort);
+            renderTables();
+          });
+        });
+        syncFeeComparisonRowHeights();
+      };
+      renderTables();
     } catch (e) {
       setError(area, e.message, pageKey);
       return;
@@ -12800,16 +12898,32 @@ const Pages = {
     const headers = rows[0] || [];
     const ci = {
       isin: findColumnIndex(headers, ['ISIN']),
+      fundId: findColumnIndex(headers, ['FundId', 'Fund ID', 'SecId', 'Sec ID']),
       name: findColumnIndex(headers, ['Group/Investment']),
       currency: findColumnIndex(headers, ['Base Currency']),
+      shareClass: findColumnIndex(headers, ['Share Class Type']),
+      ongoingCost: findColumnIndex(headers, ['Ongoing Cost Actual']),
+      ongoingCostDate: findColumnIndex(headers, ['Ongoing Cost Actual Date']),
+      holdingsCount: findColumnIndex(headers, ['# of Holdings (Long)']),
+      top10Concentration: findColumnIndex(headers, ['Latest % Asset in Top 10 Holdings']),
+      portfolioDate: findColumnIndex(headers, ['Latest % Asset in Top 10 Holdings Date']),
+      return1m: findColumnIndex(headers, ['Return(Cumulative) 1M']),
+      return3m: findColumnIndex(headers, ['Return(Cumulative) 3M']),
+      return6m: findColumnIndex(headers, ['Return(Cumulative) 6M']),
+      return1y: findColumnIndex(headers, ['Return(Cumulative) 1Y']),
+      return3y: findColumnIndex(headers, ['Return(Annualized) 3Y']),
+      return5y: findColumnIndex(headers, ['Return(Annualized) 5Y']),
     };
     const get = (row, idx) => idx >= 0 ? String(row?.[idx] ?? '').trim() : '';
     const sourceMasters = rows.slice(1).map(row => ({
-      isin: get(row, ci.isin), name: get(row, ci.name), baseCurrency: get(row, ci.currency),
-    })).filter(item => item.isin || item.name);
+      isin: get(row, ci.isin), fundId: get(row, ci.fundId), name: get(row, ci.name), baseCurrency: get(row, ci.currency),
+      shareClass: get(row, ci.shareClass), ongoingCost: get(row, ci.ongoingCost), ongoingCostDate: get(row, ci.ongoingCostDate),
+      holdingsCount: get(row, ci.holdingsCount), top10Concentration: get(row, ci.top10Concentration), portfolioDate: get(row, ci.portfolioDate),
+      return1m: get(row, ci.return1m), return3m: get(row, ci.return3m), return6m: get(row, ci.return6m), return1y: get(row, ci.return1y), return3y: get(row, ci.return3y), return5y: get(row, ci.return5y),
+    })).filter(item => item.isin || item.fundId || item.name);
     const draftKey = 'avp-master-fund-profile-drafts-v1';
     const drafts = readJsonPreference(draftKey, {}) || {};
-    let selectedIsin = State.masterFundDataManagerIsin || sourceMasters[0]?.isin || Object.keys(drafts)[0] || '';
+    let selectedIsin = State.masterFundDataManagerIsin || '';
 
     const sections = [
       { id: 'identity', title: '1. ข้อมูลระบุตัว Master Fund', hint: 'ใช้จัดกลุ่มกองหลักและ Share Class', fields: [
@@ -12837,13 +12951,19 @@ const Pages = {
         ['feeSource','Fee Source','text'], ['feeSourceUrl','Fee Source URL','url'],
       ]},
       { id: 'returns', title: '5. ผลตอบแทน', hint: 'ช่องที่ดึงจากฐานหลักได้ไม่จำเป็นต้องกรอกซ้ำ', fields: [
-        ['return3m','3M (%)','number'], ['return6m','6M (%)','number'], ['returnYtd','YTD (%)','number'], ['return1y','1Y (%)','number'],
+        ['return1m','1M (%)','number'], ['return3m','3M (%)','number'], ['return6m','6M (%)','number'], ['returnYtd','YTD (%)','number'], ['return1y','1Y (%)','number'],
         ['return3y','3Y Annualized (%)','number'], ['return5y','5Y Annualized (%)','number'], ['return10y','10Y Annualized (%)','number'],
         ['returnDate','Return As of Date','date'], ['calendarReturns','Calendar Year Return','textarea'],
       ]},
       { id: 'risk', title: '6. ความเสี่ยง', hint: 'ใช้ใน Other Factors, Cost Efficiency และ Maximum Drawdown', fields: [
-        ['sd3y','Standard Deviation 3Y','number'], ['sd5y','Standard Deviation 5Y','number'], ['sharpe3y','Sharpe 3Y','number'], ['sharpe5y','Sharpe 5Y','number'],
-        ['sortino3y','Sortino 3Y','number'], ['sortino5y','Sortino 5Y','number'], ['information3y','Information Ratio 3Y','number'],
+        ['alpha1y','Alpha 1Y','number'], ['alpha3y','Alpha 3Y','number'], ['alpha5y','Alpha 5Y','number'],
+        ['beta1y','Beta 1Y','number'], ['beta3y','Beta 3Y','number'], ['beta5y','Beta 5Y','number'],
+        ['information1y','Information Ratio 1Y','number'], ['information3y','Information Ratio 3Y','number'], ['information5y','Information Ratio 5Y','number'],
+        ['rSquared1y','R Squared 1Y','number'], ['rSquared3y','R Squared 3Y','number'], ['rSquared5y','R Squared 5Y','number'],
+        ['sharpe1y','Sharpe 1Y','number'], ['sharpe3y','Sharpe 3Y','number'], ['sharpe5y','Sharpe 5Y','number'],
+        ['sd1y','Standard Deviation 1Y','number'], ['sd3y','Standard Deviation 3Y','number'], ['sd5y','Standard Deviation 5Y','number'],
+        ['riskBenchmark','Risk Benchmark','text'], ['riskDate','Risk As of Date','date'],
+        ['sortino3y','Sortino 3Y','number'], ['sortino5y','Sortino 5Y','number'],
         ['maxDrawdown3y','Maximum Drawdown 3Y (%)','number'], ['maxDrawdown5y','Maximum Drawdown 5Y (%)','number'], ['annualDrawdowns','Maximum Drawdown รายปี','textarea'],
       ]},
       { id: 'portfolio', title: '7. Portfolio / Holdings', hint: 'รองรับ Equity, Fixed Income, Top 10 Holding และ Sector Allocation', fields: [
@@ -12857,10 +12977,77 @@ const Pages = {
         ['verifiedBy','Verified By','text'], ['verifiedAt','Verified At','date'], ['notes','หมายเหตุ','textarea'],
       ]},
     ];
+    const norm = value => String(value || '').trim().toUpperCase();
+    const findSource = value => {
+      const query = norm(value);
+      if (!query) return undefined;
+      return sourceMasters.find(item => [item.isin, item.fundId].some(key => norm(key) && norm(key) === query));
+    };
+    const stripPercent = value => String(value ?? '').replace(/[+,%]/g, '').trim();
+    const ftSymbolFromUrl = value => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      try { return new URL(raw).searchParams.get('s') || ''; } catch (_) { return raw.includes(':') ? raw : ''; }
+    };
+    const ftPayloadToProfile = payload => {
+      const next = {};
+      const fields = Object.fromEntries((payload.profile || []).map(row => [norm(row.field), row.value]));
+      const pick = (...labels) => labels.map(label => fields[norm(label)]).find(Boolean) || '';
+      next.ftSymbol = payload.selectedSymbol || '';
+      next.sourceUrl = next.ftSymbol ? `https://markets.ft.com/data/etfs/tearsheet/summary?s=${encodeURIComponent(next.ftSymbol)}` : '';
+      next.shareClassName = payload.selectedDisplayName || pick('FT display name') || '';
+      next.masterFundName = next.shareClassName;
+      next.displayName = next.shareClassName;
+      next.isin = pick('ISIN');
+      next.baseCurrency = pick('Base currency', 'Price currency', 'Currency');
+      next.priceCurrency = pick('Price currency', 'Base currency', 'Currency');
+      next.domicile = pick('Domicile');
+      const launchDate = pick('Launch date', 'Inception date');
+      if (launchDate) { const parsed = new Date(launchDate); if (!Number.isNaN(parsed.getTime())) next.inceptionDate = parsed.toISOString().slice(0,10); }
+      next.assetClass = pick('Asset class');
+      next.investmentCategory = pick('Morningstar category', 'Category');
+      next.fundSizeCurrency = (pick('Total net assets', 'Share class size').match(/\b[A-Z]{3}\b/) || [])[0] || '';
+      next.ongoingCost = stripPercent(pick('Ongoing charge', 'Ongoing charges', 'Total expense ratio', 'Net expense ratio', 'Expense ratio'));
+      next.managementFee = stripPercent(pick('Annual management charge', 'Management fee'));
+      next.feeSource = 'FT Markets'; next.feeSourceUrl = next.sourceUrl;
+      const periodKey = {'1 month':'return1m','3 months':'return3m','6 months':'return6m','1 year':'return1y','3 years':'return3y','5 years':'return5y'};
+      const fundPerformance = (payload.performance || []).filter(row => row.series === 'fund');
+      fundPerformance.forEach(row => {
+        if (periodKey[row.period]) next[periodKey[row.period]] = stripPercent(row.value);
+        if (norm(row.period) === 'YTD') next.returnYtd = stripPercent(row.value);
+        if (!next.returnDate) next.returnDate = row.asOfDate || '';
+      });
+      const calendarRows = fundPerformance.filter(row => /^\d{4}$/.test(String(row.period || '')));
+      if (calendarRows.length) next.calendarReturns = calendarRows.map(row => `${row.period}: ${Number(row.value) >= 0 ? '+' : ''}${stripPercent(row.value)}%`).join('\n');
+      const metricKey = {'ALPHA':'alpha','BETA':'beta','INFORMATION RATIO':'information','R SQUARED':'rSquared','SHARPE RATIO':'sharpe','STANDARD DEVIATION':'sd'};
+      const periodSuffix = {'1 YEAR':'1y','3 YEAR':'3y','5 YEARS':'5y'};
+      (payload.risk || []).forEach(row => {
+        const key = `${metricKey[norm(row.metric)] || ''}${periodSuffix[norm(row.period)] || ''}`;
+        if (key) next[key] = stripPercent(row.fundValue);
+        if (!next.riskBenchmark) next.riskBenchmark = row.benchmarkUsed || '';
+        if (!next.riskDate) next.riskDate = row.asOfDate || '';
+      });
+      const holdings = payload.holdings || [];
+      if (holdings.length) {
+        next.top10Concentration = stripPercent(holdings[0].top10PortfolioPercent);
+        next.portfolioDate = holdings[0].asOfDate || '';
+        next.topHoldings = holdings.map(row => `${row.rank}. ${row.holdingName}${row.holdingSymbol ? ` (${row.holdingSymbol})` : ''}: ${row.portfolioWeight}`).join('\n');
+      }
+      return next;
+    };
     const render = () => {
-      const source = sourceMasters.find(item => item.isin === selectedIsin) || {};
-      const profile = { fundStatus:'Active', shareClassStatus:'Active', mappingStatus:'Draft', quarter:State.currentQuarter || '', weight:'100', ...drafts[selectedIsin] };
-      if (!profile.isin) profile.isin = selectedIsin || source.isin || '';
+      const source = findSource(selectedIsin) || {};
+      const sourceProfile = (source.isin || source.fundId) ? {
+        masterFundId:source.fundId, masterFundName:source.name, shareClassName:source.name, isin:source.isin,
+        baseCurrency:source.baseCurrency, shareClass:source.shareClass, ongoingCost:source.ongoingCost,
+        ongoingCostDate:source.ongoingCostDate, holdingsCount:source.holdingsCount,
+        top10Concentration:source.top10Concentration, portfolioDate:source.portfolioDate,
+        return1m:source.return1m, return3m:source.return3m, return6m:source.return6m,
+        return1y:source.return1y, return3y:source.return3y, return5y:source.return5y,
+      } : {};
+      const profile = { fundStatus:'Active', shareClassStatus:'Active', mappingStatus:'Draft', quarter:State.currentQuarter || '', weight:'100', ...sourceProfile, ...drafts[selectedIsin] };
+      if (!profile.isin) profile.isin = source.isin || (selectedIsin.startsWith('NEW-') ? '' : selectedIsin);
+      if (!profile.masterFundId) profile.masterFundId = source.fundId || '';
       if (!profile.masterFundName) profile.masterFundName = source.name || '';
       if (!profile.shareClassName) profile.shareClassName = source.name || '';
       if (!profile.baseCurrency) profile.baseCurrency = source.baseCurrency || '';
@@ -12871,25 +13058,49 @@ const Pages = {
         const value = profile[key] ?? '';
         const requiredMark = requiredField ? '<span class="master-required">*</span>' : '<span class="master-optional">เว้นได้</span>';
         let control;
-        if (type === 'select') control = `<select class="fund-input mfd-field" data-key="${key}">${(options || []).map(v => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(v || 'เลือก')}</option>`).join('')}</select>`;
-        else if (type === 'textarea') control = `<textarea class="fund-input fund-input-editable mfd-field" data-key="${key}" rows="3" placeholder="เว้นว่างได้หากยังไม่มีข้อมูล">${esc(value)}</textarea>`;
-        else control = `<input class="fund-input fund-input-editable mfd-field" data-key="${key}" type="${type}" ${type === 'number' ? 'step="0.0001"' : ''} value="${esc(value)}">`;
+        const missing = String(value ?? '').trim() ? '' : ' is-missing';
+        if (type === 'select') control = `<select class="fund-input mfd-field${missing}" data-key="${key}">${(options || []).map(v => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(v || 'เลือก')}</option>`).join('')}</select>`;
+        else if (type === 'textarea') control = `<textarea class="fund-input fund-input-editable mfd-field${missing}" data-key="${key}" rows="3" placeholder="ยังขาดข้อมูล">${esc(value)}</textarea>`;
+        else control = `<input class="fund-input fund-input-editable mfd-field${missing}" data-key="${key}" type="${type}" ${type === 'number' ? 'step="0.0001"' : ''} value="${esc(value)}" placeholder="ยังขาดข้อมูล">`;
         return `<label class="master-field"><span>${esc(label)} ${requiredMark}</span>${control}</label>`;
       };
       area.innerHTML = `<div class="master-data-page">
         <div class="card master-data-toolbar"><div class="sf-filterbar">
-          <label class="master-selector"><span>Master Share Class</span><input id="mfd-master-search" class="search-input" list="mfd-master-list" value="${esc(selectedIsin)}" placeholder="ค้นด้วย ISIN"></label>
-          <datalist id="mfd-master-list">${sourceMasters.map(m => `<option value="${esc(m.isin)}">${esc(m.name)}</option>`).join('')}</datalist>
+          <label class="master-selector"><span>ค้นหา Master Share Class</span><input id="mfd-master-search" class="search-input" list="mfd-master-list" value="${esc(selectedIsin)}" placeholder="ระบุ ISIN หรือ SecId / FundId"></label>
+          <datalist id="mfd-master-list">${sourceMasters.flatMap(m => [m.isin,m.fundId].filter(Boolean).map(v => `<option value="${esc(v)}">${esc(m.name)}</option>`)).join('')}</datalist>
+          <button class="btn btn-primary btn-sm" id="mfd-search" type="button">ค้นหา</button>
           <button class="btn btn-ghost btn-sm" id="mfd-new" type="button">สร้าง Master Fund ใหม่</button>
           <span class="badge ${percent === 100 ? 'badge-success' : 'badge-warning'}">ข้อมูลบังคับ ${filled}/${required.length}</span>
         </div><div class="master-completion"><span style="width:${percent}%"></span></div></div>
+        <div class="master-search-result ${source.isin || source.fundId || drafts[selectedIsin] ? 'is-found' : 'is-not-found'}">${source.isin || source.fundId || drafts[selectedIsin] ? `พบข้อมูลแล้ว: ${esc(source.name || profile.shareClassName || selectedIsin)}` : selectedIsin ? `ยังไม่พบ ${esc(selectedIsin)} ในถังข้อมูล` : 'กรุณาระบุ ISIN หรือ SecId / FundId แล้วกดค้นหา'}</div>
+        <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมเฉพาะช่องว่าง</button><small id="mfd-ft-status">ข้อมูลเดิมจะไม่ถูกเขียนทับ</small></div>
         <form id="mfd-form">
           <div class="master-data-notice"><strong>หลักการ:</strong> กรอกเฉพาะที่มีข้อมูลได้ · ช่องที่มี <span class="master-required">*</span> ใช้เป็น key เชื่อมทุกหน้า</div>
           ${sections.map((section, idx) => `<details class="card master-data-section" ${idx < 3 ? 'open' : ''}><summary><span>${esc(section.title)}</span><small>${esc(section.hint)}</small></summary><div class="master-fields">${section.fields.map(fieldHtml).join('')}</div></details>`).join('')}
           <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">ขั้นนี้เก็บใน Browser เพื่อทดสอบแบบฟอร์ม</span></div>
         </form></div>`;
-      $('#mfd-master-search', area)?.addEventListener('change', e => { selectedIsin = e.target.value.trim(); State.masterFundDataManagerIsin = selectedIsin; render(); });
+      const runSearch = () => { const value = $('#mfd-master-search', area).value.trim(); const found = findSource(value); selectedIsin = found?.isin || found?.fundId || value; State.masterFundDataManagerIsin = selectedIsin; render(); };
+      $('#mfd-master-search', area)?.addEventListener('change', runSearch);
+      $('#mfd-search', area)?.addEventListener('click', runSearch);
       $('#mfd-new', area)?.addEventListener('click', () => { selectedIsin = `NEW-${Date.now()}`; State.masterFundDataManagerIsin = selectedIsin; render(); });
+      $$('.mfd-field', area).forEach(input => input.addEventListener('input', () => input.classList.toggle('is-missing', !input.value.trim())));
+      $('#mfd-ft-import', area)?.addEventListener('click', async () => {
+        const url = $('#mfd-ft-url', area)?.value || '';
+        const symbol = ftSymbolFromUrl(url);
+        if (!symbol) return toast('กรุณาวาง FT URL ที่มี ?s=SYMBOL', 'error');
+        const button = $('#mfd-ft-import', area); const status = $('#mfd-ft-status', area);
+        button.disabled = true; status.textContent = 'กำลังดึง Summary, Performance, Risk และ Holdings...';
+        try {
+          const syncResp = await fetch('/api/ft-qualitative-data', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})});
+          const syncData = await syncResp.json(); if (!syncResp.ok || !syncData.ok) throw new Error(syncData.error || 'ดึง FT ไม่สำเร็จ');
+          const dataResp = await fetch(`/api/ft-historical-prices?symbol=${encodeURIComponent(symbol)}&limit=1`);
+          const data = await dataResp.json(); if (!dataResp.ok || !data.ok) throw new Error(data.error || 'อ่านข้อมูล FT ไม่สำเร็จ');
+          const imported = ftPayloadToProfile(data); let filledCount = 0;
+          $$('.mfd-field', area).forEach(input => { const value = imported[input.dataset.key]; if (!input.value.trim() && String(value || '').trim()) { input.value = value; input.classList.remove('is-missing'); filledCount += 1; } });
+          const urlInput = $('[data-key="sourceUrl"]', area); if (urlInput && !urlInput.value) urlInput.value = url;
+          status.textContent = `เติมแล้ว ${filledCount} ช่อง · ไม่เขียนทับค่าเดิม`; toast(`เติมข้อมูลจาก FT ${filledCount} ช่อง`, 'success');
+        } catch (err) { status.textContent = err.message; toast(err.message, 'error'); } finally { button.disabled = false; }
+      });
       $('#mfd-form', area)?.addEventListener('submit', e => {
         e.preventDefault(); const next = {};
         $$('.mfd-field', area).forEach(input => { next[input.dataset.key] = input.value.trim(); });
@@ -13979,7 +14190,7 @@ const Pages = {
       }).join('');
 
       area.innerHTML = `
-        ${pageToolActions('master-placeholder-1', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API')}
+        ${pageToolActions('master-placeholder-1', 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID + Data For SEC API')}
         <div id="report-card" class="insight-page">
         ${buildInsightSummaryCards([
           { label: 'กองทุนที่จับคู่ได้', value: `${feeRows.length} กอง`, note: 'คัดจากกองที่เลือกไว้ก่อน ถ้าไม่ได้เลือกจะใช้ชุดแรกของรายการ' },
@@ -14066,7 +14277,7 @@ const Pages = {
         return;
       }
 
-      const source = 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API';
+      const source = 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID + Data For SEC API';
       const maxCombined = Math.max(...feeRows.map(item => item.combined || 0), 0);
 
       area.innerHTML = `
