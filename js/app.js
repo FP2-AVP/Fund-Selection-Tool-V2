@@ -181,6 +181,7 @@ const JSON_STORE = {
   },
   overrideFiles: {
     fundOverrides: 'fund_overrides.json',
+    masterFundOverrides: 'master_fund_overrides.json',
     masterAllocations: 'fund_master_allocations.json',
     fixedIncomeFactorsOverrides: 'fixed_income_factors_overrides.json',
   },
@@ -3103,13 +3104,107 @@ async function fetchPageDataForTab(pageKey, tabName) {
 /* ============================================================
    DATA CACHE
    ============================================================ */
+async function loadMasterFundOverridesForQuarter(quarter) {
+  const normalized = String(quarter || State.currentQuarter || '2026-Q1').trim().toUpperCase();
+  const key = `master-fund-overrides::${normalized}`;
+  const cached = State._cache[key];
+  if (cached && Date.now() - cached.ts < CONFIG.CACHE_TTL) return cached.data;
+  let data;
+  try {
+    const response = await fetch(`/api/master-fund-overrides?quarter=${encodeURIComponent(normalized)}`, {cache:'no-store'});
+    data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  } catch (_) {
+    data = {ok:false, quarter:normalized, items:{}, source:'google-drive', driveExists:false, error:'ไม่สามารถตรวจสอบ Master Fund Override บน Google Drive ได้'};
+  }
+  State._cache[key] = {data, ts:Date.now()};
+  return data;
+}
+
+function applyMasterFundOverridesToRows(baseRows, overrideItems, qualityRows = []) {
+  if (!Array.isArray(baseRows) || !baseRows.length || !Object.keys(overrideItems || {}).length) return baseRows;
+  const rows = baseRows.map(row => Array.isArray(row) ? [...row] : row);
+  const headers = rows[0] || [];
+  const ci = {
+    name:findColumnIndex(headers,['Group/Investment']), fundId:findColumnIndex(headers,['FundId','Fund ID']),
+    isin:findColumnIndex(headers,['ISIN']), currency:findColumnIndex(headers,['Base Currency']),
+  };
+  const qh = qualityRows[0] || [];
+  const qci = {
+    code:findColumnIndex(qh,['Fund Code','FundCode','Code']),
+    fundId:findColumnIndex(qh,['Master FundId','Master Fund ID','MasterFundId']),
+  };
+  const qget = (row, index) => index >= 0 ? String(row?.[index] ?? '').trim() : '';
+  const fundIdByThaiCode = new Map();
+  qualityRows.slice(1).forEach(row => {
+    const code = qget(row,qci.code).toUpperCase(), fundId = qget(row,qci.fundId);
+    if (code && fundId) fundIdByThaiCode.set(code,fundId);
+  });
+  const normCurrency = value => {
+    const text = String(value || '').trim().toUpperCase();
+    return ({'US DOLLAR':'USD','U.S. DOLLAR':'USD','MEXICAN PESO':'MXN','EURO':'EUR'})[text] || text;
+  };
+  const fieldColumns = {
+    masterFundName:['Group/Investment'], masterFundId:['FundId','Fund ID'], isin:['ISIN'], baseCurrency:['Base Currency'],
+    ongoingCost:['Ongoing Cost Actual'], ongoingCostDate:['Ongoing Cost Actual Date'], holdingsCount:['# of Holdings (Long)'],
+    top10Concentration:['Latest % Asset in Top 10 Holdings'], portfolioDate:['Latest % Asset in Top 10 Holdings Date'],
+    return1m:['Return(Cumulative) 1M'], return3m:['Return(Cumulative) 3M'], return6m:['Return(Cumulative) 6M'],
+    returnYtd:['Return(Cumulative) YTD'], return1y:['Return(Cumulative) 1Y'], return3y:['Return(Annualized) 3Y'],
+    return5y:['Return(Annualized) 5Y'], return10y:['Return(Annualized) 10Y'],
+    sd1y:['Std Dev(Annualized) 1Y'], sd3y:['Std Dev(Annualized) 3Y'], sd5y:['Std Dev(Annualized) 5Y'],
+    sharpe1y:['Sharpe Ratio(Annualized) 1Y'], sharpe3y:['Sharpe Ratio(Annualized) 3Y'], sharpe5y:['Sharpe Ratio(Annualized) 5Y'],
+    information1y:['Information Ratio (arith)(Annualized) 1Y'], information3y:['Information Ratio (arith)(Annualized) 3Y'], information5y:['Information Ratio (arith)(Annualized) 5Y'],
+  };
+  const columnByField = Object.fromEntries(Object.entries(fieldColumns).map(([field,aliases]) => [field,findColumnIndex(headers,aliases)]));
+  Object.values(overrideItems || {}).forEach(profile => {
+    if (!profile || typeof profile !== 'object') return;
+    const thaiCodes = String(profile.thaiFundCodes || '').split(/[\n,]+/).map(value => value.trim().toUpperCase()).filter(Boolean);
+    const qualityFundId = thaiCodes.map(code => fundIdByThaiCode.get(code)).find(Boolean) || '';
+    const enteredFundId = String(profile.masterFundId || '').trim();
+    const profileIsin = String(profile.isin || '').trim();
+    const baseFundIds = new Set(rows.slice(1).map(row => qget(row,ci.fundId).toUpperCase()).filter(Boolean));
+    const effectiveFundId = baseFundIds.has(enteredFundId.toUpperCase()) ? enteredFundId : (qualityFundId || enteredFundId);
+    const candidates = rows.slice(1).filter(row => qget(row,ci.fundId).toUpperCase() === effectiveFundId.toUpperCase());
+    let target = rows.slice(1).find(row => profileIsin && qget(row,ci.isin).toUpperCase() === profileIsin.toUpperCase());
+    if (!target && profile.baseCurrency) target = candidates.find(row => normCurrency(qget(row,ci.currency)) === normCurrency(profile.baseCurrency));
+    if (!target && candidates.length === 1) target = candidates[0];
+    if (!target) {
+      target = new Array(headers.length).fill('');
+      rows.push(target);
+    }
+    const mergedProfile = {...profile, masterFundId:effectiveFundId || enteredFundId};
+    Object.entries(mergedProfile).forEach(([field,value]) => {
+      const index = columnByField[field];
+      if (index >= 0 && String(value ?? '').trim()) target[index] = String(value).trim();
+    });
+    const calendar = String(profile.calendarReturns || '');
+    calendar.split(/\n+/).forEach(line => {
+      const match = line.match(/^\s*(\d{4})\s*:\s*([+-]?[\d.]+)/);
+      if (!match) return;
+      const index = findColumnIndex(headers,[`Return(Cumulative) ${match[1]}`]);
+      if (index >= 0) target[index] = match[2];
+    });
+  });
+  return rows;
+}
+
+async function withMasterFundOverrides(rows, quarter) {
+  const normalized = String(quarter || State.currentQuarter || '2026-Q1').trim().toUpperCase();
+  const [overrides, qualityRows] = await Promise.all([
+    loadMasterFundOverridesForQuarter(normalized),
+    fetchCachedForTab('thai-annualized', normalized),
+  ]);
+  return applyMasterFundOverridesToRows(rows, overrides.items || {}, qualityRows);
+}
+
 async function fetchCached(pageKey) {
   const key = `page::${pageKey}`;
   const now = Date.now();
   if (State._cache[key] && now - State._cache[key].ts < CONFIG.CACHE_TTL) {
     return State._cache[key].data;
   }
-  const data = await fetchPageData(pageKey);
+  let data = await fetchPageData(pageKey);
+  if (PAGE_DATASET_KEYS[pageKey] === 'masterFund') data = await withMasterFundOverrides(data, State.currentQuarter || CONFIG.PAGES[pageKey]?.tabName);
   State._cache[key] = { data, ts: now };
   return data;
 }
@@ -3120,7 +3215,8 @@ async function fetchCachedForTab(pageKey, tabName) {
   if (State._cache[key] && now - State._cache[key].ts < CONFIG.CACHE_TTL) {
     return State._cache[key].data;
   }
-  const data = await fetchPageDataForTab(pageKey, tabName);
+  let data = await fetchPageDataForTab(pageKey, tabName);
+  if (PAGE_DATASET_KEYS[pageKey] === 'masterFund') data = await withMasterFundOverrides(data, tabName);
   State._cache[key] = { data, ts: now };
   return data;
 }
@@ -5725,6 +5821,8 @@ function buildSelectedFeeUniverseFromQualityRows(selectRows, qualityRows, master
     const secShareClassMatch = !verifiedIsinMatch && secRecord?.feederMaster
       ? findFeeMasterShareClass(candidates, secRecord.feederMaster)
       : null;
+    const familyCostValues = new Set(candidates.map(item => String(item.ongoingCost || '').trim()).filter(Boolean));
+    const familyMaster = candidates.length && familyCostValues.size === 1 ? pickBestMasterRecord(candidates) : null;
     const fundIdMatch = verifiedIsinMatch || secShareClassMatch || (candidates.length === 1 ? candidates[0] : null);
     const master = fundIdMatch || isinMatch;
     const mappingMethod = fundIdMatch ? 'fund-id' : (isinMatch ? 'performance-isin' : '');
@@ -5736,6 +5834,7 @@ function buildSelectedFeeUniverseFromQualityRows(selectRows, qualityRows, master
     return {
       fund,
       master,
+      familyMaster,
       masterId,
       qualityMasterName,
       mappingStatus,
@@ -5766,9 +5865,10 @@ function buildResolvedMasterLinks(universe, displayMasterRows) {
 
 function buildFeeComparisonRows(universe, rawLookup, options = {}) {
   const includeThaiOnly = !!options.includeThaiOnly;
-  const rows = universe.map(({ fund, master, masterId = '', qualityMasterName = '', mappingStatus = '' }) => {
+  const rows = universe.map(({ fund, master, familyMaster = null, masterId = '', qualityMasterName = '', mappingStatus = '' }) => {
+    const feeMaster = master || familyMaster;
     const raw = rawLookup.get(String(fund.code || '').trim().toUpperCase()) || null;
-    const masterTer = parseNum(master?.ongoingCost);
+    const masterTer = parseNum(feeMaster?.ongoingCost);
     const thaiTer = parseNum(raw?.ter);
     const hasMasterTer = !Number.isNaN(masterTer);
     const hasThaiTer = !Number.isNaN(thaiTer);
@@ -5779,15 +5879,15 @@ function buildFeeComparisonRows(universe, rawLookup, options = {}) {
     const fxHedging = toFixedSafe(raw?.fxHedging, 2);
     return {
       thaiCode: fund.code,
-      masterName: master?.name || qualityMasterName || '-',
+      masterName: feeMaster?.name || qualityMasterName || '-',
       masterId,
       masterIsin: master?.isin || fund.masterId || '',
-      mappingStatus,
+      mappingStatus: feeMaster ? 'matched' : mappingStatus,
       masterTer,
       thaiTer,
       combined,
-      feeDate: raw?.date || master?.ongoingCostDate || '',
-      masterTerText: master ? toFixedSafe(master.ongoingCost) : '',
+      feeDate: raw?.date || feeMaster?.ongoingCostDate || '',
+      masterTerText: feeMaster ? toFixedSafe(feeMaster.ongoingCost) : '',
       thaiTerText: raw?.ter || '',
       combinedText: Number.isNaN(combined) ? '' : combined.toFixed(2),
       frontText: front || '',
@@ -12921,12 +13021,15 @@ const Pages = {
       holdingsCount: get(row, ci.holdingsCount), top10Concentration: get(row, ci.top10Concentration), portfolioDate: get(row, ci.portfolioDate),
       return1m: get(row, ci.return1m), return3m: get(row, ci.return3m), return6m: get(row, ci.return6m), return1y: get(row, ci.return1y), return3y: get(row, ci.return3y), return5y: get(row, ci.return5y),
     })).filter(item => item.isin || item.fundId || item.name);
+    const overrideQuarter = String(State.currentQuarter || '2026-Q1').trim().toUpperCase();
     let masterOverrideItems = {};
+    let overrideStoreStatus = {ok:false, driveExists:false, drivePath:`${overrideQuarter}/overrides/master_fund_overrides.json`, error:'ยังไม่ได้ตรวจสอบ Google Drive'};
     try {
-      const response = await fetch('/api/master-fund-overrides', {cache:'no-store'});
+      const response = await fetch(`/api/master-fund-overrides?quarter=${encodeURIComponent(overrideQuarter)}`, {cache:'no-store'});
       const data = await response.json();
+      overrideStoreStatus = data;
       if (response.ok && data.ok) masterOverrideItems = data.items || {};
-    } catch (_) { /* server เก่ายังไม่มี endpoint นี้ */ }
+    } catch (err) { overrideStoreStatus.error = err.message || 'ตรวจสอบ Google Drive ไม่สำเร็จ'; }
     Object.values(masterOverrideItems).forEach(profile => sourceMasters.push({
       isin:profile.isin || '', fundId:profile.masterFundId || '', name:profile.masterFundName || profile.shareClassName || '',
       baseCurrency:profile.baseCurrency || '', _profile:profile, _override:true,
@@ -13085,11 +13188,16 @@ const Pages = {
           <span class="badge ${percent === 100 ? 'badge-success' : 'badge-warning'}">ข้อมูลบังคับ ${filled}/${required.length}</span>
         </div><div class="master-completion"><span style="width:${percent}%"></span></div></div>
         <div class="master-search-result ${source.isin || source.fundId || drafts[selectedIsin] || isNew ? 'is-found' : 'is-not-found'}">${isNew ? 'กำลังสร้าง Master Fund ใหม่ · กรอกช่องบังคับแล้วบันทึกเข้า Override' : source.isin || source.fundId || drafts[selectedIsin] ? `พบข้อมูลแล้ว: ${esc(source.name || profile.shareClassName || selectedIsin)}` : selectedIsin ? `ยังไม่พบ ${esc(selectedIsin)} ในถังข้อมูล` : 'กรุณาระบุ ISIN หรือ SecId / FundId แล้วกดค้นหา'}</div>
+        <div class="alert ${overrideStoreStatus.ok && overrideStoreStatus.driveExists ? 'alert-success' : 'alert-error'}">
+          ${overrideStoreStatus.ok && overrideStoreStatus.driveExists
+            ? `พบ Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || '')}`
+            : `ยังไม่พบหรือไม่สามารถอ่าน Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || '')}${overrideStoreStatus.error ? ` · ${esc(overrideStoreStatus.error)}` : ''}`}
+        </div>
         <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมเฉพาะช่องว่าง</button><small id="mfd-ft-status">ข้อมูลเดิมจะไม่ถูกเขียนทับ</small></div>
         <form id="mfd-form">
           <div class="master-data-notice"><strong>หลักการ:</strong> กรอกเฉพาะที่มีข้อมูลได้ · ช่องที่มี <span class="master-required">*</span> ใช้เป็น key เชื่อมทุกหน้า</div>
           ${sections.map((section, idx) => `<details class="card master-data-section" ${idx < 3 ? 'open' : ''}><summary><span>${esc(section.title)}</span><small>${esc(section.hint)}</small></summary><div class="master-fields">${section.fields.map(fieldHtml).join('')}</div></details>`).join('')}
-          <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-success" id="mfd-save-override" type="button">บันทึกเข้า Master Fund Override</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">แบบร่างเก็บใน Browser · Override เก็บเป็นไฟล์จริง</span></div>
+          <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-success" id="mfd-save-override" type="button">บันทึกเข้า Master Fund Override</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">แบบร่างเก็บใน Browser · Override สำเร็จเมื่อมีไฟล์บน Google Drive เท่านั้น</span></div>
         </form></div>`;
       const runSearch = () => { const value = $('#mfd-master-search', area).value.trim(); const found = findSource(value); selectedIsin = found?.isin || found?.fundId || value; State.masterFundDataManagerIsin = selectedIsin; render(); };
       $('#mfd-master-search', area)?.addEventListener('change', runSearch);
@@ -13130,13 +13238,14 @@ const Pages = {
         if (missing.length) return toast(`กรุณากรอกช่องบังคับ: ${missing.join(', ')}`, 'error');
         const button = $('#mfd-save-override', area); button.disabled = true;
         try {
-          const response = await fetch('/api/master-fund-overrides', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({profile:next})});
+          const response = await fetch('/api/master-fund-overrides', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({quarter:overrideQuarter, profile:next})});
           const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'บันทึก Override ไม่สำเร็จ');
           const oldKey = selectedIsin; selectedIsin = next.isin; State.masterFundDataManagerIsin = selectedIsin;
           if (oldKey !== selectedIsin) delete drafts[oldKey]; delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts);
           masterOverrideItems[selectedIsin.toUpperCase()] = data.profile;
+          overrideStoreStatus = {ok:true, driveExists:true, drivePath:data.drivePath || data.drive?.path || ''};
           sourceMasters.push({isin:data.profile.isin, fundId:data.profile.masterFundId, name:data.profile.masterFundName, baseCurrency:data.profile.baseCurrency, _profile:data.profile, _override:true});
-          toast(`บันทึกแล้วที่ ${data.source}`, 'success'); render();
+          toast(data.warning || `บันทึกแล้วที่ ${data.source}`, data.warning ? 'warning' : 'success'); render();
         } catch (err) { toast(err.message, 'error'); } finally { button.disabled = false; }
       });
       $('#mfd-delete', area)?.addEventListener('click', () => { delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts); toast('ลบแบบร่างแล้ว', 'success'); render(); });
