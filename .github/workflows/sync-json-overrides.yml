@@ -61,7 +61,8 @@ jobs:
               ]
 
           if not files:
-              raise SystemExit("No override JSON files found to upload.")
+              print("No override JSON files found; nothing to upload.")
+              raise SystemExit(0)
 
           for path in files:
               relative = path.relative_to("Data")
