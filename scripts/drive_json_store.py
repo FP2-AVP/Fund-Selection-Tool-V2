@@ -120,6 +120,19 @@ def resolve_folder_path(drive: Any, root_folder_id: str, path_segments: list[str
     return folder_id
 
 
+def find_folder_path(drive: Any, root_folder_id: str, path_segments: list[str]) -> str | None:
+    """Resolve an existing folder path without creating missing folders."""
+    folder_id = root_folder_id
+    for segment in path_segments:
+        clean_segment = str(segment or "").strip()
+        if not clean_segment:
+            continue
+        folder_id = find_child_folder(drive, folder_id, clean_segment)
+        if not folder_id:
+            return None
+    return folder_id
+
+
 def upload_json_payload(folder_id: str, file_name: str, payload: Any) -> str:
     from googleapiclient.http import MediaFileUpload
 
@@ -229,6 +242,24 @@ def download_json_payload(folder_id: str, file_name: str) -> Any | None:
     else:
         text = str(response)
     return json.loads(text)
+
+
+def download_json_payload_from_path(
+    root_folder_id: str,
+    path_segments: list[str],
+    file_name: str,
+) -> tuple[Any | None, str | None, str | None]:
+    """Read JSON from an existing Drive path without creating folders."""
+    drive = drive_client()
+    folder_id = find_folder_path(drive, root_folder_id, path_segments)
+    if not folder_id:
+        return None, None, None
+    file_id = find_file_in_folder(drive, folder_id, file_name)
+    if not file_id:
+        return None, folder_id, None
+    response = drive.files().get_media(fileId=file_id, supportsAllDrives=True).execute()
+    text = response.decode("utf-8") if isinstance(response, bytes) else str(response)
+    return json.loads(text), folder_id, file_id
 
 
 def delete_json_file(folder_id: str, file_name: str) -> bool:
