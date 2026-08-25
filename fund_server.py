@@ -78,7 +78,7 @@ JSON_DRIVE_ROOT_FOLDER_ID = drive_json_target(
 )
 DEFAULT_QUARTER = os.environ.get("FUND_TOOL_DEFAULT_QUARTER", "2026-Q1")
 FUND_OVERRIDES_FILE = ROOT / "Data" / "fund_overrides.json"
-MASTER_FUND_OVERRIDES_FILE = ROOT / "Data" / "master_fund_overrides.json"
+MASTER_FUND_OVERRIDES_FILE_NAME = "master_fund_overrides.json"
 MASTER_ALLOCATIONS_FILE_NAME = "fund_master_allocations.json"
 MASTER_ALLOCATIONS_FILE = ROOT / "Data" / MASTER_ALLOCATIONS_FILE_NAME
 FIXED_INCOME_FACTORS_OVERRIDES_FILE = ROOT / "Data" / "fixed_income_factors_overrides.json"
@@ -180,6 +180,11 @@ def json_override_folder_segments(quarter: str) -> list[str]:
 def master_allocations_path(quarter: str = DEFAULT_QUARTER) -> Path:
     normalized = normalize_quarter(quarter)
     return ROOT / "Data" / quarter_year(normalized) / normalized / "overrides" / MASTER_ALLOCATIONS_FILE_NAME
+
+
+def master_fund_overrides_path(quarter: str = DEFAULT_QUARTER) -> Path:
+    normalized = normalize_quarter(quarter)
+    return ROOT / "Data" / quarter_year(normalized) / normalized / "overrides" / MASTER_FUND_OVERRIDES_FILE_NAME
 
 
 def fund_selection_log_file_name(quarter: str) -> str:
@@ -373,6 +378,24 @@ def upload_master_allocations_to_drive(quarter: str, payload: dict) -> dict:
         return {"ok": False, "error": str(exc), "fileName": file_name}
 
 
+def upload_master_fund_overrides_to_drive(quarter: str, payload: dict) -> dict:
+    if not JSON_DRIVE_ROOT_FOLDER_ID:
+        return {"ok": False, "skipped": True, "error": "DRIVE_JSON_TARGET_DATA or JSON_DRIVE_ROOT_FOLDER_ID is not set"}
+    file_name = MASTER_FUND_OVERRIDES_FILE_NAME
+    path_segments = json_override_folder_segments(quarter)
+    try:
+        from scripts.drive_json_store import upload_json_payload_to_path
+        file_id, folder_id = upload_json_payload_to_path(JSON_DRIVE_ROOT_FOLDER_ID, path_segments, file_name, payload)
+        return {
+            "ok": True, "fileId": file_id, "folderId": folder_id, "fileName": file_name,
+            "path": "/".join([*path_segments, file_name]),
+        }
+    except ModuleNotFoundError as exc:
+        return {"ok": False, "error": f"Drive upload requires Python package '{exc.name or 'required Google API package'}'.", "fileName": file_name}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "fileName": file_name}
+
+
 def spreadsheet_credentials_from_env():
     from google.oauth2 import service_account
 
@@ -549,23 +572,44 @@ def write_fund_overrides(data: dict) -> None:
     tmp_path.replace(FUND_OVERRIDES_FILE)
 
 
-def read_master_fund_overrides() -> dict:
-    if not MASTER_FUND_OVERRIDES_FILE.exists():
-        return {"items": {}, "updatedAt": None}
-    data = read_json_file(MASTER_FUND_OVERRIDES_FILE)
+def read_master_fund_overrides(quarter: str = DEFAULT_QUARTER) -> dict:
+    normalized = normalize_quarter(quarter)
+    path = master_fund_overrides_path(normalized)
+    drive_path = "/".join([*json_override_folder_segments(normalized), MASTER_FUND_OVERRIDES_FILE_NAME])
+    try:
+        from scripts.drive_json_store import download_json_payload_from_path
+        payload, folder_id, file_id = download_json_payload_from_path(
+            JSON_DRIVE_ROOT_FOLDER_ID,
+            json_override_folder_segments(normalized),
+            MASTER_FUND_OVERRIDES_FILE_NAME,
+        )
+    except Exception as exc:
+        return {
+            "quarter": normalized, "items": {}, "updatedAt": None, "sourcePath": path,
+            "source": "google-drive", "drivePath": drive_path, "driveExists": False,
+            "driveError": str(exc),
+        }
+    data = payload if isinstance(payload, dict) else {}
     return {
+        "quarter": normalized,
         "items": data.get("items") if isinstance(data.get("items"), dict) else {},
-        "updatedAt": data.get("updatedAt"),
+        "updatedAt": data.get("updatedAt"), "sourcePath": path,
+        "source": "google-drive", "drivePath": drive_path,
+        "driveExists": payload is not None, "driveFolderId": folder_id, "driveFileId": file_id,
     }
 
 
-def write_master_fund_overrides(data: dict) -> None:
-    MASTER_FUND_OVERRIDES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = MASTER_FUND_OVERRIDES_FILE.with_suffix(".tmp")
+def write_master_fund_overrides(quarter: str, data: dict) -> Path:
+    normalized = normalize_quarter(quarter)
+    path = master_fund_overrides_path(normalized)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data["quarter"] = normalized
+    tmp_path = path.with_suffix(".tmp")
     with tmp_path.open("w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
-    tmp_path.replace(MASTER_FUND_OVERRIDES_FILE)
+    tmp_path.replace(path)
+    return path
 
 
 def read_master_allocations(quarter: str = DEFAULT_QUARTER) -> dict:
@@ -662,7 +706,7 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/fund-overrides":
             return self.handle_get_fund_overrides()
         if parsed.path == "/api/master-fund-overrides":
-            return self.handle_get_master_fund_overrides()
+            return self.handle_get_master_fund_overrides(parsed)
         if parsed.path == "/api/master-allocations":
             return self.handle_get_master_allocations(parsed)
         if parsed.path == "/api/fixed-income-factors-overrides":
@@ -716,7 +760,7 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
             return self.handle_delete_fund_override(fund_key)
         if parsed.path.startswith("/api/master-fund-overrides/"):
             master_key = unquote(parsed.path.rsplit("/", 1)[-1])
-            return self.handle_delete_master_fund_override(master_key)
+            return self.handle_delete_master_fund_override(master_key, parsed)
         if parsed.path.startswith("/api/master-allocations/"):
             fund_key = unquote(parsed.path.rsplit("/", 1)[-1])
             return self.handle_delete_master_allocation(fund_key)
@@ -774,15 +818,23 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
             },
         )
 
-    def handle_get_master_fund_overrides(self):
-        data = read_master_fund_overrides()
+    def handle_get_master_fund_overrides(self, parsed):
+        query = parse_qs(parsed.query)
+        quarter = normalize_quarter((query.get("quarter") or [DEFAULT_QUARTER])[0])
+        data = read_master_fund_overrides(quarter)
+        drive_error = data.get("driveError")
         self.send_json(
-            HTTPStatus.OK,
+            HTTPStatus.SERVICE_UNAVAILABLE if drive_error else HTTPStatus.OK,
             {
-                "ok": True,
+                "ok": not bool(drive_error),
                 "items": data["items"],
+                "quarter": quarter,
                 "updatedAt": data.get("updatedAt"),
-                "source": str(MASTER_FUND_OVERRIDES_FILE.relative_to(ROOT)),
+                "source": data.get("source", "google-drive"),
+                "drivePath": data.get("drivePath"),
+                "driveExists": bool(data.get("driveExists")),
+                "driveFileId": data.get("driveFileId"),
+                "error": drive_error,
             },
         )
 
@@ -1026,6 +1078,7 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
         try:
             payload = self.read_request_json()
             profile = payload.get("profile") if isinstance(payload.get("profile"), dict) else payload
+            quarter = normalize_quarter(payload.get("quarter") or profile.get("quarter") or DEFAULT_QUARTER)
             required = ("masterFundId", "masterFundName", "isin", "shareClassName", "baseCurrency")
             missing = [key for key in required if not str(profile.get(key) or "").strip()]
             if missing:
@@ -1040,7 +1093,9 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
                 for field, value in profile.items()
                 if field not in {"createdAt", "updatedAt", "key"}
             }
-            data = read_master_fund_overrides()
+            data = read_master_fund_overrides(quarter)
+            if data.get("driveError"):
+                return self.send_json(HTTPStatus.BAD_GATEWAY, {"ok": False, "error": f"Cannot read Google Drive override: {data['driveError']}"})
             existing = data["items"].get(key, {})
             item = {
                 **existing,
@@ -1051,21 +1106,38 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
             }
             data["items"][key] = item
             data["updatedAt"] = now
-            write_master_fund_overrides(data)
+            drive_result = upload_master_fund_overrides_to_drive(quarter, data)
+            if not drive_result.get("ok"):
+                return self.send_json(HTTPStatus.BAD_GATEWAY, {"ok": False, "error": f"Google Drive save failed: {drive_result.get('error')}", "drive": drive_result})
+            path = write_master_fund_overrides(quarter, data)
             self.send_json(
                 HTTPStatus.OK,
-                {"ok": True, "profile": item, "source": str(MASTER_FUND_OVERRIDES_FILE.relative_to(ROOT))},
+                {
+                    "ok": True, "profile": item, "quarter": quarter,
+                    "source": "google-drive",
+                    "drivePath": drive_result.get("path"),
+                    "localMirror": str(path.relative_to(ROOT)),
+                    "drive": drive_result,
+                    "warning": None,
+                },
             )
         except Exception as exc:
             self.send_json(HTTPStatus.BAD_REQUEST, {"ok": False, "error": str(exc)})
 
-    def handle_delete_master_fund_override(self, master_key: str):
+    def handle_delete_master_fund_override(self, master_key: str, parsed):
         key = normalize_override_key(master_key)
-        data = read_master_fund_overrides()
+        query = parse_qs(parsed.query)
+        quarter = normalize_quarter((query.get("quarter") or [DEFAULT_QUARTER])[0])
+        data = read_master_fund_overrides(quarter)
+        if data.get("driveError"):
+            return self.send_json(HTTPStatus.BAD_GATEWAY, {"ok": False, "error": f"Cannot read Google Drive override: {data['driveError']}"})
         removed = data["items"].pop(key, None)
         data["updatedAt"] = datetime.now(tz=timezone.utc).isoformat()
-        write_master_fund_overrides(data)
-        self.send_json(HTTPStatus.OK, {"ok": True, "removed": bool(removed), "key": key})
+        drive_result = upload_master_fund_overrides_to_drive(quarter, data)
+        if not drive_result.get("ok"):
+            return self.send_json(HTTPStatus.BAD_GATEWAY, {"ok": False, "error": f"Google Drive delete sync failed: {drive_result.get('error')}", "drive": drive_result})
+        path = write_master_fund_overrides(quarter, data)
+        self.send_json(HTTPStatus.OK, {"ok": True, "removed": bool(removed), "key": key, "quarter": quarter, "source": str(path.relative_to(ROOT)), "drive": drive_result})
 
     def handle_delete_fund_override(self, fund_key: str):
         key = normalize_override_key(fund_key)
