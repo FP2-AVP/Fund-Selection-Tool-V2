@@ -225,6 +225,7 @@ const PAGE_DATASET_KEYS = {
   'thai-annualized': 'thaiQuality',
   'thai-annualized-v2': 'thaiQuality',
   'thai-calendar': 'thaiQuality',
+  'thai-performance-ratios': 'thaiQuality',
   'master-annualized': 'masterFund',
   'master-annualized-v2': 'masterFund',
   'master-calendar': 'masterFund',
@@ -2010,10 +2011,18 @@ function ensureExtendedPageConfigs() {
     'master-placeholder-5': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
       tabName: '2026-Q1',
-      title: 'ปัจจัยประกอบอื่นๆ',
+      title: 'อัตราส่วนวัดผลการดำเนินงาน Master Fund',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
       datasetKey: 'masterFund',
+    },
+    'thai-performance-ratios': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'อัตราส่วนวัดผลการดำเนินงาน กองทุนไทย',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
     },
     'master-placeholder-9': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
@@ -14709,20 +14718,32 @@ const Pages = {
     }
   },
 
-  async masterOtherFactors(area) {
-    setLoading(area, 'กำลังโหลดปัจจัยประกอบอื่นๆ...');
+  async masterOtherFactors(area, options = {}) {
+    const isThai = options.dataset === 'thai';
+    const pageKey = options.pageKey || 'master-placeholder-5';
+    const stateKey = options.stateKey || (isThai ? '_ofThai' : '_of');
+    const pageTitle = CONFIG.PAGES[pageKey]?.title || (isThai
+      ? 'อัตราส่วนวัดผลการดำเนินงาน กองทุนไทย'
+      : 'อัตราส่วนวัดผลการดำเนินงาน Master Fund');
+    setLoading(area, `กำลังโหลด${pageTitle}...`);
 
     let rawRows, selectRows, thaiQualityRows;
     try {
       await ensureSelectedFundsCatalog();
-      const quarter = String(State.currentQuarter || CONFIG.PAGES['master-placeholder-5']?.tabName || '').trim();
-      [rawRows, selectRows, thaiQualityRows] = await Promise.all([
-        fetchCachedForTab('master-placeholder-5', quarter),
-        fetchCached('select-fund'),
-        fetchCachedForTab('thai-annualized', quarter),
-      ]);
+      const quarter = String(State.currentQuarter || CONFIG.PAGES[pageKey]?.tabName || '').trim();
+      if (isThai) {
+        rawRows = await fetchCachedForTab(pageKey, quarter);
+        selectRows = [];
+        thaiQualityRows = rawRows;
+      } else {
+        [rawRows, selectRows, thaiQualityRows] = await Promise.all([
+          fetchCachedForTab(pageKey, quarter),
+          fetchCached('select-fund'),
+          fetchCachedForTab('thai-annualized', quarter),
+        ]);
+      }
     } catch (e) {
-      setError(area, e.message, 'master-placeholder-5');
+      setError(area, e.message, pageKey);
       return;
     }
 
@@ -14730,44 +14751,60 @@ const Pages = {
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
     const nameIdx = findColumnIndex(headers, ['Group/Investment']);
     const fundIdIdx = findColumnIndex(headers, ['FundId', 'Fund ID']);
+    const fundCodeIdx = findColumnIndex(headers, ['Fund Code']);
     const isinIdx = findColumnIndex(headers, ['ISIN']);
     const currencyIdx = findColumnIndex(headers, ['Base Currency']);
     const isinByFundId = buildMasterFundIdIsinFallback(selectRows, thaiQualityRows);
 
-    const masterRows = rawRows.slice(1).map((row, index) => {
+    let masterRows = rawRows.slice(1).map((row, index) => {
       const name = get(row, nameIdx);
       const fundId = get(row, fundIdIdx);
       const isin = get(row, isinIdx) || isinByFundId.get(fundId.toUpperCase()) || '';
       const currency = get(row, currencyIdx);
       return { row, name, fundId, isin, currency, key: `${isin}::${currency}::${name}::${index}` };
-    }).filter(item => item.name && item.isin);
+    }).filter(item => item.name && (isThai || item.isin));
 
-    const thaiSource = Object.values(State.selectedFunds).filter(f => f.masterId && f.masterId !== '-');
+    const thaiSource = Object.values(State.selectedFunds).filter(f => (
+      isThai || (f.masterId && f.masterId !== '-')
+    ));
     const thaiFunds  = thaiSource.filter(f => State.selectedKeys.has(f.key));
 
     if (!thaiFunds.length) {
-      setError(area, 'ยังไม่ได้เลือกกองทุนจากเมนูเลือกกองทุน หรือกองที่เลือกยังไม่ผูก Master Fund ID', 'master-placeholder-5');
+      setError(area, isThai
+        ? 'ยังไม่ได้เลือกกองทุนจากเมนูเลือกกองทุน'
+        : 'ยังไม่ได้เลือกกองทุนจากเมนูเลือกกองทุน หรือกองที่เลือกยังไม่ผูก Master Fund ID', pageKey);
       return;
     }
 
     const linksByRowKey = {};
-    thaiFunds.forEach(fund => {
-      const isin = String(fund.masterId || '').trim().toUpperCase();
-      if (!isin) return;
-      masterRows.filter(item => String(item.isin || '').trim().toUpperCase() === isin).forEach(item => {
-        if (!linksByRowKey[item.key]) linksByRowKey[item.key] = [];
-        linksByRowKey[item.key].push(fund);
+    if (isThai) {
+      const selectedByCode = new Map(thaiFunds.map(fund => [String(fund.code || '').trim().toUpperCase(), fund]));
+      masterRows.forEach(item => {
+        const code = get(item.row, fundCodeIdx).toUpperCase();
+        const fund = selectedByCode.get(code);
+        if (fund) linksByRowKey[item.key] = [fund];
       });
-    });
+    } else {
+      thaiFunds.forEach(fund => {
+        const isin = String(fund.masterId || '').trim().toUpperCase();
+        if (!isin) return;
+        masterRows.filter(item => String(item.isin || '').trim().toUpperCase() === isin).forEach(item => {
+          if (!linksByRowKey[item.key]) linksByRowKey[item.key] = [];
+          linksByRowKey[item.key].push(fund);
+        });
+      });
+    }
     const displayRows = masterRows.filter(item => linksByRowKey[item.key]?.length);
     if (!displayRows.length) {
-      setError(area, 'ไม่พบ Master Fund จาก FundId และ ISIN fallback ในข้อมูล Base', 'master-placeholder-5');
+      setError(area, isThai
+        ? 'ไม่พบกองทุนที่เลือกในข้อมูล AVP Thai Fund for Quality'
+        : 'ไม่พบ Master Fund จาก FundId และ ISIN fallback ในข้อมูล Base', pageKey);
       return;
     }
 
     /* ── FIX 2: Persist state across navigation using State._of ── */
-    if (!State._of) State._of = {};
-    const S = State._of;
+    if (!State[stateKey]) State[stateKey] = {};
+    const S = State[stateKey];
     if (!S.mode)        S.mode        = 'annualized';
     if (!S.period)      S.period      = '3Y';
     if (!S.xKey)        S.xKey        = 'maxdd';
@@ -14828,8 +14865,16 @@ const Pages = {
     function getBaseMetrics(mode) {
       return mode === 'calendar' ? CALENDAR_METRICS : ANNUALIZED_METRICS;
     }
+    function metricHasData(metric, period, mode) {
+      const idx = getColIdx(metric, period, mode);
+      if (idx < 0) return false;
+      return displayRows.some(item => {
+        const value = get(item.row, idx).replace(/,/g, '');
+        return value !== '' && Number.isFinite(Number(value));
+      });
+    }
     function getMetricsForPeriod(mode, period) {
-      return getBaseMetrics(mode).filter(metric => getColIdx(metric, period, mode) >= 0);
+      return getBaseMetrics(mode).filter(metric => metricHasData(metric, period, mode));
     }
     function getAvailablePeriods(mode, xKey, yKey) {
       const periods = mode === 'calendar' ? CALENDAR_YEARS : ANNUALIZED_PERIODS;
@@ -14837,8 +14882,8 @@ const Pages = {
       const xMeta = metrics.find(metric => metric.key === xKey);
       const yMeta = metrics.find(metric => metric.key === yKey);
       return periods.filter(period => {
-        const xOk = !xMeta || getColIdx(xMeta, period, mode) >= 0;
-        const yOk = !yMeta || getColIdx(yMeta, period, mode) >= 0;
+        const xOk = !xMeta || metricHasData(xMeta, period, mode);
+        const yOk = !yMeta || metricHasData(yMeta, period, mode);
         return xOk && yOk;
       });
     }
@@ -15356,8 +15401,8 @@ const Pages = {
         <thead><tr>
           <th class="of-th of-th-cb"><input type="checkbox" id="of-cb-all" ${[...visibleKeys].length===displayRows.length?'checked':''} title="เลือก/ยกเลิกทั้งหมด"></th>
           <th class="of-th of-th-hl">สี</th>
-          <th class="of-th of-th-name">Master Fund</th>
-          <th class="of-th of-th-thai">กองทุนไทย</th>
+          <th class="of-th of-th-name">${isThai ? 'ชื่อกองทุนไทย' : 'Master Fund'}</th>
+          <th class="of-th of-th-thai">${isThai ? 'รหัสกองทุน' : 'กองทุนไทย'}</th>
           ${metricHeaders}
         </tr></thead>
         <tbody>${rows}</tbody>
@@ -15365,7 +15410,9 @@ const Pages = {
     }
 
     /* ── Helpers ── */
-    const source = 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID';
+    const source = isThai
+      ? 'AVP Thai Fund for Quality'
+      : 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID';
     function buildPeriodBtns(mode, active, periods) {
       return (periods || (mode==='calendar'?CALENDAR_YEARS:ANNUALIZED_PERIODS))
         .map(p=>`<button class="of-period-btn${p===active?' is-active':''}" data-of-period="${p}" type="button">${p}</button>`).join('');
@@ -15378,7 +15425,7 @@ const Pages = {
       return `กราฟเปรียบเทียบ ${xLabel} และ ${yLabel} (${period})`;
     }
     function buildOtherFactorsClipboardPlainText() {
-      const title = area.querySelector('#of-scatter-title')?.textContent?.trim() || CONFIG.PAGES['master-placeholder-5']?.title || 'ปัจจัยประกอบอื่นๆ';
+      const title = area.querySelector('#of-scatter-title')?.textContent?.trim() || pageTitle;
       const table = area.querySelector('.of-side-table');
       const lines = [title, `ที่มา : ${source}`];
       if (table) {
@@ -15532,7 +15579,7 @@ const Pages = {
       </table>`;
     }
     async function buildOtherFactorsClipboardHtml() {
-      const title = area.querySelector('#of-scatter-title')?.textContent?.trim() || CONFIG.PAGES['master-placeholder-5']?.title || 'ปัจจัยประกอบอื่นๆ';
+      const title = area.querySelector('#of-scatter-title')?.textContent?.trim() || pageTitle;
       const svg = area.querySelector('#of-scatter-area .of-scatter-left svg');
       const sideTable = area.querySelector('#of-scatter-area .of-side-table');
       if (!svg || !sideTable) return '';
@@ -15547,7 +15594,7 @@ const Pages = {
         <head><meta charset="utf-8"></head>
         <body lang="TH" style="margin:0;padding:0;background:#ffffff;${fontFamily};${clipboardFontStyle};color:#334155;mso-fareast-language:TH;">
           <div style="display:inline-block;background:#ffffff;${fontFamily};${clipboardFontStyle};">
-            <div lang="TH" style="${fontFamily};${clipboardFontStyle};line-height:1.2;font-weight:700;color:#1a3c6e;margin:0 0 4px;mso-fareast-language:TH;">${esc(CONFIG.PAGES['master-placeholder-5']?.title || 'ปัจจัยประกอบอื่นๆ')}</div>
+            <div lang="TH" style="${fontFamily};${clipboardFontStyle};line-height:1.2;font-weight:700;color:#1a3c6e;margin:0 0 4px;mso-fareast-language:TH;">${esc(pageTitle)}</div>
             <div lang="TH" style="${fontFamily};${clipboardFontStyle};line-height:1.2;color:#1a2744;font-weight:700;margin:0 0 4px;mso-fareast-language:TH;">${esc(title)}</div>
             <div lang="TH" style="${fontFamily};${clipboardFontStyle};line-height:1.2;color:#64748b;margin:0 0 10px;mso-fareast-language:TH;">ที่มา : ${esc(source)}</div>
             <div style="display:block;white-space:nowrap;background:#ffffff;">
@@ -15575,7 +15622,7 @@ const Pages = {
     const {html:initScatter, plotCount, totalCount, xLabel, yLabel} = renderScatterWithTable(S.xKey, S.yKey, S.period, S.mode, S.visibleKeys);
 
     area.innerHTML = `
-      ${pageToolActions('master-placeholder-5', source, exportSvgAction)}
+      ${pageToolActions(pageKey, source, exportSvgAction)}
       <div class="card report-card" id="report-card">
         <div class="of-topbar">
           <div class="of-topbar-left">
@@ -22701,7 +22748,8 @@ const App = {
       'master-placeholder-12': { title: 'เปรียบเทียบค่าธรรมเนียม', subtitle: 'เตรียมเมนูไว้สำหรับต่อยอดรายงานเปรียบเทียบค่าธรรมเนียม' },
       'master-placeholder-7': { title: 'Top 10 Holding V2', subtitle: 'เปรียบเทียบหลายกองในหน้าเดียว' },
       'master-placeholder-8': { title: 'Top 10 Holding', subtitle: 'วิเคราะห์เปรียบเทียบกองทุน 8 ช่องพร้อมกัน — iShare Index 1 กอง + กองทุนไทย 7 กอง' },
-      'master-placeholder-5': { title: 'ปัจจัยประกอบอื่นๆ', subtitle: 'Sharpe, Sortino, Information, Treynor Ratio ทุก Period' },
+      'thai-performance-ratios': { title: 'อัตราส่วนวัดผลการดำเนินงาน กองทุนไทย', subtitle: 'ข้อมูลจาก AVP Thai Fund for Quality' },
+      'master-placeholder-5': { title: 'อัตราส่วนวัดผลการดำเนินงาน Master Fund', subtitle: 'ข้อมูลจาก AVP Master Fund ID' },
       'master-placeholder-6': { title: 'Income Fund', subtitle: '' },
       'income-fund-1': { title: 'Income Fund', subtitle: 'แสดงเฉพาะกองทุน Dividend และ Auto Redeem จาก Fund Key Performance AVP' },
       'income-fund-2': { title: 'Income Fund 2', subtitle: 'Focus Group จากกองที่ติ๊กไว้ใน Income Fund พร้อมประวัติปันผล SEC/Finnomena' },
@@ -22752,6 +22800,7 @@ const App = {
       case 'master-placeholder-12': Pages.feeComparisonPlaceholder(area);   break;
       case 'master-placeholder-7': Pages.masterMenu02V2(area);              break;
       case 'master-placeholder-8': Pages.masterMenu02V3(area);              break;
+      case 'thai-performance-ratios': Pages.masterOtherFactors(area, { dataset: 'thai', pageKey: 'thai-performance-ratios', stateKey: '_ofThai' }); break;
       case 'master-placeholder-5': Pages.masterOtherFactors(area);             break;
       case 'master-placeholder-6': Pages.placeholder(area, 'Income Fund');           break;
       case 'income-fund-1': Pages.incomeFund(area, 'income-fund-1');        break;
