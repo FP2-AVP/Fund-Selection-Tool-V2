@@ -16137,6 +16137,9 @@ const Pages = {
         code: findColumnIndex(headers, ['Fund Code']),
         cash: findColumnIndex(headers, ['Asset Alloc Cash % (Net)']),
         bond: findColumnIndex(headers, ['Asset Alloc Bond % (Net)']),
+        usBond: findColumnIndex(headers, ['Asset Alloc US Bond % (Net)']),
+        government: findColumnIndex(headers, ['Fixd-Inc Super Sector - Brkdwn Government (Calc) (Net) (FI%)']),
+        corporate: findColumnIndex(headers, ['Fixd-Inc Super Sector - Brkdwn Corporate (Calc) (Net) (FI%)']),
         aaa: findColumnIndex(headers, ['Fixd-Inc Credit Rtg - Brkdwn AAA (Calc) (Net) (FI%)']),
         aa: findColumnIndex(headers, ['Fixd-Inc Credit Rtg - Brkdwn AA (Calc) (Net) (FI%)']),
         a: findColumnIndex(headers, ['Fixd-Inc Credit Rtg - Brkdwn A (Calc) (Net) (FI%)']),
@@ -16220,7 +16223,9 @@ const Pages = {
       editableColumns = [
         'cash',
         'bond',
-        'sector2',
+        'usBond',
+        'government',
+        'corporate',
         'foreign',
         'aaa',
         'aa',
@@ -16260,7 +16265,9 @@ const Pages = {
               highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
               cash: formatTwo(get(raw, ci.cash)),
               bond: formatTwo(get(raw, ci.bond)),
-              sector2: '',
+              usBond: formatTwo(get(raw, ci.usBond)),
+              government: formatTwo(get(raw, ci.government)),
+              corporate: formatTwo(get(raw, ci.corporate)),
               foreign: '',
               aaa: formatTwo(get(raw, ci.aaa)),
               aa: formatTwo(get(raw, ci.aa)),
@@ -16287,8 +16294,10 @@ const Pages = {
     const columns = [
       'กองไทย',
       'Asset Alloc Cash',
-      'Fixd-Inc Sector -',
-      'Fixd-Inc Sector -',
+      'Asset Alloc Bond',
+      'Asset Alloc US Bond',
+      'Fixd-Inc Sector - Government',
+      'Fixd-Inc Sector - Corporate',
       'ลงทุนต่างประเทศ',
       'AAA',
       'AA',
@@ -16339,6 +16348,8 @@ const Pages = {
               <col class="of3-col-small">
               <col class="of3-col-small">
               <col class="of3-col-small">
+              <col class="of3-col-small">
+              <col class="of3-col-small">
               <col class="of3-col-rating">
               <col class="of3-col-rating">
               <col class="of3-col-rating">
@@ -16357,8 +16368,10 @@ const Pages = {
               <tr>
                 <th rowspan="2">กองไทย</th>
                 <th rowspan="2"><span>Asset Alloc</span><span>Cash</span></th>
-                <th rowspan="2"><span>Fixd-Inc</span><span>Sector -</span></th>
-                <th rowspan="2"><span>Fixd-Inc</span><span>Sector -</span></th>
+                <th rowspan="2"><span>Asset Alloc</span><span>Bond</span></th>
+                <th rowspan="2"><span>Asset Alloc</span><span>US Bond</span></th>
+                <th rowspan="2"><span>Fixd-Inc Sector</span><span>Government</span></th>
+                <th rowspan="2"><span>Fixd-Inc Sector</span><span>Corporate</span></th>
                 <th rowspan="2"><span>ลงทุน</span><span>ต่างประเทศ</span></th>
                 <th colspan="4" class="of3-group">Rating</th>
                 <th rowspan="2"><span>อายุของตรา</span><span>สารหนี้เฉลี่ย</span></th>
@@ -16460,7 +16473,9 @@ const Pages = {
         row.fundName,
         row.cash || '-',
         row.bond || '-',
-        row.sector2 || '-',
+        row.usBond || '-',
+        row.government || '-',
+        row.corporate || '-',
         row.foreign || '-',
         row.aaa || '-',
         row.aa || '-',
