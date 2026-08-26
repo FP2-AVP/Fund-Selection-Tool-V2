@@ -134,7 +134,7 @@
 
 #### Master Fund Annualized Return
 
-แสดงผลตอบแทนย้อนหลังของ Master Fund โดยจับคู่ด้วย ISIN และแยก Base Currency พร้อม Rank ประกอบ
+แสดงผลตอบแทนย้อนหลังของ Master Fund โดยใช้ Master FundId จาก AVP Thai Fund for Quality จับคู่กับ AVP Master Fund ID และระบุ Share Class ด้วย ISIN พร้อม Rank ประกอบ
 
 #### Master Fund Calendar Year
 
@@ -148,7 +148,11 @@
 
 หน้านี้เป็นพื้นที่เตรียมไว้สำหรับรายงานเปรียบเทียบค่าธรรมเนียมเพิ่มเติม
 
-#### ปัจจัยประกอบอื่นๆ
+#### อัตราส่วนวัดผลการดำเนินงาน กองทุนไทย
+
+แสดงกราฟและตารางเปรียบเทียบ Return, Standard Deviation, Sharpe, Sortino, Information, Treynor Ratio และ Maximum Drawdown ของกองทุนไทยที่เลือก โดยใช้ข้อมูลจาก AVP Thai Fund for Quality ระบบจะแสดงเฉพาะ Metric และ Period ที่มีค่าจริง
+
+#### อัตราส่วนวัดผลการดำเนินงาน Master Fund
 
 แสดงกราฟและตารางเปรียบเทียบ Sharpe, Sortino, Information Ratio และ Treynor Ratio
 
