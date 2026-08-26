@@ -1079,7 +1079,12 @@ class FundRequestHandler(SimpleHTTPRequestHandler):
             payload = self.read_request_json()
             profile = payload.get("profile") if isinstance(payload.get("profile"), dict) else payload
             quarter = normalize_quarter(payload.get("quarter") or profile.get("quarter") or DEFAULT_QUARTER)
-            required = ("masterFundId", "masterFundName", "isin", "shareClassName", "baseCurrency")
+            if not str(profile.get("isin") or "").strip() and not str(profile.get("masterFundId") or "").strip():
+                return self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"ok": False, "error": "either isin or masterFundId is required"},
+                )
+            required = ("masterFundName", "shareClassName", "baseCurrency")
             missing = [key for key in required if not str(profile.get(key) or "").strip()]
             if missing:
                 return self.send_json(
