@@ -3111,11 +3111,15 @@ async function loadMasterFundOverridesForQuarter(quarter) {
   if (cached && Date.now() - cached.ts < CONFIG.CACHE_TTL) return cached.data;
   let data;
   try {
-    const response = await fetch(`/api/master-fund-overrides?quarter=${encodeURIComponent(normalized)}`, {cache:'no-store'});
-    data = await response.json();
-    if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  } catch (_) {
-    data = {ok:false, quarter:normalized, items:{}, source:'google-drive', driveExists:false, error:'ไม่สามารถตรวจสอบ Master Fund Override บน Google Drive ได้'};
+    if (hasMasterAllocationsApi()) {
+      data = await masterFundOverrideApiRequest('get', {quarter: normalized});
+    } else {
+      const response = await fetch(`/api/master-fund-overrides?quarter=${encodeURIComponent(normalized)}`, {cache:'no-store'});
+      data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+    }
+  } catch (err) {
+    data = {ok:false, quarter:normalized, items:{}, source:'google-drive', driveExists:false, error:err.message || 'ไม่สามารถตรวจสอบ Master Fund Override บน Google Drive ได้'};
   }
   State._cache[key] = {data, ts:Date.now()};
   return data;
@@ -3557,9 +3561,14 @@ async function loadMasterAllocations(force = false) {
   if (!force && State.masterAllocationsLoaded) return State.masterAllocations;
   const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
   try {
-    const resp = await fetch(`/api/master-allocations?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
+    let data;
+    if (hasMasterAllocationsApi()) {
+      data = await masterAllocationsApiRequest('get', { quarter });
+    } else {
+      const resp = await fetch(`/api/master-allocations?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      data = await resp.json();
+    }
     State.masterAllocations = {
       items: data.items || {},
       updatedAt: data.updatedAt || null,
@@ -3583,20 +3592,21 @@ async function loadMasterAllocations(force = false) {
 async function saveMasterAllocation(item) {
   let data;
   try {
-    const resp = await fetch('/api/master-allocations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(item),
-    });
-    data = await resp.json().catch(() => ({}));
-    if (!resp.ok || data.ok === false) {
-      throw new Error(data.error || `บันทึก mapping ไม่สำเร็จ (${resp.status})`);
+    if (hasMasterAllocationsApi()) {
+      data = await masterAllocationsApiRequest('save', { item });
+    } else {
+      const resp = await fetch('/api/master-allocations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item),
+      });
+      data = await resp.json().catch(() => ({}));
+      if (!resp.ok || data.ok === false || data.driveUploaded === false) {
+        throw new Error(data.error || data.warning || `บันทึก mapping ไม่สำเร็จ (${resp.status})`);
+      }
     }
   } catch (err) {
-    if (!hasMasterAllocationsApi()) {
-      throw new Error(`${err.message || err} · GitHub Pages ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนบันทึก Mapping`);
-    }
-    data = await masterAllocationsApiRequest('save', { item });
+    throw new Error(`${err.message || err}${hasMasterAllocationsApi() ? '' : ' · ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนบันทึก Mapping ลง Google Drive'}`);
   }
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
@@ -3607,16 +3617,17 @@ async function deleteMasterAllocation(key) {
   const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
   let data;
   try {
-    const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}?quarter=${encodeURIComponent(quarter)}`, { method: 'DELETE' });
-    data = await resp.json().catch(() => ({}));
-    if (!resp.ok || data.ok === false) {
-      throw new Error(data.error || `ลบ mapping ไม่สำเร็จ (${resp.status})`);
+    if (hasMasterAllocationsApi()) {
+      data = await masterAllocationsApiRequest('delete', { quarter, key });
+    } else {
+      const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}?quarter=${encodeURIComponent(quarter)}`, { method: 'DELETE' });
+      data = await resp.json().catch(() => ({}));
+      if (!resp.ok || data.ok === false || data.driveUploaded === false) {
+        throw new Error(data.error || data.warning || `ลบ mapping ไม่สำเร็จ (${resp.status})`);
+      }
     }
   } catch (err) {
-    if (!hasMasterAllocationsApi()) {
-      throw new Error(`${err.message || err} · GitHub Pages ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนลบ Mapping`);
-    }
-    data = await masterAllocationsApiRequest('delete', { quarter, key });
+    throw new Error(`${err.message || err}${hasMasterAllocationsApi() ? '' : ' · ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนลบ Mapping บน Google Drive'}`);
   }
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
@@ -3751,6 +3762,33 @@ async function masterAllocationsApiRequest(action, payload = {}) {
   }
   if (data.ok === false) {
     throw new Error(data.error || `Master Allocations API ${action} failed`);
+  }
+  return data;
+}
+
+async function masterFundOverrideApiRequest(action, payload = {}) {
+  const quarter = payload.quarter || State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+  const remoteAction = `master-override-${action}`;
+  const params = { action: remoteAction, quarter };
+  if (action === 'save') {
+    Object.assign(params, await masterAllocationsCompressedPayload({
+      action: remoteAction,
+      key: masterAllocationsApiKey(),
+      quarter,
+      profile: payload.profile,
+    }));
+  } else if (action === 'delete') {
+    params.keyToDelete = payload.key;
+  }
+
+  let data;
+  try {
+    data = await masterAllocationsApiFetch(params);
+  } catch {
+    data = await masterAllocationsApiJsonp(params);
+  }
+  if (data.ok === false) {
+    throw new Error(data.error || `Master Fund Override API ${action} failed`);
   }
   return data;
 }
@@ -5853,7 +5891,10 @@ function buildResolvedMasterLinks(universe, displayMasterRows) {
   });
   const links = {};
   universe.forEach(({ fund, master }) => {
-    const isin = String(master?.isin || '').trim().toUpperCase();
+    // The Master sheet may contain the FundId and returns but leave ISIN blank.
+    // Once that FundId mapping is resolved, use the share-class ISIN from
+    // Fund Key Performance to link the display row.
+    const isin = String(master?.isin || fund?.masterId || '').trim().toUpperCase();
     if (!isin) return;
     (rowsByIsin.get(isin) || []).forEach(row => {
       if (!links[row.key]) links[row.key] = [];
@@ -5861,6 +5902,32 @@ function buildResolvedMasterLinks(universe, displayMasterRows) {
     });
   });
   return links;
+}
+
+function buildMasterFundIdIsinFallback(selectRows, qualityRows) {
+  const performanceByCode = new Map(
+    buildSelectedFundsCatalog(selectRows).map(fund => [
+      String(fund.code || '').trim().toUpperCase(),
+      String(fund.masterId || '').trim().toUpperCase(),
+    ])
+  );
+  const headers = qualityRows[0] || [];
+  const codeIdx = findColumnIndex(headers, ['Fund Code', 'FundCode', 'Code']);
+  const fundIdIdx = findColumnIndex(headers, ['Master FundId', 'Master Fund ID', 'MasterFundId']);
+  const candidates = new Map();
+  qualityRows.slice(1).forEach(row => {
+    const code = rowValue(row, codeIdx).toUpperCase();
+    const fundId = rowValue(row, fundIdIdx).toUpperCase();
+    const isin = performanceByCode.get(code) || '';
+    if (!fundId || !isin || isin === '-') return;
+    if (!candidates.has(fundId)) candidates.set(fundId, new Set());
+    candidates.get(fundId).add(isin);
+  });
+  return new Map(
+    [...candidates.entries()]
+      .filter(([, values]) => values.size === 1)
+      .map(([fundId, values]) => [fundId, [...values][0]])
+  );
 }
 
 function buildFeeComparisonRows(universe, rawLookup, options = {}) {
@@ -13025,10 +13092,9 @@ const Pages = {
     let masterOverrideItems = {};
     let overrideStoreStatus = {ok:false, driveExists:false, drivePath:`${overrideQuarter}/overrides/master_fund_overrides.json`, error:'ยังไม่ได้ตรวจสอบ Google Drive'};
     try {
-      const response = await fetch(`/api/master-fund-overrides?quarter=${encodeURIComponent(overrideQuarter)}`, {cache:'no-store'});
-      const data = await response.json();
+      const data = await loadMasterFundOverridesForQuarter(overrideQuarter);
       overrideStoreStatus = data;
-      if (response.ok && data.ok) masterOverrideItems = data.items || {};
+      if (data.ok) masterOverrideItems = data.items || {};
     } catch (err) { overrideStoreStatus.error = err.message || 'ตรวจสอบ Google Drive ไม่สำเร็จ'; }
     Object.values(masterOverrideItems).forEach(profile => sourceMasters.push({
       isin:profile.isin || '', fundId:profile.masterFundId || '', name:profile.masterFundName || profile.shareClassName || '',
@@ -13190,8 +13256,8 @@ const Pages = {
         <div class="master-search-result ${source.isin || source.fundId || drafts[selectedIsin] || isNew ? 'is-found' : 'is-not-found'}">${isNew ? 'กำลังสร้าง Master Fund ใหม่ · กรอกช่องบังคับแล้วบันทึกเข้า Override' : source.isin || source.fundId || drafts[selectedIsin] ? `พบข้อมูลแล้ว: ${esc(source.name || profile.shareClassName || selectedIsin)}` : selectedIsin ? `ยังไม่พบ ${esc(selectedIsin)} ในถังข้อมูล` : 'กรุณาระบุ ISIN หรือ SecId / FundId แล้วกดค้นหา'}</div>
         <div class="alert ${overrideStoreStatus.ok && overrideStoreStatus.driveExists ? 'alert-success' : 'alert-error'}">
           ${overrideStoreStatus.ok && overrideStoreStatus.driveExists
-            ? `พบ Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || '')}`
-            : `ยังไม่พบหรือไม่สามารถอ่าน Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || '')}${overrideStoreStatus.error ? ` · ${esc(overrideStoreStatus.error)}` : ''}`}
+            ? `พบ Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || overrideStoreStatus.logicalPath || '')}`
+            : `ยังไม่พบหรือไม่สามารถอ่าน Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || overrideStoreStatus.logicalPath || '')}${overrideStoreStatus.error ? ` · ${esc(overrideStoreStatus.error)}` : ''}`}
         </div>
         <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมเฉพาะช่องว่าง</button><small id="mfd-ft-status">ข้อมูลเดิมจะไม่ถูกเขียนทับ</small></div>
         <form id="mfd-form">
@@ -13238,14 +13304,21 @@ const Pages = {
         if (missing.length) return toast(`กรุณากรอกช่องบังคับ: ${missing.join(', ')}`, 'error');
         const button = $('#mfd-save-override', area); button.disabled = true;
         try {
-          const response = await fetch('/api/master-fund-overrides', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({quarter:overrideQuarter, profile:next})});
-          const data = await response.json(); if (!response.ok || !data.ok) throw new Error(data.error || 'บันทึก Override ไม่สำเร็จ');
+          let data;
+          if (hasMasterAllocationsApi()) {
+            data = await masterFundOverrideApiRequest('save', {quarter:overrideQuarter, profile:next});
+          } else {
+            const response = await fetch('/api/master-fund-overrides', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({quarter:overrideQuarter, profile:next})});
+            data = await response.json();
+            if (!response.ok || !data.ok || data.driveUploaded === false) throw new Error(data.error || data.warning || 'บันทึก Override ไม่สำเร็จ');
+          }
           const oldKey = selectedIsin; selectedIsin = next.isin; State.masterFundDataManagerIsin = selectedIsin;
           if (oldKey !== selectedIsin) delete drafts[oldKey]; delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts);
           masterOverrideItems[selectedIsin.toUpperCase()] = data.profile;
-          overrideStoreStatus = {ok:true, driveExists:true, drivePath:data.drivePath || data.drive?.path || ''};
+          overrideStoreStatus = {ok:true, driveExists:true, drivePath:data.drivePath || data.logicalPath || data.drive?.path || ''};
+          State._cache[`master-fund-overrides::${overrideQuarter}`] = {data:{...data, items:masterOverrideItems}, ts:Date.now()};
           sourceMasters.push({isin:data.profile.isin, fundId:data.profile.masterFundId, name:data.profile.masterFundName, baseCurrency:data.profile.baseCurrency, _profile:data.profile, _override:true});
-          toast(data.warning || `บันทึกแล้วที่ ${data.source}`, data.warning ? 'warning' : 'success'); render();
+          toast(data.warning || 'บันทึก Master Fund Override ลง Google Drive แล้ว', data.warning ? 'warning' : 'success'); render();
         } catch (err) { toast(err.message, 'error'); } finally { button.disabled = false; }
       });
       $('#mfd-delete', area)?.addEventListener('click', () => { delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts); toast('ลบแบบร่างแล้ว', 'success'); render(); });
@@ -13812,6 +13885,7 @@ const Pages = {
     const headers = rawRows[0] || [];
     const CI = {
       name: findColumnIndex(headers, ['Group/Investment']),
+      fundId: findColumnIndex(headers, ['FundId', 'Fund ID']),
       isin: findColumnIndex(headers, ['ISIN']),
       r3m: findColumnIndex(headers, ['Return(Cumulative) 3M']),
       r6m: findColumnIndex(headers, ['Return(Cumulative) 6M']),
@@ -13823,13 +13897,15 @@ const Pages = {
     };
     const metricKeys = ['r3m','r6m','rytd','r1y','r3y','r5y','r10y'];
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
+    const isinByFundId = buildMasterFundIdIsinFallback(selectRows, thaiQualityRows);
 
     const masterRows = rawRows.slice(1).map((row, index) => ({
       row,
       name: get(row, CI.name),
-      isin: get(row, CI.isin),
-      key: `${get(row, CI.isin)}::${get(row, CI.name)}::${index}`,
-      code: `${get(row, CI.isin)}::${get(row, CI.name)}::${index}`,
+      fundId: get(row, CI.fundId),
+      isin: get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || '',
+      key: `${get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || ''}::${get(row, CI.name)}::${index}`,
+      code: `${get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || ''}::${get(row, CI.name)}::${index}`,
     })).filter(item => item.name && item.isin);
 
     const rawLookup = buildRawSecLookup(secRows);
@@ -13843,7 +13919,7 @@ const Pages = {
 
     const displayRowsRaw = masterRows.filter(item => masterLinks[item.key]?.length);
     if (!displayRowsRaw.length) {
-      setError(area, 'ไม่พบ Master Share Class ที่จับคู่ได้จาก AVP Thai Fund for Quality → AVP Master Fund ID', 'master-annualized');
+      setError(area, 'ไม่พบ Master Share Class จาก FundId และ ISIN fallback ในข้อมูล Base', 'master-annualized');
       return;
     }
     const displayRows = annotateComparableNameDiffs(displayRowsRaw, {
@@ -13902,7 +13978,7 @@ const Pages = {
     }).join('');
 
     area.innerHTML = `
-      ${pageToolActions('master-annualized', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API (Share Class Check)')}
+      ${pageToolActions('master-annualized', 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID')}
       <div class="card report-card report-card-master" id="report-card">
         <table class="annualized-report master-annualized-report">
           <thead>
@@ -13967,6 +14043,7 @@ const Pages = {
     const headers = rawRows[0] || [];
     const CI = {
       name: findColumnIndex(headers, ['Group/Investment']),
+      fundId: findColumnIndex(headers, ['FundId', 'Fund ID']),
       isin: findColumnIndex(headers, ['ISIN']),
       currency: findColumnIndex(headers, ['Base Currency']),
       r3m: findColumnIndex(headers, ['Return(Cumulative) 3M']),
@@ -13979,15 +14056,17 @@ const Pages = {
     };
     const metricKeys = ['r3m','r6m','rytd','r1y','r3y','r5y','r10y'];
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
+    const isinByFundId = buildMasterFundIdIsinFallback(selectRows, thaiQualityRows);
 
     const masterRows = rawRows.slice(1).map((row, index) => ({
       row,
       idx: index,
       name: get(row, CI.name),
-      isin: get(row, CI.isin),
+      fundId: get(row, CI.fundId),
+      isin: get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || '',
       currency: get(row, CI.currency),
-      key: `${get(row, CI.isin)}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
-      code: `${get(row, CI.isin)}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
+      key: `${get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || ''}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
+      code: `${get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || ''}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
     })).filter(item => item.name && item.isin);
 
     const rawLookup = buildRawSecLookup(secRows);
@@ -14008,7 +14087,7 @@ const Pages = {
       }
     );
     if (!displayRows.length) {
-      setError(area, 'ไม่พบ Master Share Class ที่จับคู่ได้จาก AVP Thai Fund for Quality → AVP Master Fund ID', 'master-annualized-v2');
+      setError(area, 'ไม่พบ Master Share Class จาก FundId และ ISIN fallback ในข้อมูล Base', 'master-annualized-v2');
       return;
     }
     const { ranks: rankMap, totals: rankTotals } = buildMetricRanks(displayRows, metricKeys, (item, key) => get(item.row, CI[key]));
@@ -14064,7 +14143,7 @@ const Pages = {
     }).join('');
 
     area.innerHTML = `
-      ${pageToolActions('master-annualized-v2', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API (Share Class Check)')}
+      ${pageToolActions('master-annualized-v2', 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID')}
       <div class="card report-card report-card-master" id="report-card">
         <table class="annualized-report master-annualized-report">
           <thead>
@@ -14131,11 +14210,13 @@ const Pages = {
     const allYears = ['2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'];
     const CI = {
       name: findColumnIndex(headers, ['Group/Investment']),
+      fundId: findColumnIndex(headers, ['FundId', 'Fund ID']),
       isin: findColumnIndex(headers, ['ISIN']),
       currency: findColumnIndex(headers, ['Base Currency']),
       ...Object.fromEntries(allYears.map(year => [`ret${year}`, findColumnIndex(headers, [`Return(Cumulative) ${year}`])])),
     };
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
+    const isinByFundId = buildMasterFundIdIsinFallback(selectRows, thaiQualityRows);
     const selectedYears = (State.reportOptions['master-calendar-years'] || []).filter(y => allYears.includes(y));
     const visibleYears = selectedYears.length ? selectedYears : allYears;
 
@@ -14143,10 +14224,11 @@ const Pages = {
       row,
       idx: index,
       name: get(row, CI.name),
-      isin: get(row, CI.isin),
+      fundId: get(row, CI.fundId),
+      isin: get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || '',
       currency: get(row, CI.currency),
-      key: `${get(row, CI.isin)}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
-      code: `${get(row, CI.isin)}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
+      key: `${get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || ''}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
+      code: `${get(row, CI.isin) || isinByFundId.get(get(row, CI.fundId).toUpperCase()) || ''}::${get(row, CI.currency)}::${get(row, CI.name)}::${index}`,
     })).filter(item => item.name && item.isin);
 
     const rawLookup = buildRawSecLookup(secRows);
@@ -14167,7 +14249,7 @@ const Pages = {
       }
     );
     if (!displayRows.length) {
-      setError(area, 'ไม่พบ Master Share Class ที่จับคู่ได้จาก AVP Thai Fund for Quality → AVP Master Fund ID', 'master-calendar');
+      setError(area, 'ไม่พบ Master Share Class จาก FundId และ ISIN fallback ในข้อมูล Base', 'master-calendar');
       return;
     }
     const { ranks: rankMap, totals: rankTotals } = buildMetricRanks(displayRows, visibleYears, (item, year) => get(item.row, CI[`ret${year}`]));
@@ -14224,7 +14306,7 @@ const Pages = {
     }).join('');
 
     area.innerHTML = `
-      ${pageToolActions('master-calendar', 'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API (Share Class Check)', toggleActions)}
+      ${pageToolActions('master-calendar', 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID', toggleActions)}
       <div class="card report-card report-card-master" id="report-card">
         <table class="annualized-report master-annualized-report">
           <thead>
@@ -14503,10 +14585,15 @@ const Pages = {
   async masterOtherFactors(area) {
     setLoading(area, 'กำลังโหลดปัจจัยประกอบอื่นๆ...');
 
-    let rawRows;
+    let rawRows, selectRows, thaiQualityRows;
     try {
       await ensureSelectedFundsCatalog();
-      rawRows = await fetchCached('master-placeholder-5');
+      const quarter = String(State.currentQuarter || CONFIG.PAGES['master-placeholder-5']?.tabName || '').trim();
+      [rawRows, selectRows, thaiQualityRows] = await Promise.all([
+        fetchCachedForTab('master-placeholder-5', quarter),
+        fetchCached('select-fund'),
+        fetchCachedForTab('thai-annualized', quarter),
+      ]);
     } catch (e) {
       setError(area, e.message, 'master-placeholder-5');
       return;
@@ -14514,12 +14601,18 @@ const Pages = {
 
     const headers = rawRows[0] || [];
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
+    const nameIdx = findColumnIndex(headers, ['Group/Investment']);
+    const fundIdIdx = findColumnIndex(headers, ['FundId', 'Fund ID']);
+    const isinIdx = findColumnIndex(headers, ['ISIN']);
+    const currencyIdx = findColumnIndex(headers, ['Base Currency']);
+    const isinByFundId = buildMasterFundIdIsinFallback(selectRows, thaiQualityRows);
 
     const masterRows = rawRows.slice(1).map((row, index) => {
-      const name = get(row, findColumnIndex(headers, ['Group/Investment']));
-      const isin = get(row, findColumnIndex(headers, ['ISIN']));
-      const currency = get(row, findColumnIndex(headers, ['Base Currency']));
-      return { row, name, isin, currency, key: `${isin}::${currency}::${name}::${index}` };
+      const name = get(row, nameIdx);
+      const fundId = get(row, fundIdIdx);
+      const isin = get(row, isinIdx) || isinByFundId.get(fundId.toUpperCase()) || '';
+      const currency = get(row, currencyIdx);
+      return { row, name, fundId, isin, currency, key: `${isin}::${currency}::${name}::${index}` };
     }).filter(item => item.name && item.isin);
 
     const thaiSource = Object.values(State.selectedFunds).filter(f => f.masterId && f.masterId !== '-');
@@ -14532,16 +14625,16 @@ const Pages = {
 
     const linksByRowKey = {};
     thaiFunds.forEach(fund => {
-      const isin = String(fund.masterId || '').trim();
+      const isin = String(fund.masterId || '').trim().toUpperCase();
       if (!isin) return;
-      masterRows.filter(item => item.isin === isin).forEach(item => {
+      masterRows.filter(item => String(item.isin || '').trim().toUpperCase() === isin).forEach(item => {
         if (!linksByRowKey[item.key]) linksByRowKey[item.key] = [];
         linksByRowKey[item.key].push(fund);
       });
     });
     const displayRows = masterRows.filter(item => linksByRowKey[item.key]?.length);
     if (!displayRows.length) {
-      setError(area, 'ไม่พบข้อมูล Master Fund ID ที่ตรงกับกองทุนที่เลือก', 'master-placeholder-5');
+      setError(area, 'ไม่พบ Master Fund จาก FundId และ ISIN fallback ในข้อมูล Base', 'master-placeholder-5');
       return;
     }
 
@@ -15145,7 +15238,7 @@ const Pages = {
     }
 
     /* ── Helpers ── */
-    const source = CONFIG.PAGES['master-placeholder-5']?.source||'AVP Master Fund ID';
+    const source = 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID';
     function buildPeriodBtns(mode, active, periods) {
       return (periods || (mode==='calendar'?CALENDAR_YEARS:ANNUALIZED_PERIODS))
         .map(p=>`<button class="of-period-btn${p===active?' is-active':''}" data-of-period="${p}" type="button">${p}</button>`).join('');
