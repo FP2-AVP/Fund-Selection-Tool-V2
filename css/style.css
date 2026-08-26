@@ -805,7 +805,7 @@ input, select, textarea { font-family: var(--font); font-size: 1rem; }
 /* ── STAT CARDS ── */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 20px;
 }
@@ -853,7 +853,7 @@ input, select, textarea { font-family: var(--font); font-size: 1rem; }
 /* ── QUICK LINKS ── */
 .quick-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
 }
@@ -893,6 +893,7 @@ input, select, textarea { font-family: var(--font); font-size: 1rem; }
   font-weight: 700;
   color: var(--primary);
   margin-bottom: 2px;
+  white-space: nowrap;
 }
 .quick-link-info p { font-size: 0.8rem; color: var(--text-muted); }
 
@@ -2521,6 +2522,7 @@ body.flu-row-dragging * {
   font-weight: 800;
   color: #4b5f7f;
 }
+.metric-toggle-note { color:var(--text-muted); font-size:.75rem; font-weight:650; }
 .view-toggle-btn {
   min-width: 96px;
   border-width: 1.5px;
@@ -6104,6 +6106,13 @@ hr.divider {
 .master-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; padding:16px; }
 .master-field { display:grid; align-content:start; gap:6px; min-width:0; color:var(--text); font-size:.82rem; font-weight:750; }
 .master-field textarea { min-height:76px; resize:vertical; }
+.master-field-wide { grid-column:1/-1; }
+.master-either { margin-left:4px; color:#b06b13; font-size:.7rem; font-weight:750; }
+.master-yearly-editor { display:grid; gap:9px; padding:10px; border:1px solid var(--border-light); border-radius:8px; background:#fafcff; }
+.master-yearly-rows { display:grid; gap:8px; }
+.master-yearly-row { display:grid; grid-template-columns:minmax(110px,160px) minmax(140px,220px) auto auto; align-items:center; gap:8px; }
+.master-yearly-row > span { color:var(--text-muted); font-weight:800; }
+.master-yearly-editor > .master-year-add { justify-self:start; }
 .master-field .is-missing { border-color:#e6a4a4; background:#fff0f0; box-shadow:inset 3px 0 0 #d95b5b; }
 .master-field .is-missing:focus { border-color:#c94444; background:#fff7f7; box-shadow:0 0 0 3px rgba(201,68,68,.12),inset 3px 0 0 #c94444; }
 .master-search-result { padding:10px 14px; border:1px solid; border-radius:8px; font-size:.85rem; font-weight:750; }
@@ -6115,8 +6124,14 @@ hr.divider {
 .master-required { color:#d14343; font-weight:900; }
 .master-optional { margin-left:4px; color:#8c9aae; font-size:.7rem; font-weight:650; }
 .master-data-actions { position:sticky; bottom:0; z-index:4; display:flex; align-items:center; gap:10px; padding:13px 16px; border:1px solid var(--border-light); border-radius:9px; background:rgba(255,255,255,.96); box-shadow:0 -5px 20px rgba(30,57,91,.08); backdrop-filter:blur(8px); }
+.master-override-list-card { margin:0; overflow:hidden; }
+.master-override-list-card .card-header { margin:0; padding:14px 16px; }
+.master-override-list-wrap { max-height:360px; border-top:1px solid var(--border-light); }
+.master-override-list { min-width:980px; }
+.master-override-list th { position:sticky; top:0; z-index:1; }
+.master-override-row-actions { display:flex; gap:7px; white-space:nowrap; }
 @media (max-width:1100px) { .master-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-@media (max-width:720px) { .master-fields { grid-template-columns:1fr; } .master-ft-import { grid-template-columns:1fr; } .master-ft-import small { grid-column:auto; } .master-data-section > summary { align-items:flex-start; flex-direction:column; } .master-data-section > summary small { text-align:left; } .master-data-actions { flex-wrap:wrap; } }
+@media (max-width:720px) { .master-fields { grid-template-columns:1fr; } .master-ft-import { grid-template-columns:1fr; } .master-ft-import small { grid-column:auto; } .master-data-section > summary { align-items:flex-start; flex-direction:column; } .master-data-section > summary small { text-align:left; } .master-data-actions { flex-wrap:wrap; } .master-yearly-row { grid-template-columns:1fr 1fr auto; } .master-yearly-row .master-year-remove { grid-column:1/-1; justify-self:start; } }
 .fund-readonly-block {
   margin-bottom: 18px;
   padding: 12px;
@@ -6368,6 +6383,8 @@ hr.divider {
   .topbar { padding: 0 14px; }
   .content-area { padding: 14px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .quick-link-info h4 { white-space: normal; }
   .calendar-grid { grid-template-columns: 1fr; }
   .insight-layout,
   .insight-layout-fee { grid-template-columns: 1fr; }
