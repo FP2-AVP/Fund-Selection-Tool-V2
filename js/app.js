@@ -164,7 +164,7 @@ const JSON_EXPORT_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwV-OUq
 const JSON_EXPORT_SECRET_KEY = 'sheets-to-drive-json';
 const DRAFT_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzcOc5s3SYM2gkw3trpO43Jp0wwTasOIU8Mns4LJ-YQveE2cq5LXX98G0NVW7qHohGFKA/exec';
 const DRAFT_API_SECRET_KEY = 'change-this-draft-api-key';
-const MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxzNvGzKo8YGBPyDx8XOqb73hXTx_NetuBLTB4npMae9Jg1KM2HYZmaccds4e0koPMxqA/exec';
+const MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbylmcVwHgAuybiO7YiGftQQc7nfsylF01T7Nvni2BDkY9z10QFKaieISEM7cc8HHybKyg/exec';
 const MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
 const FIXED_INCOME_FACTORS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzHr34Gg48W9awG2Hde3P_XOxGUVLf2k_W-ySRWt-2IaIa7VOD6IsYfm-LmfhaYSwRn/exec';
 const FIXED_INCOME_FACTORS_API_SECRET_KEY = 'change-this-fixed-income-factors-api-key';
@@ -13106,13 +13106,13 @@ const Pages = {
 
     const sections = [
       { id: 'identity', title: '1. ข้อมูลระบุตัว Master Fund', hint: 'ใช้จัดกลุ่มกองหลักและ Share Class', fields: [
-        ['masterFundId','Master FundId','text',true], ['masterFundName','ชื่อ Master Fund','text',true],
+        ['masterFundId','Master FundId','text','identifier'], ['masterFundName','ชื่อ Master Fund','text',true],
         ['displayName','ชื่อแสดงผล','text'], ['fundHouse','Fund House','text'], ['domicile','Domicile','text'],
         ['assetClass','Asset Class','text'], ['investmentCategory','Investment Category','text'], ['benchmark','Benchmark','text'],
         ['fundStatus','Fund Status','select',true,['Active','Inactive','Merged','Closed']],
       ]},
-      { id: 'shareClass', title: '2. Share Class', hint: 'ISIN คือ key หลักที่ทุกหน้าต้องใช้', fields: [
-        ['isin','ISIN','text',true], ['shareClassName','ชื่อเต็ม Share Class','text',true], ['shareClass','Share Class','text'],
+      { id: 'shareClass', title: '2. Share Class', hint: 'ใช้ ISIN เป็น key หลัก; หากไม่มีสามารถใช้ Master FundId แทนได้', fields: [
+        ['isin','ISIN','text','identifier'], ['shareClassName','ชื่อเต็ม Share Class','text',true], ['shareClass','Share Class','text'],
         ['accDist','Acc / Dist','select',false,['','Acc','Dist']], ['baseCurrency','Base Currency','text',true],
         ['hedgingCurrency','Hedging Currency','text'], ['inceptionDate','Inception Date','date'],
         ['shareClassStatus','Share Class Status','select',true,['Active','Closed','Merged']], ['successorIsin','Successor ISIN','text'],
@@ -13132,7 +13132,7 @@ const Pages = {
       { id: 'returns', title: '5. ผลตอบแทน', hint: 'ช่องที่ดึงจากฐานหลักได้ไม่จำเป็นต้องกรอกซ้ำ', fields: [
         ['return1m','1M (%)','number'], ['return3m','3M (%)','number'], ['return6m','6M (%)','number'], ['returnYtd','YTD (%)','number'], ['return1y','1Y (%)','number'],
         ['return3y','3Y Annualized (%)','number'], ['return5y','5Y Annualized (%)','number'], ['return10y','10Y Annualized (%)','number'],
-        ['returnDate','Return As of Date','date'], ['calendarReturns','Calendar Year Return','textarea'],
+        ['returnDate','Return As of Date','date'], ['calendarReturns','Calendar Year Return','yearly'],
       ]},
       { id: 'risk', title: '6. ความเสี่ยง', hint: 'ใช้ใน Other Factors, Cost Efficiency และ Maximum Drawdown', fields: [
         ['alpha1y','Alpha 1Y','number'], ['alpha3y','Alpha 3Y','number'], ['alpha5y','Alpha 5Y','number'],
@@ -13143,7 +13143,7 @@ const Pages = {
         ['sd1y','Standard Deviation 1Y','number'], ['sd3y','Standard Deviation 3Y','number'], ['sd5y','Standard Deviation 5Y','number'],
         ['riskBenchmark','Risk Benchmark','text'], ['riskDate','Risk As of Date','date'],
         ['sortino3y','Sortino 3Y','number'], ['sortino5y','Sortino 5Y','number'],
-        ['maxDrawdown3y','Maximum Drawdown 3Y (%)','number'], ['maxDrawdown5y','Maximum Drawdown 5Y (%)','number'], ['annualDrawdowns','Maximum Drawdown รายปี','textarea'],
+        ['maxDrawdown3y','Maximum Drawdown 3Y (%)','number'], ['maxDrawdown5y','Maximum Drawdown 5Y (%)','number'], ['annualDrawdowns','Maximum Drawdown รายปี','yearly'],
       ]},
       { id: 'portfolio', title: '7. Portfolio / Holdings', hint: 'รองรับ Equity, Fixed Income, Top 10 Holding และ Sector Allocation', fields: [
         ['fundSize','Fund Size','number'], ['fundSizeCurrency','Fund Size Currency','text'], ['holdingsCount','Number of Holdings','number'],
@@ -13164,6 +13164,10 @@ const Pages = {
       return sourceMasters.find(item => item._override && matches(item)) || sourceMasters.find(matches);
     };
     const stripPercent = value => String(value ?? '').replace(/[+,%]/g, '').trim();
+    const parseYearlyValues = value => String(value || '').split(/\n+/).map(line => {
+      const match = line.match(/^\s*(\d{4})\s*:\s*([+-]?[\d.]+)/);
+      return match ? {year:match[1], value:match[2]} : null;
+    }).filter(Boolean);
     const ftSymbolFromUrl = value => {
       const raw = String(value || '').trim();
       if (!raw) return '';
@@ -13232,18 +13236,29 @@ const Pages = {
       if (!profile.masterFundName) profile.masterFundName = source.name || '';
       if (!profile.shareClassName) profile.shareClassName = source.name || '';
       if (!profile.baseCurrency) profile.baseCurrency = source.baseCurrency || '';
-      const required = sections.flatMap(s => s.fields.filter(f => f[3]).map(f => f[0]));
+      const required = sections.flatMap(s => s.fields.filter(f => f[3] === true).map(f => f[0]));
       const filled = required.filter(key => String(profile[key] || '').trim()).length;
-      const percent = Math.round(filled / required.length * 100);
+      const hasIdentifier = Boolean(String(profile.isin || profile.masterFundId || '').trim());
+      const percent = Math.round((filled + (hasIdentifier ? 1 : 0)) / (required.length + 1) * 100);
+      const overrideEntries = Object.entries(masterOverrideItems || {}).sort((a, b) => String(b[1]?.updatedAt || '').localeCompare(String(a[1]?.updatedAt || '')));
+      const formatOverrideTime = value => {
+        if (!value) return '-';
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('th-TH', {dateStyle:'medium', timeStyle:'short'});
+      };
       const fieldHtml = ([key,label,type,requiredField,options]) => {
         const value = profile[key] ?? '';
-        const requiredMark = requiredField ? '<span class="master-required">*</span>' : '<span class="master-optional">เว้นได้</span>';
+        const requiredMark = requiredField === 'identifier' ? '<span class="master-either">ระบุอย่างใดอย่างหนึ่ง</span>' : requiredField ? '<span class="master-required">*</span>' : '<span class="master-optional">เว้นได้</span>';
         let control;
-        const missing = String(value ?? '').trim() ? '' : ' is-missing';
+        const missing = String(value ?? '').trim() || requiredField === 'identifier' && hasIdentifier ? '' : ' is-missing';
         if (type === 'select') control = `<select class="fund-input mfd-field${missing}" data-key="${key}">${(options || []).map(v => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(v || 'เลือก')}</option>`).join('')}</select>`;
         else if (type === 'textarea') control = `<textarea class="fund-input fund-input-editable mfd-field${missing}" data-key="${key}" rows="3" placeholder="ยังขาดข้อมูล">${esc(value)}</textarea>`;
+        else if (type === 'yearly') {
+          const rows = parseYearlyValues(value);
+          control = `<div class="master-yearly-editor" data-yearly-key="${key}"><input class="mfd-field" data-key="${key}" type="hidden" value="${esc(value)}"><div class="master-yearly-rows">${rows.map(row => `<div class="master-yearly-row"><input class="fund-input master-year" type="number" min="1900" max="2200" value="${esc(row.year)}" aria-label="ปี"><input class="fund-input master-year-value" type="number" step="0.0001" value="${esc(row.value)}" placeholder="ค่า (%)" aria-label="ค่าเปอร์เซ็นต์"><span>%</span><button class="btn btn-danger btn-sm master-year-remove" type="button">ลบ</button></div>`).join('')}</div><button class="btn btn-ghost btn-sm master-year-add" type="button">+ เพิ่มปีก่อนหน้า</button></div>`;
+        }
         else control = `<input class="fund-input fund-input-editable mfd-field${missing}" data-key="${key}" type="${type}" ${type === 'number' ? 'step="0.0001"' : ''} value="${esc(value)}" placeholder="ยังขาดข้อมูล">`;
-        return `<label class="master-field"><span>${esc(label)} ${requiredMark}</span>${control}</label>`;
+        return `<label class="master-field${type === 'yearly' ? ' master-field-wide' : ''}"><span>${esc(label)} ${requiredMark}</span>${control}</label>`;
       };
       area.innerHTML = `<div class="master-data-page">
         <div class="card master-data-toolbar"><div class="sf-filterbar">
@@ -13259,9 +13274,13 @@ const Pages = {
             ? `พบ Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || overrideStoreStatus.logicalPath || '')}`
             : `ยังไม่พบหรือไม่สามารถอ่าน Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || overrideStoreStatus.logicalPath || '')}${overrideStoreStatus.error ? ` · ${esc(overrideStoreStatus.error)}` : ''}`}
         </div>
+        <section class="card master-override-list-card">
+          <div class="card-header"><div><h3>รายการ Master Fund Override</h3><p>ข้อมูลใน ${esc(overrideQuarter)} · แก้ไขหรือลบเฉพาะกองได้โดยไม่กระทบรายการอื่น</p></div><span class="badge badge-primary">${overrideEntries.length.toLocaleString()} กอง</span></div>
+          ${overrideEntries.length ? `<div class="table-wrapper master-override-list-wrap"><table class="master-override-list"><thead><tr><th>Key</th><th>Master FundId</th><th>ISIN</th><th>ชื่อ Master Fund</th><th>แก้ไขล่าสุด</th><th>จัดการ</th></tr></thead><tbody>${overrideEntries.map(([key,item]) => `<tr><td class="mono-small">${esc(key)}</td><td>${esc(item.masterFundId || '-')}</td><td>${esc(item.isin || '-')}</td><td>${esc(item.masterFundName || item.shareClassName || '-')}</td><td>${esc(formatOverrideTime(item.updatedAt))}</td><td><div class="master-override-row-actions"><button class="btn btn-primary btn-sm" type="button" data-master-override-edit="${esc(key)}">แก้ไข</button><button class="btn btn-danger btn-sm" type="button" data-master-override-remove="${esc(key)}">ลบจาก Drive</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="state-box compact">ยังไม่มี Master Fund Override ใน Quarter นี้</div>'}
+        </section>
         <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมเฉพาะช่องว่าง</button><small id="mfd-ft-status">ข้อมูลเดิมจะไม่ถูกเขียนทับ</small></div>
         <form id="mfd-form">
-          <div class="master-data-notice"><strong>หลักการ:</strong> กรอกเฉพาะที่มีข้อมูลได้ · ช่องที่มี <span class="master-required">*</span> ใช้เป็น key เชื่อมทุกหน้า</div>
+          <div class="master-data-notice"><strong>หลักการ:</strong> ต้องมี Master FundId หรือ ISIN อย่างใดอย่างหนึ่ง · ช่องที่มี <span class="master-required">*</span> เป็นข้อมูลบังคับอื่น</div>
           ${sections.map((section, idx) => `<details class="card master-data-section" ${idx < 3 ? 'open' : ''}><summary><span>${esc(section.title)}</span><small>${esc(section.hint)}</small></summary><div class="master-fields">${section.fields.map(fieldHtml).join('')}</div></details>`).join('')}
           <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-success" id="mfd-save-override" type="button">บันทึกเข้า Master Fund Override</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">แบบร่างเก็บใน Browser · Override สำเร็จเมื่อมีไฟล์บน Google Drive เท่านั้น</span></div>
         </form></div>`;
@@ -13269,7 +13288,77 @@ const Pages = {
       $('#mfd-master-search', area)?.addEventListener('change', runSearch);
       $('#mfd-search', area)?.addEventListener('click', runSearch);
       $('#mfd-new', area)?.addEventListener('click', () => { selectedIsin = `NEW-${Date.now()}`; State.masterFundDataManagerIsin = selectedIsin; render(); });
+      $$('[data-master-override-edit]', area).forEach(button => button.addEventListener('click', () => {
+        const key = button.dataset.masterOverrideEdit;
+        const item = masterOverrideItems[key] || {};
+        selectedIsin = item.isin || item.masterFundId || key;
+        State.masterFundDataManagerIsin = selectedIsin;
+        render();
+      }));
+      $$('[data-master-override-remove]', area).forEach(button => button.addEventListener('click', async () => {
+        const key = button.dataset.masterOverrideRemove;
+        const item = masterOverrideItems[key] || {};
+        const label = item.masterFundName || item.shareClassName || key;
+        if (!window.confirm(`ยืนยันลบ Override ของ ${label}?\n\nระบบจะลบเฉพาะรายการ ${key} จาก Google Drive และไม่ลบกองอื่น`)) return;
+        button.disabled = true;
+        try {
+          let data;
+          if (hasMasterAllocationsApi()) {
+            data = await masterFundOverrideApiRequest('delete', {quarter:overrideQuarter, key});
+          } else {
+            const response = await fetch(`/api/master-fund-overrides/${encodeURIComponent(key)}?quarter=${encodeURIComponent(overrideQuarter)}`, {method:'DELETE'});
+            data = await response.json();
+            if (!response.ok || !data.ok || data.driveUploaded === false) throw new Error(data.error || data.warning || 'ลบ Override ไม่สำเร็จ');
+          }
+          delete masterOverrideItems[key];
+          for (let index = sourceMasters.length - 1; index >= 0; index -= 1) {
+            const source = sourceMasters[index];
+            if (source._override && [key, source.isin, source.fundId].some(value => norm(value) === norm(key))) sourceMasters.splice(index, 1);
+          }
+          State._cache[`master-fund-overrides::${overrideQuarter}`] = {data:{...data, ok:true, driveExists:true, items:masterOverrideItems}, ts:Date.now()};
+          if (norm(selectedIsin) === norm(key) || norm(selectedIsin) === norm(item.isin) || norm(selectedIsin) === norm(item.masterFundId)) {
+            selectedIsin = item.isin || item.masterFundId || key;
+            State.masterFundDataManagerIsin = selectedIsin;
+          }
+          toast(`ลบ Override ของ ${label} จาก Google Drive แล้ว`, 'success');
+          render();
+        } catch (err) {
+          button.disabled = false;
+          toast(err.message || 'ลบ Override ไม่สำเร็จ', 'error');
+        }
+      }));
+      const bindYearlyEditor = container => {
+        const hidden = $('.mfd-field', container), rowsArea = $('.master-yearly-rows', container);
+        const sync = () => {
+          hidden.value = $$('.master-yearly-row', container).map(row => {
+            const year = $('.master-year', row).value.trim(), value = $('.master-year-value', row).value.trim();
+            return year && value !== '' ? `${year}: ${Number(value) >= 0 ? '+' : ''}${value}%` : '';
+          }).filter(Boolean).join('\n');
+        };
+        const rowHtml = (year, value = '') => `<div class="master-yearly-row"><input class="fund-input master-year" type="number" min="1900" max="2200" value="${esc(year)}" aria-label="ปี"><input class="fund-input master-year-value" type="number" step="0.0001" value="${esc(value)}" placeholder="ค่า (%)" aria-label="ค่าเปอร์เซ็นต์"><span>%</span><button class="btn btn-danger btn-sm master-year-remove" type="button">ลบ</button></div>`;
+        const bindRows = () => {
+          $$('.master-yearly-row input', container).forEach(input => input.addEventListener('input', sync));
+          $$('.master-year-remove', container).forEach(button => button.addEventListener('click', () => { button.closest('.master-yearly-row').remove(); sync(); }));
+        };
+        $('.master-year-add', container)?.addEventListener('click', () => {
+          const years = $$('.master-year', container).map(input => Number(input.value)).filter(Number.isFinite);
+          rowsArea.insertAdjacentHTML('beforeend', rowHtml(years.length ? Math.min(...years) - 1 : new Date().getFullYear()));
+          bindRows(); sync();
+        });
+        hidden.addEventListener('change', () => {
+          rowsArea.innerHTML = parseYearlyValues(hidden.value).map(row => rowHtml(row.year, row.value)).join('');
+          bindRows();
+        });
+        bindRows(); sync();
+      };
+      $$('.master-yearly-editor', area).forEach(bindYearlyEditor);
+      const refreshIdentifierState = () => {
+        const hasValue = Boolean($('[data-key="masterFundId"]', area)?.value.trim() || $('[data-key="isin"]', area)?.value.trim());
+        ['masterFundId','isin'].forEach(key => $('[data-key="' + key + '"]', area)?.classList.toggle('is-missing', !hasValue));
+      };
       $$('.mfd-field', area).forEach(input => input.addEventListener('input', () => input.classList.toggle('is-missing', !input.value.trim())));
+      $('[data-key="masterFundId"]', area)?.addEventListener('input', refreshIdentifierState);
+      $('[data-key="isin"]', area)?.addEventListener('input', refreshIdentifierState);
       $('#mfd-ft-import', area)?.addEventListener('click', async () => {
         const url = $('#mfd-ft-url', area)?.value || '';
         const symbol = ftSymbolFromUrl(url);
@@ -13282,7 +13371,7 @@ const Pages = {
           const dataResp = await fetch(`/api/ft-historical-prices?symbol=${encodeURIComponent(symbol)}&limit=1`);
           const data = await dataResp.json(); if (!dataResp.ok || !data.ok) throw new Error(data.error || 'อ่านข้อมูล FT ไม่สำเร็จ');
           const imported = ftPayloadToProfile(data); let filledCount = 0;
-          $$('.mfd-field', area).forEach(input => { const value = imported[input.dataset.key]; if (!input.value.trim() && String(value || '').trim()) { input.value = value; input.classList.remove('is-missing'); filledCount += 1; } });
+          $$('.mfd-field', area).forEach(input => { const value = imported[input.dataset.key]; if (!input.value.trim() && String(value || '').trim()) { input.value = value; input.dispatchEvent(new Event('change')); input.classList.remove('is-missing'); filledCount += 1; } });
           const urlInput = $('[data-key="sourceUrl"]', area); if (urlInput && !urlInput.value) urlInput.value = url;
           status.textContent = `เติมแล้ว ${filledCount} ช่อง · ไม่เขียนทับค่าเดิม`; toast(`เติมข้อมูลจาก FT ${filledCount} ช่อง`, 'success');
         } catch (err) { status.textContent = err.message; toast(err.message, 'error'); } finally { button.disabled = false; }
@@ -13290,8 +13379,8 @@ const Pages = {
       $('#mfd-form', area)?.addEventListener('submit', e => {
         e.preventDefault(); const next = {};
         $$('.mfd-field', area).forEach(input => { next[input.dataset.key] = input.value.trim(); });
-        const storageKey = next.isin || selectedIsin;
-        if (!storageKey) return toast('กรุณาระบุ ISIN', 'error');
+        const storageKey = next.isin || next.masterFundId || selectedIsin;
+        if (!next.isin && !next.masterFundId) return toast('กรุณาระบุ Master FundId หรือ ISIN อย่างใดอย่างหนึ่ง', 'error');
         if (storageKey !== selectedIsin) delete drafts[selectedIsin];
         drafts[storageKey] = { ...next, updatedAt:new Date().toISOString() };
         saveJsonPreference(draftKey, drafts); selectedIsin = storageKey; State.masterFundDataManagerIsin = storageKey;
@@ -13299,7 +13388,8 @@ const Pages = {
       });
       $('#mfd-save-override', area)?.addEventListener('click', async () => {
         const next = {}; $$('.mfd-field', area).forEach(input => { next[input.dataset.key] = input.value.trim(); });
-        const requiredForOverride = ['masterFundId','masterFundName','isin','shareClassName','baseCurrency'];
+        if (!next.masterFundId && !next.isin) return toast('กรุณาระบุ Master FundId หรือ ISIN อย่างใดอย่างหนึ่ง', 'error');
+        const requiredForOverride = ['masterFundName','shareClassName','baseCurrency'];
         const missing = requiredForOverride.filter(key => !next[key]);
         if (missing.length) return toast(`กรุณากรอกช่องบังคับ: ${missing.join(', ')}`, 'error');
         const button = $('#mfd-save-override', area); button.disabled = true;
@@ -13312,7 +13402,7 @@ const Pages = {
             data = await response.json();
             if (!response.ok || !data.ok || data.driveUploaded === false) throw new Error(data.error || data.warning || 'บันทึก Override ไม่สำเร็จ');
           }
-          const oldKey = selectedIsin; selectedIsin = next.isin; State.masterFundDataManagerIsin = selectedIsin;
+          const oldKey = selectedIsin; selectedIsin = next.isin || next.masterFundId; State.masterFundDataManagerIsin = selectedIsin;
           if (oldKey !== selectedIsin) delete drafts[oldKey]; delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts);
           masterOverrideItems[selectedIsin.toUpperCase()] = data.profile;
           overrideStoreStatus = {ok:true, driveExists:true, drivePath:data.drivePath || data.logicalPath || data.drive?.path || ''};
@@ -14078,8 +14168,16 @@ const Pages = {
     );
     const linksByRowKey = buildResolvedMasterLinks(universe, masterRows);
 
+    const currencyFilter = State.reportOptions['master-annualized-currency'] || 'all';
+    const isUsdCurrency = value => ['USD','US DOLLAR','U.S. DOLLAR','US$'].includes(String(value || '').trim().toUpperCase());
+    const linkedRows = masterRows.filter(item => linksByRowKey[item.key]?.length);
+    const masterGroupKey = item => String(item.fundId || item.name || '').trim().toUpperCase();
+    const groupsWithUsd = new Set(linkedRows.filter(item => isUsdCurrency(item.currency)).map(masterGroupKey));
+    const currencyFilteredRows = currencyFilter === 'usd'
+      ? linkedRows.filter(item => isUsdCurrency(item.currency) || !groupsWithUsd.has(masterGroupKey(item)))
+      : linkedRows;
     const displayRows = annotateComparableNameDiffs(
-      masterRows.filter(item => linksByRowKey[item.key]?.length),
+      currencyFilteredRows,
       {
         nameKey: 'name',
         htmlKey: 'nameHtml',
@@ -14142,8 +14240,9 @@ const Pages = {
         </tr>`;
     }).join('');
 
+    const currencyToggleActions = `<div class="metric-toggle-group"><span class="metric-toggle-label">Base Currency</span><div class="view-toggle" role="tablist" aria-label="เลือก Share Class ตาม Base Currency"><button class="btn btn-ghost view-toggle-btn ${currencyFilter === 'all' ? 'is-active' : ''}" type="button" data-master-currency="all">ทั้งหมด</button><button class="btn btn-ghost view-toggle-btn ${currencyFilter === 'usd' ? 'is-active' : ''}" type="button" data-master-currency="usd">เลือก USD ถ้ามี</button></div><span class="metric-toggle-note">กองที่ไม่มี USD ยังคงแสดงสกุลเงินเดิม</span></div>`;
     area.innerHTML = `
-      ${pageToolActions('master-annualized-v2', 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID')}
+      ${pageToolActions('master-annualized-v2', 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID', currencyToggleActions)}
       <div class="card report-card report-card-master" id="report-card">
         <table class="annualized-report master-annualized-report">
           <thead>
@@ -14176,6 +14275,12 @@ const Pages = {
         </table>
       </div>`;
 
+    $$('[data-master-currency]', area).forEach(el => {
+      el.addEventListener('click', () => {
+        State.reportOptions['master-annualized-currency'] = el.dataset.masterCurrency;
+        Pages.masterAnnualizedV2(area);
+      });
+    });
     $$('.report-sort', area).forEach(el => {
       el.addEventListener('click', () => {
         toggleNamedSort(sortState, el.dataset.reportSort);
@@ -14240,8 +14345,16 @@ const Pages = {
     );
     const linksByRowKey = buildResolvedMasterLinks(universe, masterRows);
 
+    const currencyFilter = State.reportOptions['master-calendar-currency'] || 'all';
+    const isUsdCurrency = value => ['USD','US DOLLAR','U.S. DOLLAR','US$'].includes(String(value || '').trim().toUpperCase());
+    const linkedRows = masterRows.filter(item => linksByRowKey[item.key]?.length);
+    const masterGroupKey = item => String(item.fundId || item.name || '').trim().toUpperCase();
+    const groupsWithUsd = new Set(linkedRows.filter(item => isUsdCurrency(item.currency)).map(masterGroupKey));
+    const currencyFilteredRows = currencyFilter === 'usd'
+      ? linkedRows.filter(item => isUsdCurrency(item.currency) || !groupsWithUsd.has(masterGroupKey(item)))
+      : linkedRows;
     const displayRows = annotateComparableNameDiffs(
-      masterRows.filter(item => linksByRowKey[item.key]?.length),
+      currencyFilteredRows,
       {
         nameKey: 'name',
         htmlKey: 'nameHtml',
@@ -14274,6 +14387,14 @@ const Pages = {
     }).join('');
     const toggleActions = `
       <div class="metric-toggle-stack master-calendar-toggle-stack master-calendar-toolbar-secondary">
+        <div class="metric-toggle-group">
+          <span class="metric-toggle-label">Base Currency</span>
+          <div class="view-toggle" role="tablist" aria-label="เลือก Share Class ตาม Base Currency">
+            <button class="btn btn-ghost view-toggle-btn ${currencyFilter === 'all' ? 'is-active' : ''}" type="button" data-master-calendar-currency="all">ทั้งหมด</button>
+            <button class="btn btn-ghost view-toggle-btn ${currencyFilter === 'usd' ? 'is-active' : ''}" type="button" data-master-calendar-currency="usd">เลือก USD ถ้ามี</button>
+          </div>
+          <span class="metric-toggle-note">กองที่ไม่มี USD ยังคงแสดงสกุลเงินเดิม</span>
+        </div>
         <div class="metric-toggle-group master-calendar-year-row">
           <span class="metric-toggle-label">ปีที่ต้องการแสดง</span>
           <div class="year-chip-wrap master-calendar-year-chip-wrap">
@@ -14327,6 +14448,12 @@ const Pages = {
         </table>
       </div>`;
 
+    $$('[data-master-calendar-currency]', area).forEach(el => {
+      el.addEventListener('click', () => {
+        State.reportOptions['master-calendar-currency'] = el.dataset.masterCalendarCurrency;
+        Pages.masterCalendar(area);
+      });
+    });
     $$('[data-master-calendar-year]', area).forEach(el => {
       el.addEventListener('click', () => {
         const year = el.dataset.masterCalendarYear;
@@ -22674,6 +22801,7 @@ const QuarterSelector = {
 
       State.availableQuarters = quarters;
       State.currentQuarter    = quarters[0] || null;
+      clearCache();
 
       /* Populate dropdown */
       sel.innerHTML = quarters
@@ -22816,8 +22944,8 @@ document.addEventListener('DOMContentLoaded', () => {
       $('#login-screen').classList.add('hidden');
       $('#app').classList.remove('hidden');
 
+      await QuarterSelector.detect(); // กำหนด Quarter ให้เสร็จก่อน Dashboard เริ่มโหลดและสร้าง cache
       App.init();
-      QuarterSelector.detect(); // ← ตรวจ Quarter จาก Sheets หลัง login สำเร็จ
 
     } catch (e) {
       btnSignin.disabled = false;
