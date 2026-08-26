@@ -17,14 +17,14 @@ if (typeof CONFIG !== 'undefined') {
 
   CONFIG.DATA_SOURCE = 'google_first';
   CONFIG.GITHUB_TOKEN = '';
-  CONFIG.MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxzNvGzKo8YGBPyDx8XOqb73hXTx_NetuBLTB4npMae9Jg1KM2HYZmaccds4e0koPMxqA/exec';
+  CONFIG.MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbylmcVwHgAuybiO7YiGftQQc7nfsylF01T7Nvni2BDkY9z10QFKaieISEM7cc8HHybKyg/exec';
   CONFIG.MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';
   CONFIG.FIXED_INCOME_FACTORS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzHr34Gg48W9awG2Hde3P_XOxGUVLf2k_W-ySRWt-2IaIa7VOD6IsYfm-LmfhaYSwRn/exec';
   CONFIG.FIXED_INCOME_FACTORS_API_SECRET_KEY = 'change-this-fixed-income-factors-api-key';
   CONFIG.INCOME_FUND_DIVIDEND_DB_URL = '';
   CONFIG.INCOME_FUND_DIVIDEND_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbxaj7IgZ5h3dbL56ekA848PYvUnVhSh9u6OYcYhIr-PChoKxKgCD51OWQuGov4yWqJAjA/exec';
   CONFIG.INCOME_FUND_DIVIDEND_API_SECRET_KEY = 'change-this-income-dividend-api-key';
-  CONFIG.FT_HISTORICAL_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwgzLzcul2TWbFPLM2bYjP8ocY41rJXgucNPjFabBP-nzyhuLp0GmvxzpTE4lmI23k/exec';
+  CONFIG.FT_HISTORICAL_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz7MBn8-2BfYCtWdh-uuiy__8phjGnoEQAz7fKcqOcEAspmjG6amOYYpTaEoQNKufBV/exec';
   CONFIG.FT_HISTORICAL_API_SECRET_KEY = 'change-this-ft-historical-api-key';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */
