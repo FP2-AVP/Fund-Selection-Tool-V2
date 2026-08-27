@@ -46,6 +46,11 @@ class Dataset:
 
 
 DATASETS: dict[str, Dataset] = {
+    "sec-api": Dataset(
+        key="sec-api",
+        sheet_id="16agx9pl9adtMh-U7MCbgnIncBxpciCvFgsdurH6Ob8w",
+        output_file="Data For SEC API.json",
+    ),
     "fund-key-performance": Dataset(
         key="fund-key-performance",
         sheet_id="1s-0ciSOB2Tj0C9azeMXyd1zZxljOg8I5QilI0FgjdW4",
@@ -67,6 +72,11 @@ DATASETS: dict[str, Dataset] = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export quarter tabs from Google Sheets to Drive JSON files."
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="",
+        help="Optional directory for a local copy, arranged as YEAR/QUARTER/base/*.json.",
     )
     parser.add_argument(
         "--quarter",
@@ -264,6 +274,18 @@ def upload_json(drive: Any, folder_id: str, file_name: str, rows: list[list[Any]
         tmp_path.unlink(missing_ok=True)
 
 
+def write_local_json(output_dir: str, quarter: str, file_name: str, rows: list[list[Any]]) -> Path | None:
+    if not output_dir:
+        return None
+    path = Path(output_dir) / quarter_year(quarter) / quarter / "base" / file_name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(rows, ensure_ascii=False, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def main() -> int:
     args = parse_args()
     quarter = validate_quarter(args.quarter)
@@ -301,10 +323,13 @@ def main() -> int:
         if not rows:
             raise RuntimeError(f"No data found for {dataset.key} tab {quarter}")
         file_id = upload_json(drive, base_folder_id, dataset.output_file, rows)
+        local_path = write_local_json(args.output_dir, quarter, dataset.output_file, rows)
         print(
             f"Uploaded {dataset.output_file}: {len(rows):,} rows, "
             f"{max((len(row) for row in rows), default=0):,} columns, file id {file_id}"
         )
+        if local_path:
+            print(f"Wrote local copy: {local_path}")
 
     return 0
 
