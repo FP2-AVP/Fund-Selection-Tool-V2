@@ -17095,6 +17095,38 @@ const Pages = {
 	      return Boolean(String(DRAFT_API_WEB_APP_URL || '').trim());
 	    }
 
+	    function hasR2DraftApi() {
+	      return Boolean(r2DataApiUrl());
+	    }
+
+	    async function r2DraftApiRequest(action, payload = {}) {
+	      const session = readAuthSession();
+	      if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับจัดการ Draft บน R2');
+	      let url = `${r2DataApiUrl()}/drafts`;
+	      const options = {
+	        method: 'GET',
+	        headers: { Authorization: `Bearer ${session.sessionToken}` },
+	        cache: 'no-store',
+	      };
+	      if (action === 'list') {
+	        if (payload?.quarter) url += `?quarter=${encodeURIComponent(payload.quarter)}`;
+	      } else if (action === 'delete') {
+	        url += `/${encodeURIComponent(payload?.id || '')}`;
+	        if (payload?.quarter) url += `?quarter=${encodeURIComponent(payload.quarter)}`;
+	        options.method = 'DELETE';
+	      } else {
+	        options.method = 'POST';
+	        options.headers['Content-Type'] = 'application/json';
+	        options.body = JSON.stringify({ draft: payload?.draft || payload || {} });
+	      }
+	      const response = await fetch(url, options);
+	      const data = await response.json().catch(() => ({}));
+	      if (!response.ok || data.ok === false) {
+	        throw new Error(data.error || `R2 Draft API ${action} failed (${response.status})`);
+	      }
+	      return data;
+	    }
+
 	    function shouldUseLocalDraftProxy() {
 	      return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
 	    }
@@ -17221,12 +17253,47 @@ const Pages = {
 	    async function loadDrafts() {
 	      const normalDraftsOnly = drafts => (Array.isArray(drafts) ? drafts : [])
 	        .filter(draft => !draft?.draftKind || draft.draftKind === 'fund-selection');
+	      const mergeDrafts = (...sources) => {
+	        const byId = new Map();
+	        sources.flat().forEach(draft => {
+	          if (!draft?.id) return;
+	          const id = String(draft.id);
+	          const existing = byId.get(id);
+	          const draftTime = String(draft.updatedAt || draft.createdAt || '');
+	          const existingTime = String(existing?.updatedAt || existing?.createdAt || '');
+	          if (!existing || draftTime > existingTime || (draftTime === existingTime && draft.storageSource === 'r2')) {
+	            byId.set(id, draft);
+	          }
+	        });
+	        return [...byId.values()].sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
+	      };
 	      try {
+	        if (hasR2DraftApi()) {
+	          try {
+	            const r2Data = await r2DraftApiRequest('list');
+	            const r2Drafts = normalDraftsOnly(r2Data.drafts).map(draft => ({ ...draft, storageSource: 'r2' }));
+	            let driveDrafts = [];
+	            let driveWarning = '';
+	            if (hasDraftApi()) {
+	              try {
+	                const driveData = await draftApiRequest('list');
+	                driveDrafts = normalDraftsOnly(driveData.drafts).map(draft => ({ ...draft, storageSource: 'drive' }));
+	              } catch (err) {
+	                driveWarning = `อ่าน Draft เดิมจาก Google Drive ไม่สำเร็จ: ${err.message || err}`;
+	              }
+	            }
+	            const localDrafts = normalDraftsOnly(loadLocalDrafts()).map(draft => ({ ...draft, storageSource: 'local' }));
+	            storageMode = 'r2';
+	            draftApiStatus = driveWarning;
+	            return mergeDrafts(r2Drafts, driveDrafts, localDrafts);
+	          } catch (err) {
+	            draftApiStatus = `R2 Draft API ใช้งานไม่ได้: ${err.message || err}`;
+	          }
+	        }
 	        if (hasDraftApi()) {
 	          const data = await draftApiRequest('list');
 	          storageMode = 'drive';
-	          draftApiStatus = '';
-	          const driveDrafts = normalDraftsOnly(data.drafts);
+	          const driveDrafts = normalDraftsOnly(data.drafts).map(draft => ({ ...draft, storageSource: 'drive' }));
 	          const localDrafts = normalDraftsOnly(loadLocalDrafts());
 	          const driveIds = new Set(driveDrafts.map(d => String(d.id || '')));
 	          const draftsToMigrate = localDrafts.filter(d => d?.id && !driveIds.has(String(d.id)));
@@ -17292,6 +17359,9 @@ const Pages = {
 	    }
 
 	    async function saveDraft(draft) {
+	      if (storageMode === 'r2') {
+	        return await r2DraftApiRequest('save', { draft });
+	      }
 	      if (storageMode === 'drive') {
 	        return await draftApiRequest('save', { draft });
 	      }
@@ -17312,6 +17382,18 @@ const Pages = {
     }
 
 	    async function deleteDraft(draft, idx) {
+	      if (draft?.storageSource === 'r2' && draft?.id) {
+	        return await r2DraftApiRequest('delete', {
+	          id: draft.id,
+	          quarter: draftQuarterOf(draft),
+	        });
+	      }
+	      if (draft?.storageSource === 'drive' && draft?.id && hasDraftApi()) {
+	        return await draftApiRequest('delete', {
+	          id: draft.id,
+	          quarter: draftQuarterOf(draft),
+	        });
+	      }
 	      if (storageMode === 'drive' && draft?.id) {
 	        return await draftApiRequest('delete', {
 	          id: draft.id,
@@ -17430,7 +17512,9 @@ const Pages = {
         if (draftAuthorFilter && author !== draftAuthorFilter) return false;
         return true;
       });
-	      const storageText = storageMode === 'file'
+	      const storageText = storageMode === 'r2'
+	        ? 'บันทึกเป็น JSON บน Cloudflare R2 · อ่านรวมรายการเดิมจาก Google Drive'
+	        : storageMode === 'file'
 	        ? 'บันทึกเป็นไฟล์กลางใน Drafts/ และ sync ไป Google Drive'
 	        : storageMode === 'drive'
 	          ? 'บันทึกเป็น JSON บน Google Drive ผ่าน Apps Script'
@@ -17448,6 +17532,11 @@ const Pages = {
             const categoryText = d.avpCategory || d.filters?.selectFundFilters?.category || d.asset || 'ทั้งหมด';
             const typeText = d.fundType || d.filters?.selectFundFilters?.type || 'ทั้งหมด';
             const quarterText = draftQuarterOf(d) || 'ไม่ระบุ';
+            const storageSourceText = d.storageSource === 'r2'
+              ? 'Cloudflare R2'
+              : d.storageSource === 'drive'
+                ? 'Google Drive'
+                : 'Browser';
             const isOverwriteTarget = overwriteDraftId && String(overwriteDraftId) === String(d.id || '');
             return `<div class="notes-card${isOverwriteTarget ? ' notes-card-overwrite-target' : ''}" data-idx="${i}">
               <div class="notes-card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
@@ -17457,6 +17546,7 @@ const Pages = {
                   <span class="notes-tag notes-tag-asset">หมวด AVP: ${esc(categoryText || 'ทั้งหมด')}</span>
                   <span class="notes-tag notes-tag-type">ประเภท: ${esc(typeText || 'ทั้งหมด')}</span>
                   <span class="notes-tag notes-tag-quarter">ชุดข้อมูล: ${esc(quarterText)}</span>
+                  <span class="notes-tag">ที่เก็บ: ${esc(storageSourceText)}</span>
                   <span class="notes-tag">วันที่ ${esc(d.userDate || dateStr)}</span>
                   ${d.author ? `<span class="notes-tag">โดย ${esc(d.author)}</span>` : ''}
                   <span class="notes-tag notes-tag-count">${fundCount} กองทุน</span>
@@ -17611,7 +17701,9 @@ const Pages = {
         const draft = buildDraftPayload();
         try {
           const result = await saveDraft(draft);
-          if (result?.driveUploaded) {
+	          if (result?.r2Uploaded) {
+	            toast('บันทึกดราฟลง Cloudflare R2 แล้ว', 'success', 5000);
+	          } else if (result?.driveUploaded) {
             toast('บันทึกดราฟและ sync ไป Google Drive แล้ว', 'success', 5000);
           } else if (result?.warning) {
             toast(result.warning, 'warning', 7000);
@@ -17667,7 +17759,9 @@ const Pages = {
             const result = await saveDraft(buildDraftPayload(existingDraft));
             currentDrafts = await loadDrafts();
             renderPage();
-            if (result?.driveUploaded) {
+	            if (result?.r2Uploaded) {
+	              toast('บันทึกทับดราฟลง Cloudflare R2 แล้ว', 'success', 5000);
+	            } else if (result?.driveUploaded) {
               toast('บันทึกทับดราฟและ sync ไป Google Drive แล้ว', 'success', 5000);
             } else if (result?.warning) {
               toast(result.warning, 'warning', 7000);
