@@ -57,7 +57,7 @@ def main() -> None:
     for dataset_key, name in REQUIRED_FILES.items():
         path = base_dir / name
         body = path.read_bytes()
-        object_key = f"{year}/{quarter}/base/{name}"
+        object_key = f"Data/{year}/{quarter}/base/{name}"
         client.put_object(Bucket=bucket, Key=object_key, Body=body, ContentType="application/json")
         file_meta[dataset_key] = {
             "name": name,
@@ -76,9 +76,14 @@ def main() -> None:
         manifest = {}
 
     quarters = manifest.get("quarters") if isinstance(manifest.get("quarters"), dict) else {}
-    quarters[quarter] = {"year": year, "basePath": f"{year}/{quarter}/base/", "files": file_meta, "updatedAt": now}
+    quarters[quarter] = {
+        "year": year,
+        "basePath": f"Data/{year}/{quarter}/base/",
+        "files": file_meta,
+        "updatedAt": now,
+    }
     ready = sorted(quarters, key=lambda value: (int(value[:4]), int(value[-1])), reverse=True)
-    manifest = {"version": 1, "updatedAt": now, "readyQuarters": ready, "quarters": quarters}
+    manifest = {"version": 2, "updatedAt": now, "readyQuarters": ready, "quarters": quarters}
     payload = (json.dumps(manifest, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     client.put_object(Bucket=bucket, Key="manifest.json", Body=payload, ContentType="application/json", CacheControl="no-cache")
     print(f"Updated manifest.json: {', '.join(ready)}")
