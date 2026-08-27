@@ -31,7 +31,7 @@ if (typeof CONFIG !== 'undefined') {
   /* Worker แยกสำหรับดึง FT รายกองในหน้าแก้ไข Master Fund */
   CONFIG.FT_MASTER_IMPORT_API_URL = '';
   /* Private Worker สำหรับอ่าน Quarter Base JSON จาก R2 */
-  CONFIG.R2_DATA_API_URL = '';
+  CONFIG.R2_DATA_API_URL = 'https://fund-selection-data.fp2-avp-fund-auth.workers.dev';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */
   const FILE = {
