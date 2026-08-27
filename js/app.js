@@ -17081,6 +17081,7 @@ const Pages = {
 	    let draftAuthorFilter = '';
 	    let overwriteDraftId = '';
 	    let draftApiStatus = '';
+	    let includeLegacyDriveDrafts = false;
 
     function loadLocalDrafts() {
       try { return JSON.parse(localStorage.getItem(DRAFTS_KEY) || '[]'); }
@@ -17110,6 +17111,12 @@ const Pages = {
 	      };
 	      if (action === 'list') {
 	        if (payload?.quarter) url += `?quarter=${encodeURIComponent(payload.quarter)}`;
+	      } else if (action === 'get') {
+	        url += `/${encodeURIComponent(payload?.id || '')}`;
+	        if (payload?.quarter) url += `?quarter=${encodeURIComponent(payload.quarter)}`;
+	      } else if (action === 'rebuild-index') {
+	        url += '/rebuild-index';
+	        options.method = 'POST';
 	      } else if (action === 'delete') {
 	        url += `/${encodeURIComponent(payload?.id || '')}`;
 	        if (payload?.quarter) url += `?quarter=${encodeURIComponent(payload.quarter)}`;
@@ -17274,7 +17281,7 @@ const Pages = {
 	            const r2Drafts = normalDraftsOnly(r2Data.drafts).map(draft => ({ ...draft, storageSource: 'r2' }));
 	            let driveDrafts = [];
 	            let driveWarning = '';
-	            if (hasDraftApi()) {
+	            if (includeLegacyDriveDrafts && hasDraftApi()) {
 	              try {
 	                const driveData = await draftApiRequest('list');
 	                driveDrafts = normalDraftsOnly(driveData.drafts).map(draft => ({ ...draft, storageSource: 'drive' }));
@@ -17512,8 +17519,9 @@ const Pages = {
         if (draftAuthorFilter && author !== draftAuthorFilter) return false;
         return true;
       });
+	      const driveDraftsToMigrate = drafts.filter(draft => draft?.storageSource === 'drive');
 	      const storageText = storageMode === 'r2'
-	        ? 'บันทึกเป็น JSON บน Cloudflare R2 · อ่านรวมรายการเดิมจาก Google Drive'
+	        ? `อ่านรายการจาก Cloudflare R2 Draft/index.json${includeLegacyDriveDrafts ? ' · รวมรายการเดิมจาก Google Drive' : ''}`
 	        : storageMode === 'file'
 	        ? 'บันทึกเป็นไฟล์กลางใน Drafts/ และ sync ไป Google Drive'
 	        : storageMode === 'drive'
@@ -17526,8 +17534,8 @@ const Pages = {
       const draftCards = shownDrafts.length === 0
         ? `<div class="notes-empty"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg><p>ยังไม่มีบันทึกที่บันทึกไว้</p></div>`
         : shownDrafts.map(({ d, i }) => {
-            const fundCount = Object.keys(d.selectedFunds || {}).length;
-            const hlCount = Object.keys(d.highlights || {}).length;
+            const fundCount = Number.isFinite(Number(d.selectedFundCount)) ? Number(d.selectedFundCount) : Object.keys(d.selectedFunds || {}).length;
+            const hlCount = Number.isFinite(Number(d.highlightCount)) ? Number(d.highlightCount) : Object.keys(d.highlights || {}).length;
             const dateStr = d.createdAt ? new Date(d.createdAt).toLocaleDateString('th-TH', { year:'numeric', month:'short', day:'numeric' }) : '—';
             const categoryText = d.avpCategory || d.filters?.selectFundFilters?.category || d.asset || 'ทั้งหมด';
             const typeText = d.fundType || d.filters?.selectFundFilters?.type || 'ทั้งหมด';
@@ -17644,6 +17652,21 @@ const Pages = {
                 ${draftAuthors.map(author => `<option value="${esc(author)}"${author === draftAuthorFilter ? ' selected' : ''}>${esc(author)}</option>`).join('')}
               </select>
             </label>
+	          ${storageMode === 'r2' && driveDraftsToMigrate.length ? `
+	            <button class="btn btn-success" id="notes-migrate-drive-r2" type="button">
+	              ย้าย Draft จาก Drive ไป R2 (${driveDraftsToMigrate.length})
+	            </button>
+	          ` : ''}
+	          ${storageMode === 'r2' && hasDraftApi() && !includeLegacyDriveDrafts ? `
+	            <button class="btn btn-ghost" id="notes-load-drive-drafts" type="button">
+	              อ่าน Draft เดิมจาก Google Drive
+	            </button>
+	          ` : ''}
+	          ${storageMode === 'r2' ? `
+	            <button class="btn btn-ghost" id="notes-rebuild-r2-index" type="button" title="ใช้หลังลากไฟล์ JSON เข้า R2 ด้วยมือ">
+	              สร้างดัชนี R2 ใหม่
+	            </button>
+	          ` : ''}
           </div>
           <div class="notes-list" id="notes-list">${draftCards}</div>
         </div>
@@ -17738,14 +17761,83 @@ const Pages = {
         renderPage();
       });
 
+	    area.querySelector('#notes-migrate-drive-r2')?.addEventListener('click', async e => {
+	      const button = e.currentTarget;
+	      const draftsToMigrate = currentDrafts.filter(draft => draft?.storageSource === 'drive');
+	      if (!draftsToMigrate.length) return;
+	      if (!confirm(`คัดลอก Draft เดิม ${draftsToMigrate.length} รายการจาก Google Drive ไป Cloudflare R2?\n\nไฟล์บน Google Drive จะยังไม่ถูกลบ`)) return;
+	      button.disabled = true;
+	      let migrated = 0;
+	      const failures = [];
+	      for (let i = 0; i < draftsToMigrate.length; i += 1) {
+	        const draft = draftsToMigrate[i];
+	        button.textContent = `กำลังย้าย ${i + 1}/${draftsToMigrate.length}...`;
+	        const cleanDraft = { ...draft };
+	        delete cleanDraft.storageSource;
+	        delete cleanDraft.driveFileId;
+	        delete cleanDraft.driveFileName;
+	        delete cleanDraft.r2ObjectKey;
+	        delete cleanDraft.r2FileName;
+	        try {
+	          await r2DraftApiRequest('save', { draft: cleanDraft });
+	          migrated += 1;
+	        } catch (err) {
+	          failures.push(`${draft.name || draft.id}: ${err.message || err}`);
+	        }
+	      }
+	      currentDrafts = await loadDrafts();
+	      renderPage();
+	      if (failures.length) {
+	        console.warn('Draft migration failures:', failures);
+	        toast(`ย้ายสำเร็จ ${migrated}/${draftsToMigrate.length} รายการ · ไฟล์ Drive ยังอยู่ครบ`, 'warning', 8000);
+	      } else {
+	        toast(`ย้าย Draft เข้า Cloudflare R2 สำเร็จ ${migrated} รายการ · ไฟล์ Drive ยังเก็บเป็น backup`, 'success', 7000);
+	      }
+	    });
+
+	    area.querySelector('#notes-load-drive-drafts')?.addEventListener('click', async e => {
+	      const button = e.currentTarget;
+	      button.disabled = true;
+	      button.textContent = 'กำลังอ่าน Google Drive...';
+	      includeLegacyDriveDrafts = true;
+	      currentDrafts = await loadDrafts();
+	      renderPage();
+	    });
+
+	    area.querySelector('#notes-rebuild-r2-index')?.addEventListener('click', async e => {
+	      const button = e.currentTarget;
+	      if (!confirm('สร้าง Draft/index.json ใหม่จากไฟล์ JSON ทั้งหมดในโฟลเดอร์ Draft บน R2?')) return;
+	      button.disabled = true;
+	      button.textContent = 'กำลังสร้างดัชนี...';
+	      try {
+	        const result = await r2DraftApiRequest('rebuild-index');
+	        currentDrafts = await loadDrafts();
+	        renderPage();
+	        toast(`สร้างดัชนี R2 แล้ว ${Number(result?.count || 0)} รายการ`, 'success', 5000);
+	      } catch (err) {
+	        button.disabled = false;
+	        button.textContent = 'สร้างดัชนี R2 ใหม่';
+	        toast(`สร้างดัชนีไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
+	      }
+	    });
+
       area.querySelector('#notes-list')?.addEventListener('click', async e => {
         const loadBtn = e.target.closest('.notes-btn-load');
         const overwriteBtn = e.target.closest('.notes-btn-overwrite');
         const delBtn  = e.target.closest('.notes-btn-del');
         if (loadBtn) {
           const idx = parseInt(loadBtn.dataset.idx);
-          const d = currentDrafts[idx];
+          let d = currentDrafts[idx];
           if (!d) return;
+	          if (d.storageSource === 'r2' && d.indexOnly) {
+	            try {
+	              const detail = await r2DraftApiRequest('get', { id:d.id, quarter:draftQuarterOf(d) });
+	              d = detail.draft;
+	            } catch (err) {
+	              toast(`โหลด Draft จาก R2 ไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
+	              return;
+	            }
+	          }
           restoreDraft(d);
           App.navigate('select-fund');
         }
