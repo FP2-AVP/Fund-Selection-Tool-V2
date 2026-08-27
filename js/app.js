@@ -498,6 +498,28 @@ const SIDEBAR_PREF_KEY = 'fund-selection-sidebar-collapsed';
 const TOP10_HOLDING_V3_PREF_KEY = 'fund-selection-top10-holding-v3-state';
 const UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY = 'fund-selection-upside-downside-capture-state';
 const ROBUSTNESS_DRAFTS_PREF_KEY = 'fund-selection-robustness-drafts';
+const AUTH_SESSION_PREF_KEY = 'fund-selection-auth-session';
+
+function readAuthSession() {
+  const session = readJsonPreference(AUTH_SESSION_PREF_KEY, null);
+  if (!session?.expiresAt || Date.now() >= session.expiresAt) {
+    removeJsonPreference(AUTH_SESSION_PREF_KEY);
+    return null;
+  }
+  return session;
+}
+
+function saveAuthSession(user) {
+  const hours = Math.max(1, Number(CONFIG.AUTH_SESSION_HOURS) || 48);
+  saveJsonPreference(AUTH_SESSION_PREF_KEY, {
+    user: { name: user?.name || '', email: user?.email || '' },
+    expiresAt: Date.now() + (hours * 60 * 60 * 1000),
+  });
+}
+
+function clearAuthSession() {
+  removeJsonPreference(AUTH_SESSION_PREF_KEY);
+}
 
 function readJsonPreference(key, fallback = null) {
   try {
@@ -22698,6 +22720,7 @@ const App = {
     /* Logout */
     $('#btn-logout').addEventListener('click', () => {
       SheetsAPI.signOut();
+      clearAuthSession();
       clearCache();
       State.selectedKeys.clear();
       State.selectedFunds = {};
@@ -22910,7 +22933,7 @@ const QuarterSelector = {
   },
 };
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
 
   if (isLocalMode()) {
     State.currentUser = { name: 'Local Data Mode', email: 'loading from /Data only' };
@@ -22959,6 +22982,52 @@ document.addEventListener('DOMContentLoaded', () => {
     if (el) el.classList.add('hidden');
   }
 
+  const openAuthenticatedApp = async (info, { remember = true } = {}) => {
+    const name = info.name || info.email || 'User';
+    const email = info.email || '';
+    const initial = (info.given_name || name).charAt(0).toUpperCase();
+
+    State.currentUser = { name, email };
+    if (remember) saveAuthSession(State.currentUser);
+    $('#user-name').textContent = name;
+    $('#user-email').textContent = email;
+    $('#user-avatar').textContent = initial;
+    $('#login-screen').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+
+    await QuarterSelector.detect();
+    App.init();
+  };
+
+  const waitForGoogleIdentity = async (timeoutMs = 5000) => {
+    const startedAt = Date.now();
+    while (typeof google === 'undefined' || !google.accounts?.oauth2) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error('Google Identity Services ยังไม่พร้อมใช้งาน');
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  };
+
+  /* Restore only the intent to stay signed in. A fresh Google token is obtained
+     silently, so no OAuth access token is persisted in browser storage. */
+  const savedSession = readAuthSession();
+  if (savedSession && window.location.protocol !== 'file:') {
+    btnSignin.disabled = true;
+    btnSignin.innerHTML = `<span class="spin-sm"></span> กำลังกู้คืนการเข้าสู่ระบบ...`;
+    try {
+      await waitForGoogleIdentity();
+      await SheetsAPI.requestToken(true);
+      const info = await SheetsAPI.getUserInfo();
+      await openAuthenticatedApp(info);
+      return;
+    } catch (e) {
+      btnSignin.disabled = false;
+      btnSignin.innerHTML = googleSvg;
+      console.info('Automatic sign-in was unavailable:', e.message);
+    }
+  }
+
   btnSignin.addEventListener('click', async () => {
     hideLoginError();
 
@@ -22996,20 +23065,7 @@ document.addEventListener('DOMContentLoaded', () => {
       await SheetsAPI.requestToken();
       const info = await SheetsAPI.getUserInfo();
 
-      const name    = info.name || info.email || 'User';
-      const email   = info.email || '';
-      const initial = (info.given_name || name).charAt(0).toUpperCase();
-
-      State.currentUser = { name, email };
-      $('#user-name').textContent   = name;
-      $('#user-email').textContent  = email;
-      $('#user-avatar').textContent = initial;
-
-      $('#login-screen').classList.add('hidden');
-      $('#app').classList.remove('hidden');
-
-      await QuarterSelector.detect(); // กำหนด Quarter ให้เสร็จก่อน Dashboard เริ่มโหลดและสร้าง cache
-      App.init();
+      await openAuthenticatedApp(info);
 
     } catch (e) {
       btnSignin.disabled = false;
