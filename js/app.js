@@ -13442,10 +13442,39 @@ const Pages = {
         const button = $('#mfd-ft-import', area); const status = $('#mfd-ft-status', area);
         button.disabled = true; status.textContent = 'กำลังดึง Summary, Performance, Risk และ Holdings...';
         try {
-          const syncResp = await fetch('/api/ft-qualitative-data', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})});
-          const syncData = await syncResp.json(); if (!syncResp.ok || !syncData.ok) throw new Error(syncData.error || 'ดึง FT ไม่สำเร็จ');
-          const dataResp = await fetch(`/api/ft-historical-prices?symbol=${encodeURIComponent(symbol)}&limit=1`);
-          const data = await dataResp.json(); if (!dataResp.ok || !data.ok) throw new Error(data.error || 'อ่านข้อมูล FT ไม่สำเร็จ');
+          let data;
+          if (ftHistoricalApiUrl()) {
+            status.textContent = 'กำลังสั่ง GitHub Actions ให้ดึงข้อมูล FT...';
+            await triggerFtHistoricalSync({url, symbol, runPrices:false, runQualitative:true, continueOnError:false});
+            const watched = await watchFtWorkflowUntilReady({resultSummary:status});
+            if (!watched?.payload) throw new Error('ยังไม่ได้รับฐานข้อมูล FT ฉบับอัปเดตจาก GitHub Actions');
+            const payload = watched.payload;
+            const selectedSymbol = findFtSymbolMatch(payload, symbol);
+            if (!selectedSymbol) throw new Error(`ไม่พบ ${symbol} ในฐานข้อมูล FT ที่อัปเดตแล้ว`);
+            const sameSymbol = row => String(row.symbol || '').trim().toUpperCase() === selectedSymbol.toUpperCase();
+            const symbolMeta = (payload.symbols || []).find(sameSymbol) || {};
+            data = {
+              ok:true,
+              selectedSymbol,
+              selectedDisplayName:symbolMeta.displayName || '',
+              profile:(payload.profile || []).filter(sameSymbol),
+              performance:(payload.performance || []).filter(sameSymbol),
+              risk:(payload.risk || []).filter(sameSymbol),
+              holdings:(payload.holdings || []).filter(sameSymbol),
+            };
+          } else {
+            const syncResp = await fetch('/api/ft-qualitative-data', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})});
+            const syncText = await syncResp.text();
+            let syncData;
+            try { syncData = JSON.parse(syncText); }
+            catch (_) { throw new Error(`Local FT API ส่งกลับมาเป็น HTML แทน JSON (${syncResp.status}) · กรุณาเปิดผ่าน fund_server.py`); }
+            if (!syncResp.ok || !syncData.ok) throw new Error(syncData.error || 'ดึง FT ไม่สำเร็จ');
+            const dataResp = await fetch(`/api/ft-historical-prices?symbol=${encodeURIComponent(symbol)}&limit=1`);
+            const dataText = await dataResp.text();
+            try { data = JSON.parse(dataText); }
+            catch (_) { throw new Error(`Local FT database API ส่งกลับมาเป็น HTML แทน JSON (${dataResp.status})`); }
+            if (!dataResp.ok || !data.ok) throw new Error(data.error || 'อ่านข้อมูล FT ไม่สำเร็จ');
+          }
           const imported = ftPayloadToProfile(data); let filledCount = 0;
           $$('.mfd-field', area).forEach(input => { const value = imported[input.dataset.key]; if (!input.value.trim() && String(value || '').trim()) { input.value = value; input.dispatchEvent(new Event('change')); input.classList.remove('is-missing'); filledCount += 1; } });
           const urlInput = $('[data-key="sourceUrl"]', area); if (urlInput && !urlInput.value) urlInput.value = url;
