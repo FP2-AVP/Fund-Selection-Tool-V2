@@ -7,6 +7,7 @@
 const SheetsAPI = {
   accessToken:  null,
   tokenClient:  null,
+  tokenProvider: null,
   _userInfo:    null,
 
   _notSignedInMessage() {
@@ -79,6 +80,7 @@ const SheetsAPI = {
 
   /* ── Request access token (shows Google popup) ── */
   requestToken(silent = false) {
+    if (this.tokenProvider) return this.tokenProvider();
     return new Promise((resolve, reject) => {
       const client = this._ensureClient();
       let settled = false;
@@ -466,5 +468,6 @@ const SheetsAPI = {
     this.accessToken = null;
     this._userInfo   = null;
     this.tokenClient = null;
+    this.tokenProvider = null;
   },
 };

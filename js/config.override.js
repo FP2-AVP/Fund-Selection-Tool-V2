@@ -16,6 +16,8 @@
 if (typeof CONFIG !== 'undefined') {
 
   CONFIG.DATA_SOURCE = 'google_first';
+  /* Set this after deploying cloudflare-worker, without a trailing slash. */
+  CONFIG.AUTH_BACKEND_URL = 'https://fund-selection-auth.fp2-avp-fund-auth.workers.dev';
   CONFIG.GITHUB_TOKEN = '';
   CONFIG.MASTER_ALLOCATIONS_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbylmcVwHgAuybiO7YiGftQQc7nfsylF01T7Nvni2BDkY9z10QFKaieISEM7cc8HHybKyg/exec';
   CONFIG.MASTER_ALLOCATIONS_API_SECRET_KEY = 'change-this-master-allocations-api-key';

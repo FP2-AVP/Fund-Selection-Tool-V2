@@ -11,7 +11,8 @@ const CONFIG = {
 
   /* Keep the app session across browser/app restarts. Google access tokens are
      deliberately not stored; the app requests a fresh token silently. */
-  AUTH_SESSION_HOURS: 48,
+  AUTH_SESSION_HOURS: 24,
+  AUTH_BACKEND_URL: '',
 
   /* ----------------------------------------------------------
      Google OAuth 2.0 Client ID

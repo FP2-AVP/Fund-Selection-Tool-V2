@@ -509,16 +509,61 @@ function readAuthSession() {
   return session;
 }
 
-function saveAuthSession(user) {
-  const hours = Math.max(1, Number(CONFIG.AUTH_SESSION_HOURS) || 48);
+function saveAuthSession(user, sessionToken = '') {
+  const hours = Math.max(1, Number(CONFIG.AUTH_SESSION_HOURS) || 24);
   saveJsonPreference(AUTH_SESSION_PREF_KEY, {
     user: { name: user?.name || '', email: user?.email || '' },
+    sessionToken: sessionToken || readAuthSession()?.sessionToken || '',
     expiresAt: Date.now() + (hours * 60 * 60 * 1000),
   });
 }
 
 function clearAuthSession() {
   removeJsonPreference(AUTH_SESSION_PREF_KEY);
+}
+
+function authBackendUrl(path = '') {
+  const base = String(CONFIG.AUTH_BACKEND_URL || '').trim().replace(/\/+$/, '');
+  return base ? `${base}${path}` : '';
+}
+
+function consumeAuthRedirect() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const sessionToken = params.get('auth_session') || '';
+  const error = params.get('auth_error') || '';
+  if (!sessionToken && !error) return { sessionToken: '', error: '' };
+  history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+  if (sessionToken) {
+    saveAuthSession({}, sessionToken);
+  }
+  return { sessionToken, error };
+}
+
+async function restoreBackendSession(session) {
+  const endpoint = authBackendUrl('/auth/token');
+  if (!endpoint || !session?.sessionToken) throw new Error('ไม่พบ session สำหรับกู้คืน');
+  SheetsAPI.tokenProvider = async () => {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.sessionToken}` },
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.access_token) throw new Error(result.error || 'Session หมดอายุ');
+    SheetsAPI.accessToken = result.access_token;
+    SheetsAPI._userInfo = result.user || session.user || null;
+    return result;
+  };
+  const result = await SheetsAPI.requestToken(true);
+  return result.user || SheetsAPI._userInfo || session.user;
+}
+
+async function logoutBackendSession(session) {
+  const endpoint = authBackendUrl('/auth/logout');
+  if (!endpoint || !session?.sessionToken) return;
+  await fetch(endpoint, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${session.sessionToken}` },
+  }).catch(() => {});
 }
 
 function readJsonPreference(key, fallback = null) {
@@ -22719,6 +22764,8 @@ const App = {
 
     /* Logout */
     $('#btn-logout').addEventListener('click', () => {
+      const authSession = readAuthSession();
+      logoutBackendSession(authSession);
       SheetsAPI.signOut();
       clearAuthSession();
       clearCache();
@@ -22963,6 +23010,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   const btnSignin = $('#btn-signin');
+  const authRedirect = consumeAuthRedirect();
 
   const googleSvg = `<svg width="20" height="20" viewBox="0 0 48 48">
     <path fill="#4285F4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/>
@@ -23012,13 +23060,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   /* Restore only the intent to stay signed in. A fresh Google token is obtained
      silently, so no OAuth access token is persisted in browser storage. */
   const savedSession = readAuthSession();
+  if (authRedirect.error) {
+    clearAuthSession();
+    showLoginError(`เข้าสู่ระบบไม่สำเร็จ (${authRedirect.error})`);
+  }
   if (savedSession && window.location.protocol !== 'file:') {
     btnSignin.disabled = true;
     btnSignin.innerHTML = `<span class="spin-sm"></span> กำลังกู้คืนการเข้าสู่ระบบ...`;
     try {
-      await waitForGoogleIdentity();
-      await SheetsAPI.requestToken(true);
-      const info = await SheetsAPI.getUserInfo();
+      const info = authBackendUrl()
+        ? await restoreBackendSession(savedSession)
+        : await (async () => {
+            await waitForGoogleIdentity();
+            await SheetsAPI.requestToken(true);
+            return SheetsAPI.getUserInfo();
+          })();
       await openAuthenticatedApp(info);
       return;
     } catch (e) {
@@ -23030,6 +23086,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   btnSignin.addEventListener('click', async () => {
     hideLoginError();
+
+    const backend = authBackendUrl();
+    if (backend) {
+      const returnTo = `${window.location.origin}${window.location.pathname}`;
+      window.location.assign(`${backend}/auth/start?return_to=${encodeURIComponent(returnTo)}`);
+      return;
+    }
 
     /* Guard: CLIENT_ID must be configured */
     if (!CONFIG.CLIENT_ID || CONFIG.CLIENT_ID.includes('YOUR_CLIENT_ID')) {
