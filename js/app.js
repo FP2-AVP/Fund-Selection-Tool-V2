@@ -2994,8 +2994,21 @@ async function fetchR2Json(path) {
 async function fetchR2JsonRows(cfg) {
   const quarter = String(cfg.tabName || '').trim().toUpperCase();
   const year = driveJsonYearFromQuarter(quarter);
-  const path = `/${['data', year, quarter, 'base', cfg.driveJsonFileName].map(encodeURIComponent).join('/')}`;
-  const payload = await fetchR2Json(path);
+  const currentPath = `/${['data', 'Data', year, quarter, 'base', cfg.driveJsonFileName].map(encodeURIComponent).join('/')}`;
+  let payload;
+  try {
+    payload = await fetchR2Json(currentPath);
+  } catch (currentPathError) {
+    // Temporary compatibility for quarters uploaded before the Drive-mirroring
+    // Data/ prefix was introduced. Remove after all quarters are re-synced.
+    const legacyPath = `/${['data', year, quarter, 'base', cfg.driveJsonFileName].map(encodeURIComponent).join('/')}`;
+    try {
+      payload = await fetchR2Json(legacyPath);
+      console.warn(`Using legacy R2 base path for ${quarter}: ${cfg.driveJsonFileName}`);
+    } catch {
+      throw currentPathError;
+    }
+  }
   const rows = Array.isArray(payload) ? payload : payload?.values;
   if (!Array.isArray(rows)) throw new Error(`Invalid R2 JSON format in ${cfg.driveJsonFileName}`);
   return rows;
