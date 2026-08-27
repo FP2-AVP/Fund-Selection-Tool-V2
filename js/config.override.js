@@ -28,6 +28,10 @@ if (typeof CONFIG !== 'undefined') {
   CONFIG.INCOME_FUND_DIVIDEND_API_SECRET_KEY = 'change-this-income-dividend-api-key';
   CONFIG.FT_HISTORICAL_API_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbz7MBn8-2BfYCtWdh-uuiy__8phjGnoEQAz7fKcqOcEAspmjG6amOYYpTaEoQNKufBV/exec';
   CONFIG.FT_HISTORICAL_API_SECRET_KEY = 'change-this-ft-historical-api-key';
+  /* Worker แยกสำหรับดึง FT รายกองในหน้าแก้ไข Master Fund */
+  CONFIG.FT_MASTER_IMPORT_API_URL = '';
+  /* Private Worker สำหรับอ่าน Quarter Base JSON จาก R2 */
+  CONFIG.R2_DATA_API_URL = '';
 
   /* ── ชื่อไฟล์ข้อมูล (แก้ตรงนี้เมื่อเปลี่ยน Quarter) ── */
   const FILE = {

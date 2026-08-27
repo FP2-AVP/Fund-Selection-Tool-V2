@@ -2422,6 +2422,24 @@ function ftHistoricalApiKey() {
   return String(CONFIG.FT_HISTORICAL_API_SECRET_KEY || FT_HISTORICAL_API_SECRET_KEY || '').trim();
 }
 
+function ftMasterImportApiUrl() {
+  return String(CONFIG.FT_MASTER_IMPORT_API_URL || '').trim().replace(/\/$/, '');
+}
+
+async function fetchFtMasterProfileInstant(url, symbol) {
+  const baseUrl = ftMasterImportApiUrl();
+  if (!baseUrl) throw new Error('ยังไม่ได้ตั้งค่า CONFIG.FT_MASTER_IMPORT_API_URL');
+  const response = await fetch(`${baseUrl}/api/ft-master-profile`, {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url, symbol}), cache:'no-store',
+  });
+  const text = await response.text();
+  let payload;
+  try { payload = JSON.parse(text); }
+  catch (_) { throw new Error(`FT Instant API ส่งกลับมาเป็น HTML แทน JSON (${response.status})`); }
+  if (!response.ok || payload.ok === false) throw new Error(payload.error || `FT Instant API HTTP ${response.status}`);
+  return payload;
+}
+
 async function triggerFtHistoricalSync(payload = {}) {
   const apiUrl = ftHistoricalApiUrl();
   if (!apiUrl) {
@@ -2956,6 +2974,39 @@ async function fetchDriveJsonRows(cfg) {
   return rows;
 }
 
+function r2DataApiUrl() {
+  return String(CONFIG.R2_DATA_API_URL || '').trim().replace(/\/$/, '');
+}
+
+async function fetchR2Json(path) {
+  const baseUrl = r2DataApiUrl();
+  const session = readAuthSession();
+  if (!baseUrl) throw new Error('R2 data API is not configured');
+  if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับอ่าน R2');
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers:{Authorization:`Bearer ${session.sessionToken}`}, cache:'no-store',
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || `R2 data API HTTP ${response.status}`);
+  return payload;
+}
+
+async function fetchR2JsonRows(cfg) {
+  const quarter = String(cfg.tabName || '').trim().toUpperCase();
+  const year = driveJsonYearFromQuarter(quarter);
+  const path = `/${['data', year, quarter, 'base', cfg.driveJsonFileName].map(encodeURIComponent).join('/')}`;
+  const payload = await fetchR2Json(path);
+  const rows = Array.isArray(payload) ? payload : payload?.values;
+  if (!Array.isArray(rows)) throw new Error(`Invalid R2 JSON format in ${cfg.driveJsonFileName}`);
+  return rows;
+}
+
+async function fetchR2Manifest() {
+  const manifest = await fetchR2Json('/manifest.json');
+  if (!Array.isArray(manifest?.readyQuarters)) throw new Error('Invalid R2 manifest');
+  return manifest;
+}
+
 async function fetchPageData(pageKey) {
   ensureExtendedPageConfigs();
   const cfg = CONFIG.PAGES[pageKey];
@@ -2997,6 +3048,15 @@ async function fetchPageData(pageKey) {
   if (mode === 'google_first') {
     try {
       if (cfgWithTab.preferDriveJson) {
+        if (r2DataApiUrl()) {
+          try {
+            const rows = await fetchR2JsonRows(cfgWithTab);
+            State._pageDataSource[pageKey] = `Source: Cloudflare R2 (${cfgWithTab.tabName})`;
+            return rememberPageDataMeta(pageKey, rows, cfgWithTab);
+          } catch (r2Error) {
+            console.warn(`R2 fallback for ${pageKey}:`, r2Error.message);
+          }
+        }
         const rows = await fetchDriveJsonRows(cfgWithTab);
         State._pageDataSource[pageKey] = `Source: Google Drive JSON (${cfgWithTab.tabName})`;
         return rememberPageDataMeta(pageKey, rows, cfgWithTab);
@@ -3088,6 +3148,15 @@ async function detectDriveJsonReadyQuarters() {
 }
 
 async function detectReadyQuarters() {
+  if (r2DataApiUrl()) {
+    try {
+      const manifest = await fetchR2Manifest();
+      const quarters = sortQuartersDesc(manifest.readyQuarters);
+      if (quarters.length) return quarters;
+    } catch (err) {
+      console.warn('R2 manifest unavailable; falling back to Google detection:', err.message);
+    }
+  }
   const [sheetQuarters, driveQuarters] = await Promise.all([
     detectSheetReadyQuarters(),
     detectDriveJsonReadyQuarters(),
@@ -13443,25 +13512,9 @@ const Pages = {
         button.disabled = true; status.textContent = 'กำลังดึง Summary, Performance, Risk และ Holdings...';
         try {
           let data;
-          if (ftHistoricalApiUrl()) {
-            status.textContent = 'กำลังสั่ง GitHub Actions ให้ดึงข้อมูล FT...';
-            await triggerFtHistoricalSync({url, symbol, runPrices:false, runQualitative:true, continueOnError:false});
-            const watched = await watchFtWorkflowUntilReady({resultSummary:status});
-            if (!watched?.payload) throw new Error('ยังไม่ได้รับฐานข้อมูล FT ฉบับอัปเดตจาก GitHub Actions');
-            const payload = watched.payload;
-            const selectedSymbol = findFtSymbolMatch(payload, symbol);
-            if (!selectedSymbol) throw new Error(`ไม่พบ ${symbol} ในฐานข้อมูล FT ที่อัปเดตแล้ว`);
-            const sameSymbol = row => String(row.symbol || '').trim().toUpperCase() === selectedSymbol.toUpperCase();
-            const symbolMeta = (payload.symbols || []).find(sameSymbol) || {};
-            data = {
-              ok:true,
-              selectedSymbol,
-              selectedDisplayName:symbolMeta.displayName || '',
-              profile:(payload.profile || []).filter(sameSymbol),
-              performance:(payload.performance || []).filter(sameSymbol),
-              risk:(payload.risk || []).filter(sameSymbol),
-              holdings:(payload.holdings || []).filter(sameSymbol),
-            };
+          if (ftMasterImportApiUrl()) {
+            status.textContent = 'กำลังดึงข้อมูล FT รายกอง...';
+            data = await fetchFtMasterProfileInstant(url, symbol);
           } else {
             const syncResp = await fetch('/api/ft-qualitative-data', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol})});
             const syncText = await syncResp.text();
