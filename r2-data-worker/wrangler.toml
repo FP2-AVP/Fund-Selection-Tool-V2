@@ -1,0 +1,14 @@
+name = "fund-selection-data"
+main = "src/index.js"
+compatibility_date = "2026-08-27"
+
+[vars]
+FRONTEND_URL = "https://fp2-avp.github.io/Fund-Selection-Tool-V2/"
+
+[[r2_buckets]]
+binding = "FUND_DATA"
+bucket_name = "fund-selection-data"
+
+[[kv_namespaces]]
+binding = "AUTH_SESSIONS"
+id = "c85e10f719cd4bf5aeae4bfa57f144d6"
