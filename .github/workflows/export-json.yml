@@ -14,6 +14,7 @@ on:
         type: choice
         options:
           - all
+          - sec-api
           - fund-key-performance
           - thai-quality
           - master-fund
@@ -45,4 +46,17 @@ jobs:
         run: |
           python scripts/export_sheets_to_drive_json.py \
             --quarter "${{ inputs.quarter }}" \
-            --dataset "${{ inputs.dataset }}"
+            --dataset "${{ inputs.dataset }}" \
+            --output-dir "r2-staging"
+
+      - name: Sync complete base quarter to Cloudflare R2
+        if: ${{ inputs.dataset == 'all' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
+        run: |
+          python scripts/sync_r2_base.py \
+            --quarter "${{ inputs.quarter }}" \
+            --source-dir "r2-staging"
