@@ -25,6 +25,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -208,18 +209,36 @@ def ensure_json_folders(drive: Any, root_folder_id: str, quarter: str) -> tuple[
 
 
 def read_sheet_values(sheets: Any, sheet_id: str, tab_name: str) -> list[list[Any]]:
-    response = (
-        sheets.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=sheet_id,
-            range=f"'{tab_name}'",
-            valueRenderOption="UNFORMATTED_VALUE",
-            dateTimeRenderOption="FORMATTED_STRING",
-        )
-        .execute()
-    )
-    return response.get("values", [])
+    from googleapiclient.errors import HttpError
+
+    transient_statuses = {429, 500, 502, 503, 504}
+    max_attempts = 6
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = (
+                sheets.spreadsheets()
+                .values()
+                .get(
+                    spreadsheetId=sheet_id,
+                    range=f"'{tab_name}'",
+                    valueRenderOption="UNFORMATTED_VALUE",
+                    dateTimeRenderOption="FORMATTED_STRING",
+                )
+                .execute()
+            )
+            return response.get("values", [])
+        except HttpError as exc:
+            status = getattr(exc.resp, "status", None)
+            if status not in transient_statuses or attempt == max_attempts:
+                raise
+            delay_seconds = 2 ** attempt
+            print(
+                f"WARNING: Google Sheets returned HTTP {status}; retrying "
+                f"in {delay_seconds}s ({attempt}/{max_attempts})"
+            )
+            time.sleep(delay_seconds)
+
+    raise RuntimeError("Google Sheets retry loop ended unexpectedly")
 
 
 def find_file_in_folder(drive: Any, folder_id: str, name: str) -> str | None:
