@@ -98,6 +98,15 @@ def parse_args() -> argparse.Namespace:
         help="Optional Google Drive folder ID for the JSON root.",
     )
     parser.add_argument(
+        "--drive-upload",
+        choices=["required", "optional", "skip"],
+        default="required",
+        help=(
+            "Google Drive upload policy. 'optional' continues with the local/R2 copy "
+            "when Drive upload fails; 'skip' does not access Drive. Default: required."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print target paths without writing files to Google Drive.",
@@ -309,27 +318,45 @@ def main() -> int:
 
     credentials = credentials_from_env()
     sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False)
-    drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
-
-    root_id = args.root_folder_id or ensure_folder(drive, None, JSON_ROOT_NAME)
-    base_folder_id, overrides_folder_id = ensure_json_folders(drive, root_id, quarter)
-
-    print(f"Root folder id: {root_id}")
-    print(f"Base folder id: {base_folder_id}")
-    print(f"Overrides folder id: {overrides_folder_id}")
+    drive = None
+    base_folder_id = None
+    if args.drive_upload != "skip":
+        try:
+            drive = build("drive", "v3", credentials=credentials, cache_discovery=False)
+            root_id = args.root_folder_id or ensure_folder(drive, None, JSON_ROOT_NAME)
+            base_folder_id, overrides_folder_id = ensure_json_folders(drive, root_id, quarter)
+            print(f"Root folder id: {root_id}")
+            print(f"Base folder id: {base_folder_id}")
+            print(f"Overrides folder id: {overrides_folder_id}")
+        except Exception as exc:
+            if args.drive_upload == "required":
+                raise
+            print(f"WARNING: Google Drive setup failed; continuing for R2: {exc}")
+            drive = None
+            base_folder_id = None
 
     for dataset in selected:
         rows = read_sheet_values(sheets, dataset.sheet_id, quarter)
         if not rows:
             raise RuntimeError(f"No data found for {dataset.key} tab {quarter}")
-        file_id = upload_json(drive, base_folder_id, dataset.output_file, rows)
         local_path = write_local_json(args.output_dir, quarter, dataset.output_file, rows)
-        print(
-            f"Uploaded {dataset.output_file}: {len(rows):,} rows, "
-            f"{max((len(row) for row in rows), default=0):,} columns, file id {file_id}"
-        )
         if local_path:
             print(f"Wrote local copy: {local_path}")
+        if drive is not None and base_folder_id is not None:
+            try:
+                file_id = upload_json(drive, base_folder_id, dataset.output_file, rows)
+                print(
+                    f"Uploaded {dataset.output_file}: {len(rows):,} rows, "
+                    f"{max((len(row) for row in rows), default=0):,} columns, "
+                    f"file id {file_id}"
+                )
+            except Exception as exc:
+                if args.drive_upload == "required":
+                    raise
+                print(
+                    f"WARNING: Google Drive upload failed for {dataset.output_file}; "
+                    f"local/R2 export will continue: {exc}"
+                )
 
     return 0
 
