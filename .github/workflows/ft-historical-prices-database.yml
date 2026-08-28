@@ -97,6 +97,10 @@ jobs:
       EFFECTIVE_APP_SCRIPT_URL: ${{ inputs.app_script_url || secrets.FT_HISTORICAL_APP_SCRIPT_URL }}
       EFFECTIVE_APP_SCRIPT_KEY: ${{ inputs.app_script_key || secrets.FT_HISTORICAL_APP_SCRIPT_KEY }}
       EFFECTIVE_SLEEP_SECONDS: ${{ inputs.sleep_seconds || '1' }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_R2_BUCKET: ${{ secrets.CLOUDFLARE_R2_BUCKET }}
 
     steps:
       - name: Checkout repository
@@ -175,6 +179,12 @@ jobs:
           python scripts/ft_historical_prices_store.py \
             --export-json \
             --output "Data/ft_historical_prices/exports/${EFFECTIVE_FILE_NAME}"
+
+      - name: Export and upload sharded FT data to Cloudflare R2
+        if: ${{ env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_R2_ACCESS_KEY_ID != '' && env.CLOUDFLARE_R2_SECRET_ACCESS_KEY != '' && env.CLOUDFLARE_R2_BUCKET != '' }}
+        run: |
+          python -m pip install --disable-pip-version-check boto3==1.35.92
+          python scripts/sync_ft_r2.py --upload
 
       - name: Upload FT database JSON via Apps Script
         if: ${{ env.EFFECTIVE_APP_SCRIPT_URL != '' }}
