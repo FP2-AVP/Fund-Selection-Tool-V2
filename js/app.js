@@ -83,7 +83,7 @@ const State = {
     'thai-annualized-v2-right': 'rank',
     'thai-calendar-left': 'return',
     'thai-calendar-right': 'rank',
-    'thai-calendar-years': ['2015','2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'],
+    'thai-calendar-years': null,
   },
   selectedKeys: new Set(),   // keys of selected rows in select-fund page
   incomeFundSelectedKeys: new Set(),
@@ -106,6 +106,11 @@ const State = {
   fundOverrides: { items: {}, updatedAt: null },
   fixedIncomeFactorsOverrides: { items: {}, updatedAt: null },
   fixedIncomeFactorsEditMode: false,
+  reportDataOverrides: {},
+  reportDataEditModes: {},
+  feeComparisonEditSlot: '',
+  equitySectorVisibleColumns: null,
+  maxDrawdownVisibleYears: null,
   fundDataManager: {
     query: '',
     selectedKey: '',
@@ -184,6 +189,7 @@ const JSON_STORE = {
     masterFundOverrides: 'master_fund_overrides.json',
     masterAllocations: 'fund_master_allocations.json',
     fixedIncomeFactorsOverrides: 'fixed_income_factors_overrides.json',
+    reportDataOverrides: 'report_data_overrides.json',
   },
 };
 
@@ -2126,7 +2132,7 @@ function ensureExtendedPageConfigs() {
     'master-placeholder-14': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
       tabName: '2026-Q1',
-      title: 'เปรียบเทียบ Max DD Master Fund',
+      title: 'Max DD Master Fund',
       source: 'AVP Master Fund ID',
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
       datasetKey: 'masterFund',
@@ -3269,15 +3275,9 @@ async function loadMasterFundOverridesForQuarter(quarter) {
   if (cached && Date.now() - cached.ts < CONFIG.CACHE_TTL) return cached.data;
   let data;
   try {
-    if (hasMasterAllocationsApi()) {
-      data = await masterFundOverrideApiRequest('get', {quarter: normalized});
-    } else {
-      const response = await fetch(`/api/master-fund-overrides?quarter=${encodeURIComponent(normalized)}`, {cache:'no-store'});
-      data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
-    }
+    data = await masterFundOverrideR2Request('get', {quarter:normalized});
   } catch (err) {
-    data = {ok:false, quarter:normalized, items:{}, source:'google-drive', driveExists:false, error:err.message || 'ไม่สามารถตรวจสอบ Master Fund Override บน Google Drive ได้'};
+    data = {ok:false, quarter:normalized, items:{}, source:'Cloudflare R2', r2Exists:false, error:err.message || 'ไม่สามารถอ่าน Master Fund Override จาก Cloudflare R2 ได้'};
   }
   State._cache[key] = {data, ts:Date.now()};
   return data;
@@ -3719,53 +3719,25 @@ async function loadMasterAllocations(force = false) {
   if (!force && State.masterAllocationsLoaded) return State.masterAllocations;
   const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
   try {
-    let data;
-    if (hasMasterAllocationsApi()) {
-      data = await masterAllocationsApiRequest('get', { quarter });
-    } else {
-      const resp = await fetch(`/api/master-allocations?quarter=${encodeURIComponent(quarter)}`, { cache: 'no-store' });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      data = await resp.json();
-    }
+    const data = await masterAllocationsR2Request('get', {quarter});
     State.masterAllocations = {
       items: data.items || {},
       updatedAt: data.updatedAt || null,
-      source: data.source || 'Data/fund_master_allocations.json',
+      source: data.source || 'Cloudflare R2',
+      r2Path: data.r2Path || masterAllocationsFileForQuarter(quarter),
     };
     State.masterAllocationsLoaded = true;
     State.masterAllocationsLoadError = '';
   } catch (err) {
-    try {
-      State.masterAllocations = await loadMasterAllocationsStaticOrRemote(quarter);
-      State.masterAllocationsLoaded = true;
-      State.masterAllocationsLoadError = '';
-    } catch (fallbackErr) {
-      State.masterAllocations = State.masterAllocations || { items: {}, updatedAt: null };
-      State.masterAllocationsLoadError = fallbackErr.message || err.message || String(err);
-    }
+    State.masterAllocations = {items:{}, updatedAt:null, source:'Cloudflare R2', r2Path:masterAllocationsFileForQuarter(quarter)};
+    State.masterAllocationsLoaded = true;
+    State.masterAllocationsLoadError = err.message || String(err);
   }
   return State.masterAllocations;
 }
 
 async function saveMasterAllocation(item) {
-  let data;
-  try {
-    if (hasMasterAllocationsApi()) {
-      data = await masterAllocationsApiRequest('save', { item });
-    } else {
-      const resp = await fetch('/api/master-allocations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(item),
-      });
-      data = await resp.json().catch(() => ({}));
-      if (!resp.ok || data.ok === false || data.driveUploaded === false) {
-        throw new Error(data.error || data.warning || `บันทึก mapping ไม่สำเร็จ (${resp.status})`);
-      }
-    }
-  } catch (err) {
-    throw new Error(`${err.message || err}${hasMasterAllocationsApi() ? '' : ' · ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนบันทึก Mapping ลง Google Drive'}`);
-  }
+  const data = await masterAllocationsR2Request('save', {quarter:item.quarter, item});
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
   return data;
@@ -3773,22 +3745,32 @@ async function saveMasterAllocation(item) {
 
 async function deleteMasterAllocation(key) {
   const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
-  let data;
-  try {
-    if (hasMasterAllocationsApi()) {
-      data = await masterAllocationsApiRequest('delete', { quarter, key });
-    } else {
-      const resp = await fetch(`/api/master-allocations/${encodeURIComponent(key)}?quarter=${encodeURIComponent(quarter)}`, { method: 'DELETE' });
-      data = await resp.json().catch(() => ({}));
-      if (!resp.ok || data.ok === false || data.driveUploaded === false) {
-        throw new Error(data.error || data.warning || `ลบ mapping ไม่สำเร็จ (${resp.status})`);
-      }
-    }
-  } catch (err) {
-    throw new Error(`${err.message || err}${hasMasterAllocationsApi() ? '' : ' · ต้องตั้งค่า MASTER_ALLOCATIONS_API_WEB_APP_URL ก่อนลบ Mapping บน Google Drive'}`);
-  }
+  const data = await masterAllocationsR2Request('delete', {quarter, key});
   State.masterAllocationsLoaded = false;
   await loadMasterAllocations(true);
+  return data;
+}
+
+async function masterAllocationsR2Request(action, payload = {}) {
+  const quarter = String(payload.quarter || State.currentQuarter || '2026-Q1').trim().toUpperCase();
+  const session = readAuthSession();
+  if (!r2DataApiUrl()) throw new Error('R2 data API is not configured');
+  if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับจัดการ Master Mapping บน R2');
+  const headers = {Authorization:`Bearer ${session.sessionToken}`};
+  let url = `${r2DataApiUrl()}/master-allocations`;
+  const options = {method:'GET', headers, cache:'no-store'};
+  if (action === 'get') url += `?quarter=${encodeURIComponent(quarter)}`;
+  else if (action === 'save') {
+    options.method = 'POST';
+    headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify({quarter, item:payload.item});
+  } else if (action === 'delete') {
+    options.method = 'DELETE';
+    url += `/${encodeURIComponent(payload.key)}?quarter=${encodeURIComponent(quarter)}`;
+  } else throw new Error(`Unknown Master Allocations action: ${action}`);
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `R2 Master Allocations API HTTP ${response.status}`);
   return data;
 }
 
@@ -3951,6 +3933,99 @@ async function masterFundOverrideApiRequest(action, payload = {}) {
   return data;
 }
 
+async function masterFundOverrideR2Request(action, payload = {}) {
+  const quarter = String(payload.quarter || State.currentQuarter || '2026-Q1').trim().toUpperCase();
+  const session = readAuthSession();
+  if (!r2DataApiUrl()) throw new Error('R2 data API is not configured');
+  if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับจัดการ Master Fund Override บน R2');
+  const headers = {Authorization:`Bearer ${session.sessionToken}`};
+  let url = `${r2DataApiUrl()}/master-fund-overrides`;
+  const options = {method:'GET', headers, cache:'no-store'};
+  if (action === 'get') url += `?quarter=${encodeURIComponent(quarter)}`;
+  else if (action === 'save') {
+    options.method = 'POST';
+    headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify({quarter, profile:payload.profile});
+  } else if (action === 'delete') {
+    options.method = 'DELETE';
+    url += `/${encodeURIComponent(payload.key)}?quarter=${encodeURIComponent(quarter)}`;
+  } else throw new Error(`Unknown Master Fund Override action: ${action}`);
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `R2 Master Fund Override API HTTP ${response.status}`);
+  return data;
+}
+
+function reportDataOverridesFileForQuarter(quarter) {
+  const normalized = String(quarter || '2026-Q1').trim().toUpperCase();
+  const year = /^\d{4}-Q[1-4]$/.test(normalized) ? normalized.slice(0, 4) : '2026';
+  return `Data/${year}/${normalized}/overrides/report_data_overrides.json`;
+}
+
+async function reportDataOverridesR2Request(action, payload = {}) {
+  const quarter = String(payload.quarter || State.currentQuarter || '2026-Q1').trim().toUpperCase();
+  const session = readAuthSession();
+  if (!r2DataApiUrl()) throw new Error('R2 data API is not configured');
+  if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับจัดการ Report Data Override บน R2');
+  const headers = {Authorization:`Bearer ${session.sessionToken}`};
+  let url = `${r2DataApiUrl()}/report-data-overrides`;
+  const options = {method:'GET', headers, cache:'no-store'};
+  if (action === 'get') {
+    url += `?quarter=${encodeURIComponent(quarter)}`;
+  } else if (action === 'save') {
+    options.method = 'POST';
+    headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify({quarter, changes:payload.changes || []});
+  } else if (action === 'delete') {
+    options.method = 'DELETE';
+    url += `/${encodeURIComponent(payload.entityType)}/${encodeURIComponent(payload.key)}?quarter=${encodeURIComponent(quarter)}`;
+    if (payload.section) url += `&section=${encodeURIComponent(payload.section)}`;
+  } else throw new Error(`Unknown Report Data Override action: ${action}`);
+  const response = await fetch(url, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `R2 Report Data Override API HTTP ${response.status}`);
+  return data;
+}
+
+async function loadReportDataOverrides(quarter = State.currentQuarter, force = false) {
+  const normalized = String(quarter || '2026-Q1').trim().toUpperCase();
+  if (!force && State.reportDataOverrides?.[normalized]) return State.reportDataOverrides[normalized];
+  const data = await reportDataOverridesR2Request('get', {quarter:normalized});
+  const result = {
+    schemaVersion:Number(data.schemaVersion || 1),
+    quarter:normalized,
+    updatedAt:data.updatedAt || null,
+    thaiFunds:data.thaiFunds || {},
+    masterFunds:data.masterFunds || {},
+    source:data.source || 'Cloudflare R2',
+    r2Path:data.r2Path || reportDataOverridesFileForQuarter(normalized),
+  };
+  State.reportDataOverrides[normalized] = result;
+  return result;
+}
+
+function reportDataOverrideSection(document, entityType, key, section) {
+  const normalizedKey = String(key || '').trim().toUpperCase();
+  const entity = document?.[entityType]?.[normalizedKey];
+  return entity?.sections?.[section] || null;
+}
+
+async function saveReportDataOverrideChanges(quarter, changes) {
+  const normalized = String(quarter || State.currentQuarter || '2026-Q1').trim().toUpperCase();
+  const data = await reportDataOverridesR2Request('save', {quarter:normalized, changes});
+  delete State.reportDataOverrides[normalized];
+  await loadReportDataOverrides(normalized, true);
+  return data;
+}
+
+async function deleteReportDataOverride(quarter, entityType, key, section = '') {
+  const normalized = String(quarter || State.currentQuarter || '2026-Q1').trim().toUpperCase();
+  const data = await reportDataOverridesR2Request('delete', {quarter:normalized, entityType, key, section});
+  delete State.reportDataOverrides[normalized];
+  await loadReportDataOverrides(normalized, true);
+  return data;
+}
+
 async function loadFixedIncomeFactorsOverrides(force = false) {
   if (!force && State.fixedIncomeFactorsOverridesLoaded) return State.fixedIncomeFactorsOverrides;
   const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
@@ -3975,30 +4050,45 @@ async function loadFixedIncomeFactorsOverrides(force = false) {
       State.fixedIncomeFactorsOverridesLoadError = fallbackErr.message || err.message || String(err);
     }
   }
+  try {
+    const reportOverrides = await loadReportDataOverrides(quarter, force);
+    const reportItems = {};
+    Object.entries(reportOverrides.thaiFunds || {}).forEach(([key, entity]) => {
+      const section = entity?.sections?.fixedIncome;
+      if (!section?.values || typeof section.values !== 'object') return;
+      reportItems[key] = {
+        key,
+        code:key,
+        ...section.values,
+        _metadata:{updatedAt:section.updatedAt || '', updatedBy:section.updatedBy || '', note:section.note || ''},
+      };
+    });
+    State.fixedIncomeFactorsOverrides = {
+      ...(State.fixedIncomeFactorsOverrides || {}),
+      items:{...(State.fixedIncomeFactorsOverrides?.items || {}), ...reportItems},
+      reportDataSource:reportOverrides.source,
+      reportDataPath:reportOverrides.r2Path,
+    };
+  } catch (reportError) {
+    State.fixedIncomeFactorsOverridesLoadError = State.fixedIncomeFactorsOverridesLoadError || reportError.message || String(reportError);
+  }
   return State.fixedIncomeFactorsOverrides;
 }
 
 async function saveFixedIncomeFactorsOverrides(items) {
-  let data;
-  try {
-    const resp = await fetch('/api/fixed-income-factors-overrides', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, replace: true }),
-    });
-    data = await resp.json().catch(() => ({}));
-    if (!resp.ok || data.ok === false) {
-      throw new Error(data.error || `บันทึก override ไม่สำเร็จ (${resp.status})`);
-    }
-  } catch (err) {
-    if (!hasFixedIncomeFactorsApi()) {
-      throw new Error(`${err.message || err} · GitHub Pages ต้องตั้งค่า FIXED_INCOME_FACTORS_API_WEB_APP_URL ก่อนบันทึก Override`);
-    }
-    data = await fixedIncomeFactorsApiRequest('save', { items, replace: true });
-  }
+  const quarter = State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1';
+  const changes = Object.entries(items || {}).map(([key, item]) => ({
+    entityType:'thaiFunds',
+    key:String(item?.code || item?.key || key).trim().toUpperCase(),
+    section:'fixedIncome',
+    values:Object.fromEntries(Object.entries(item || {}).filter(([field]) => !['key', 'code', '_metadata'].includes(field) && !field.startsWith('_'))),
+    note:String(item?._metadata?.note || '').trim(),
+  }));
+  if (!changes.length) throw new Error('ไม่มีข้อมูลที่ต้องบันทึก Override');
+  const data = await saveReportDataOverrideChanges(quarter, changes);
   State.fixedIncomeFactorsOverridesLoaded = false;
   await loadFixedIncomeFactorsOverrides(true);
-  return data.items;
+  return data;
 }
 
 function hasFixedIncomeFactorsApi() {
@@ -4672,10 +4762,19 @@ function renderFeeCompareMiniTable(rows, options = {}) {
   const sortState = options.sortState || { key: '', dir: 'asc' };
   const sortableHeader = (label, key, attrs = '') =>
     `<th ${attrs} class="fee-compare-sort ${sortState.key === key ? 'is-active' : ''}" data-fee-sort="${key}">${renderSortLabel(label, sortState.key === key, sortState.dir)}</th>`;
+  const editing = !!options.editing;
+  const slot = options.slot || '';
+  const quarter = options.quarter || '';
+  const editCell = (row, field, owner) => {
+    if (!editing || row.isPlaceholder) return `<td class="fee-compare-num">${esc(row[field] || '-')}</td>`;
+    const metadata = row.overrideMetadata?.[owner];
+    return `<td class="fee-compare-num fee-compare-edit-cell"><input class="fund-input fee-compare-override-input" data-field="${field}" data-owner="${owner}" value="${esc(row[field] || '')}" placeholder="-"><small class="fee-compare-edit-meta">Base: ${esc(String(row.baseValues?.[field] || '-'))}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
+  };
   return `
-    <div class="card fee-compare-card">
+    <div class="card fee-compare-card" data-fee-slot="${esc(slot)}" data-fee-quarter="${esc(quarter)}">
       <div class="fee-compare-card-head">
         <h3>${esc(title)}</h3>
+        <div>${editing ? `<button class="btn btn-primary btn-sm fee-compare-save" data-slot="${esc(slot)}">บันทึก · ${esc(quarter)}</button><button class="btn btn-ghost btn-sm fee-compare-cancel">ยกเลิก</button>` : `<button class="btn btn-ghost btn-sm fee-compare-edit" data-slot="${esc(slot)}">แก้ไขข้อมูลกองทุน</button>`}</div>
       </div>
       <div class="fee-compare-table-wrap">
         <table class="fee-compare-table">
@@ -4716,8 +4815,8 @@ function renderFeeCompareMiniTable(rows, options = {}) {
                     ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-compare-warning">ระบุ Share Class ไม่ได้ — ไม่คำนวณค่ารวม</small>' : ''}
                   </td>
                   <td class="fee-compare-thai"${row.highlightColor ? ` style="background:${row.highlightColor}"` : ''}>${esc(row.thaiCode)}</td>
-                  <td class="fee-compare-num${options.isCurrent && row.masterTerTrend ? ` fee-compare-trend-bg fee-compare-trend-bg--${row.masterTerTrend}` : ''}">${esc(row.masterTerText || '-')}</td>
-                  <td class="fee-compare-num${options.isCurrent && row.thaiTerTrend ? ` fee-compare-trend-bg fee-compare-trend-bg--${row.thaiTerTrend}` : ''}">${esc(row.thaiTerText || '-')}</td>
+                  ${editCell(row, 'masterTerText', 'master')}
+                  ${editCell(row, 'thaiTerText', 'thai')}
                   <td class="fee-compare-num fee-compare-combined">${esc(row.combinedText || '-')}${options.isCurrent && row.combinedTrend ? `<small class="fee-compare-delta fee-compare-delta--${row.combinedTrend}">${row.combinedTrend === 'down' ? '↓' : '↑'} ${esc(row.combinedDeltaText)}</small>` : ''}</td>
                 </tr>`;
             }).join('')}
@@ -6125,6 +6224,36 @@ function buildFeeComparisonRows(universe, rawLookup, options = {}) {
     };
   }).filter(item => !Number.isNaN(item.thaiTer) && (includeThaiOnly || !Number.isNaN(item.masterTer)));
   return annotateFeeComparisonNameDiffs(rows);
+}
+
+function applyFeeReportDataOverrides(rows, document) {
+  const thaiFields = ['thaiTerText','frontText','backText','initialText','subsequentText','fxHedgingText','sourceLink'];
+  const masterFields = ['masterTerText','depositCurrencyText'];
+  return rows.map(row => {
+    const thaiKey = String(row.thaiCode || '').trim().toUpperCase();
+    const masterKey = String(row.masterId || row.masterIsin || '').trim().toUpperCase();
+    const thaiSection = reportDataOverrideSection(document, 'thaiFunds', thaiKey, 'fees');
+    const masterSection = reportDataOverrideSection(document, 'masterFunds', masterKey, 'fees');
+    const next = {
+      ...row,
+      thaiKey,
+      masterKey,
+      baseValues:{},
+      overrideMetadata:{thai:thaiSection || null, master:masterSection || null},
+    };
+    [...thaiFields, ...masterFields].forEach(field => { next.baseValues[field] = row[field] || ''; });
+    thaiFields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(thaiSection?.values || {}, field)) next[field] = String(thaiSection.values[field] ?? '').trim();
+    });
+    masterFields.forEach(field => {
+      if (Object.prototype.hasOwnProperty.call(masterSection?.values || {}, field)) next[field] = String(masterSection.values[field] ?? '').trim();
+    });
+    next.masterTer = parseNum(next.masterTerText);
+    next.thaiTer = parseNum(next.thaiTerText);
+    next.combined = !Number.isNaN(next.masterTer) && !Number.isNaN(next.thaiTer) ? next.masterTer + next.thaiTer : NaN;
+    next.combinedText = Number.isNaN(next.combined) ? '' : next.combined.toFixed(2);
+    return next;
+  });
 }
 
 function annotateFeeQuarterChanges(currentRows, previousRows) {
@@ -8910,6 +9039,8 @@ const Pages = {
         thaiQualityRowsPrevious,
         masterRowsCurrent,
         masterRowsPrevious,
+        reportOverridesCurrent,
+        reportOverridesPrevious,
       ] = await Promise.all([
         fetchCachedForTab(pageKey, currentQuarter),
         fetchCachedForTab(pageKey, previousQuarter),
@@ -8917,6 +9048,8 @@ const Pages = {
         fetchCachedForTab('thai-annualized', previousQuarter),
         fetchCachedForTab('master-placeholder-2', currentQuarter),
         fetchCachedForTab('master-placeholder-2', previousQuarter),
+        loadReportDataOverrides(currentQuarter),
+        loadReportDataOverrides(previousQuarter),
       ]);
       const rawLookupCurrent = buildRawSecLookup(rawSecRowsCurrent);
       const rawLookupPrevious = buildRawSecLookup(rawSecRowsPrevious);
@@ -8943,8 +9076,8 @@ const Pages = {
           };
         });
 
-      const feeRowsCurrentBase = decorateRows(buildFeeComparisonRows(universeCurrent, rawLookupCurrent, { includeThaiOnly: true }));
-      const feeRowsPreviousBase = decorateRows(buildFeeComparisonRows(universePrevious, rawLookupPrevious, { includeThaiOnly: true }));
+      const feeRowsCurrentBase = decorateRows(applyFeeReportDataOverrides(buildFeeComparisonRows(universeCurrent, rawLookupCurrent, { includeThaiOnly: true }), reportOverridesCurrent));
+      const feeRowsPreviousBase = decorateRows(applyFeeReportDataOverrides(buildFeeComparisonRows(universePrevious, rawLookupPrevious, { includeThaiOnly: true }), reportOverridesPrevious));
       const {
         currentRows: alignedCurrentRows,
         previousRows: alignedPreviousRows,
@@ -9032,14 +9165,58 @@ const Pages = {
         const pairs = sortedPairs();
         const grid = $('.fee-compare-grid', area);
         grid.innerHTML = `
-          ${renderFeeCompareMiniTable(pairs.map(pair => pair.current), { title: `ตารางค่าธรรมเนียม · ${currentQuarter}`, sortState, isCurrent: true })}
-          ${renderFeeCompareMiniTable(pairs.map(pair => pair.previous), { title: `ตารางค่าธรรมเนียม · ${previousQuarter}`, sortState })}`;
+          ${renderFeeCompareMiniTable(pairs.map(pair => pair.current), { title: `ตารางค่าธรรมเนียม · ${currentQuarter}`, sortState, isCurrent: true, slot:'current', quarter:currentQuarter, editing:State.feeComparisonEditSlot === 'current' })}
+          ${renderFeeCompareMiniTable(pairs.map(pair => pair.previous), { title: `ตารางค่าธรรมเนียม · ${previousQuarter}`, sortState, slot:'previous', quarter:previousQuarter, editing:State.feeComparisonEditSlot === 'previous' })}`;
         $$('.fee-compare-sort', grid).forEach(header => {
           header.addEventListener('click', () => {
             toggleNamedSort(sortState, header.dataset.feeSort);
             renderTables();
           });
         });
+        $$('.fee-compare-edit', grid).forEach(button => button.addEventListener('click', () => {
+          State.feeComparisonEditSlot = button.dataset.slot || '';
+          renderTables();
+        }));
+        $$('.fee-compare-cancel', grid).forEach(button => button.addEventListener('click', () => {
+          State.feeComparisonEditSlot = '';
+          renderTables();
+        }));
+        $$('.fee-compare-save', grid).forEach(button => button.addEventListener('click', async () => {
+          const slot = button.dataset.slot || '';
+          const isCurrent = slot === 'current';
+          const quarter = isCurrent ? currentQuarter : previousQuarter;
+          const sourceRows = pairs.map(pair => isCurrent ? pair.current : pair.previous);
+          const card = button.closest('.fee-compare-card');
+          const changes = [];
+          $$('.fee-compare-table tbody tr', card).forEach((tr, index) => {
+            const row = sourceRows[index];
+            if (!row || row.isPlaceholder) return;
+            const thaiValues = {};
+            const masterValues = {};
+            $$('.fee-compare-override-input', tr).forEach(input => {
+              const field = input.dataset.field;
+              const value = input.value.trim();
+              if (value === String(row.baseValues?.[field] || '').trim()) return;
+              (input.dataset.owner === 'master' ? masterValues : thaiValues)[field] = value;
+            });
+            if (Object.keys(thaiValues).length || row.overrideMetadata?.thai) changes.push({entityType:'thaiFunds', key:row.thaiKey, section:'fees', values:thaiValues});
+            if (row.masterKey && (Object.keys(masterValues).length || row.overrideMetadata?.master)) changes.push({entityType:'masterFunds', key:row.masterKey, section:'fees', values:masterValues});
+          });
+          if (!changes.length) {
+            toast('ไม่มีข้อมูลที่ต่างจาก Base และไม่มี Override ที่ต้องคืนค่า', 'info');
+            State.feeComparisonEditSlot = '';
+            renderTables();
+            return;
+          }
+          try {
+            await saveReportDataOverrideChanges(quarter, changes);
+            State.feeComparisonEditSlot = '';
+            toast(`บันทึกค่าธรรมเนียม Override · ${quarter}`, 'success');
+            Pages.feeComparisonPlaceholder(area);
+          } catch (error) {
+            toast(error.message || 'บันทึก Override ไม่สำเร็จ', 'error');
+          }
+        }));
         syncFeeComparisonRowHeights();
       };
       renderTables();
@@ -12863,8 +13040,8 @@ const Pages = {
               </label>
               <span class="row-count-badge">${visible.length.toLocaleString()} รายการ</span>
               <span class="row-count-badge is-info">${allocationCount.toLocaleString()} mapping</span>
-              <span class="badge badge-data-origin">Data/fund_master_allocations.json</span>
-              ${State.masterAllocationsLoadError ? `<span class="badge badge-warning">ยังไม่ได้เชื่อมต่อ local server</span>` : ''}
+              <span class="badge badge-data-origin">Cloudflare R2 · ${esc(State.masterAllocations?.r2Path || masterAllocationsFileForQuarter(State.currentQuarter))}</span>
+              ${State.masterAllocationsLoadError ? `<span class="badge badge-warning">อ่าน Master Mapping จาก R2 ไม่สำเร็จ</span>` : ''}
             </div>
           </div>
 
@@ -13189,11 +13366,14 @@ const Pages = {
       $('#fdm-form', area)?.addEventListener('submit', async e => {
         e.preventDefault();
         if (!selected) return;
+        const allocations = readAllocationsFromForm();
+        const currentTotalWeight = allocations.reduce((sum, item) => sum + (parseFloat(item.weight) || 0), 0);
+        if (Math.abs(currentTotalWeight - 100) > 0.01) return toast(`Weight ต้องรวม 100% (ปัจจุบัน ${currentTotalWeight.toFixed(2)}%)`, 'error');
         const payload = {
           quarter: State.currentQuarter || CONFIG.PAGES?.['select-fund']?.tabName || '2026-Q1',
           thaiFundCode: selected.code,
           thaiFundName: selected.name || '',
-          allocations: readAllocationsFromForm(),
+          allocations,
           sourceDate: mapping.sourceDate || '',
           status: mapping.status || 'Active',
           note: mapping.note || '',
@@ -13248,12 +13428,12 @@ const Pages = {
     })).filter(item => item.isin || item.fundId || item.name);
     const overrideQuarter = String(State.currentQuarter || '2026-Q1').trim().toUpperCase();
     let masterOverrideItems = {};
-    let overrideStoreStatus = {ok:false, driveExists:false, drivePath:`${overrideQuarter}/overrides/master_fund_overrides.json`, error:'ยังไม่ได้ตรวจสอบ Google Drive'};
+    let overrideStoreStatus = {ok:false, r2Exists:false, r2Path:`Data/${overrideQuarter.slice(0,4)}/${overrideQuarter}/overrides/master_fund_overrides.json`, error:'ยังไม่ได้ตรวจสอบ Cloudflare R2'};
     try {
       const data = await loadMasterFundOverridesForQuarter(overrideQuarter);
       overrideStoreStatus = data;
       if (data.ok) masterOverrideItems = data.items || {};
-    } catch (err) { overrideStoreStatus.error = err.message || 'ตรวจสอบ Google Drive ไม่สำเร็จ'; }
+    } catch (err) { overrideStoreStatus.error = err.message || 'ตรวจสอบ Cloudflare R2 ไม่สำเร็จ'; }
     Object.values(masterOverrideItems).forEach(profile => sourceMasters.push({
       isin:profile.isin || '', fundId:profile.masterFundId || '', name:profile.masterFundName || profile.shareClassName || '',
       baseCurrency:profile.baseCurrency || '', _profile:profile, _override:true,
@@ -13427,20 +13607,20 @@ const Pages = {
           <span class="badge ${percent === 100 ? 'badge-success' : 'badge-warning'}">ข้อมูลบังคับ ${filled}/${required.length}</span>
         </div><div class="master-completion"><span style="width:${percent}%"></span></div></div>
         <div class="master-search-result ${source.isin || source.fundId || drafts[selectedIsin] || isNew ? 'is-found' : 'is-not-found'}">${isNew ? 'กำลังสร้าง Master Fund ใหม่ · กรอกช่องบังคับแล้วบันทึกเข้า Override' : source.isin || source.fundId || drafts[selectedIsin] ? `พบข้อมูลแล้ว: ${esc(source.name || profile.shareClassName || selectedIsin)}` : selectedIsin ? `ยังไม่พบ ${esc(selectedIsin)} ในถังข้อมูล` : 'กรุณาระบุ ISIN หรือ SecId / FundId แล้วกดค้นหา'}</div>
-        <div class="alert ${overrideStoreStatus.ok && overrideStoreStatus.driveExists ? 'alert-success' : 'alert-error'}">
-          ${overrideStoreStatus.ok && overrideStoreStatus.driveExists
-            ? `พบ Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || overrideStoreStatus.logicalPath || '')}`
-            : `ยังไม่พบหรือไม่สามารถอ่าน Master Fund Override บน Google Drive: ${esc(overrideStoreStatus.drivePath || overrideStoreStatus.logicalPath || '')}${overrideStoreStatus.error ? ` · ${esc(overrideStoreStatus.error)}` : ''}`}
+        <div class="alert ${overrideStoreStatus.ok ? 'alert-success' : 'alert-error'}">
+          ${overrideStoreStatus.ok
+            ? `${overrideStoreStatus.r2Exists ? 'พบ' : 'พร้อมสร้าง'} Master Fund Override บน Cloudflare R2: ${esc(overrideStoreStatus.r2Path || '')}`
+            : `ไม่สามารถอ่าน Master Fund Override จาก Cloudflare R2: ${esc(overrideStoreStatus.r2Path || '')}${overrideStoreStatus.error ? ` · ${esc(overrideStoreStatus.error)}` : ''}`}
         </div>
         <section class="card master-override-list-card">
           <div class="card-header"><div><h3>รายการ Master Fund Override</h3><p>ข้อมูลใน ${esc(overrideQuarter)} · แก้ไขหรือลบเฉพาะกองได้โดยไม่กระทบรายการอื่น</p></div><span class="badge badge-primary">${overrideEntries.length.toLocaleString()} กอง</span></div>
-          ${overrideEntries.length ? `<div class="table-wrapper master-override-list-wrap"><table class="master-override-list"><thead><tr><th>Key</th><th>Master FundId</th><th>ISIN</th><th>ชื่อ Master Fund</th><th>แก้ไขล่าสุด</th><th>จัดการ</th></tr></thead><tbody>${overrideEntries.map(([key,item]) => `<tr><td class="mono-small">${esc(key)}</td><td>${esc(item.masterFundId || '-')}</td><td>${esc(item.isin || '-')}</td><td>${esc(item.masterFundName || item.shareClassName || '-')}</td><td>${esc(formatOverrideTime(item.updatedAt))}</td><td><div class="master-override-row-actions"><button class="btn btn-primary btn-sm" type="button" data-master-override-edit="${esc(key)}">แก้ไข</button><button class="btn btn-danger btn-sm" type="button" data-master-override-remove="${esc(key)}">ลบจาก Drive</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="state-box compact">ยังไม่มี Master Fund Override ใน Quarter นี้</div>'}
+          ${overrideEntries.length ? `<div class="table-wrapper master-override-list-wrap"><table class="master-override-list"><thead><tr><th>Key</th><th>Master FundId</th><th>ISIN</th><th>ชื่อ Master Fund</th><th>แก้ไขล่าสุด</th><th>จัดการ</th></tr></thead><tbody>${overrideEntries.map(([key,item]) => `<tr><td class="mono-small">${esc(key)}</td><td>${esc(item.masterFundId || '-')}</td><td>${esc(item.isin || '-')}</td><td>${esc(item.masterFundName || item.shareClassName || '-')}</td><td>${esc(formatOverrideTime(item.updatedAt))}</td><td><div class="master-override-row-actions"><button class="btn btn-primary btn-sm" type="button" data-master-override-edit="${esc(key)}">แก้ไข</button><button class="btn btn-danger btn-sm" type="button" data-master-override-remove="${esc(key)}">ลบจาก R2</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="state-box compact">ยังไม่มี Master Fund Override ใน Quarter นี้</div>'}
         </section>
         <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมเฉพาะช่องว่าง</button><small id="mfd-ft-status">ข้อมูลเดิมจะไม่ถูกเขียนทับ</small></div>
         <form id="mfd-form">
           <div class="master-data-notice"><strong>หลักการ:</strong> ต้องมี Master FundId หรือ ISIN อย่างใดอย่างหนึ่ง · ช่องที่มี <span class="master-required">*</span> เป็นข้อมูลบังคับอื่น</div>
           ${sections.map((section, idx) => `<details class="card master-data-section" ${idx < 3 ? 'open' : ''}><summary><span>${esc(section.title)}</span><small>${esc(section.hint)}</small></summary><div class="master-fields">${section.fields.map(fieldHtml).join('')}</div></details>`).join('')}
-          <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-success" id="mfd-save-override" type="button">บันทึกเข้า Master Fund Override</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">แบบร่างเก็บใน Browser · Override สำเร็จเมื่อมีไฟล์บน Google Drive เท่านั้น</span></div>
+          <div class="master-data-actions"><button class="btn btn-primary" type="submit">บันทึกแบบร่าง</button><button class="btn btn-success" id="mfd-save-override" type="button">บันทึกเข้า Master Fund Override</button><button class="btn btn-danger" id="mfd-delete" type="button" ${drafts[selectedIsin] ? '' : 'disabled'}>ลบแบบร่าง</button><span class="text-muted">แบบร่างเก็บใน Browser · Master Fund Override เก็บบน Cloudflare R2</span></div>
         </form></div>`;
       const runSearch = () => { const value = $('#mfd-master-search', area).value.trim(); const found = findSource(value); selectedIsin = found?.isin || found?.fundId || value; State.masterFundDataManagerIsin = selectedIsin; render(); };
       $('#mfd-master-search', area)?.addEventListener('change', runSearch);
@@ -13457,28 +13637,21 @@ const Pages = {
         const key = button.dataset.masterOverrideRemove;
         const item = masterOverrideItems[key] || {};
         const label = item.masterFundName || item.shareClassName || key;
-        if (!window.confirm(`ยืนยันลบ Override ของ ${label}?\n\nระบบจะลบเฉพาะรายการ ${key} จาก Google Drive และไม่ลบกองอื่น`)) return;
+        if (!window.confirm(`ยืนยันลบ Override ของ ${label}?\n\nระบบจะลบเฉพาะรายการ ${key} จาก R2 และไม่ลบกองอื่น`)) return;
         button.disabled = true;
         try {
-          let data;
-          if (hasMasterAllocationsApi()) {
-            data = await masterFundOverrideApiRequest('delete', {quarter:overrideQuarter, key});
-          } else {
-            const response = await fetch(`/api/master-fund-overrides/${encodeURIComponent(key)}?quarter=${encodeURIComponent(overrideQuarter)}`, {method:'DELETE'});
-            data = await response.json();
-            if (!response.ok || !data.ok || data.driveUploaded === false) throw new Error(data.error || data.warning || 'ลบ Override ไม่สำเร็จ');
-          }
+          const data = await masterFundOverrideR2Request('delete', {quarter:overrideQuarter, key});
           delete masterOverrideItems[key];
           for (let index = sourceMasters.length - 1; index >= 0; index -= 1) {
             const source = sourceMasters[index];
             if (source._override && [key, source.isin, source.fundId].some(value => norm(value) === norm(key))) sourceMasters.splice(index, 1);
           }
-          State._cache[`master-fund-overrides::${overrideQuarter}`] = {data:{...data, ok:true, driveExists:true, items:masterOverrideItems}, ts:Date.now()};
+          State._cache[`master-fund-overrides::${overrideQuarter}`] = {data:{...data, ok:true, r2Exists:true, items:masterOverrideItems}, ts:Date.now()};
           if (norm(selectedIsin) === norm(key) || norm(selectedIsin) === norm(item.isin) || norm(selectedIsin) === norm(item.masterFundId)) {
             selectedIsin = item.isin || item.masterFundId || key;
             State.masterFundDataManagerIsin = selectedIsin;
           }
-          toast(`ลบ Override ของ ${label} จาก Google Drive แล้ว`, 'success');
+          toast(`ลบ Override ของ ${label} จาก Cloudflare R2 แล้ว`, 'success');
           render();
         } catch (err) {
           button.disabled = false;
@@ -13565,21 +13738,14 @@ const Pages = {
         if (missing.length) return toast(`กรุณากรอกช่องบังคับ: ${missing.join(', ')}`, 'error');
         const button = $('#mfd-save-override', area); button.disabled = true;
         try {
-          let data;
-          if (hasMasterAllocationsApi()) {
-            data = await masterFundOverrideApiRequest('save', {quarter:overrideQuarter, profile:next});
-          } else {
-            const response = await fetch('/api/master-fund-overrides', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({quarter:overrideQuarter, profile:next})});
-            data = await response.json();
-            if (!response.ok || !data.ok || data.driveUploaded === false) throw new Error(data.error || data.warning || 'บันทึก Override ไม่สำเร็จ');
-          }
+          const data = await masterFundOverrideR2Request('save', {quarter:overrideQuarter, profile:next});
           const oldKey = selectedIsin; selectedIsin = next.isin || next.masterFundId; State.masterFundDataManagerIsin = selectedIsin;
           if (oldKey !== selectedIsin) delete drafts[oldKey]; delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts);
-          masterOverrideItems[selectedIsin.toUpperCase()] = data.profile;
-          overrideStoreStatus = {ok:true, driveExists:true, drivePath:data.drivePath || data.logicalPath || data.drive?.path || ''};
+          masterOverrideItems = data.items || {...masterOverrideItems, [data.key]:data.profile};
+          overrideStoreStatus = {ok:true, r2Exists:true, r2Path:data.r2Path || `Data/${overrideQuarter.slice(0,4)}/${overrideQuarter}/overrides/master_fund_overrides.json`};
           State._cache[`master-fund-overrides::${overrideQuarter}`] = {data:{...data, items:masterOverrideItems}, ts:Date.now()};
           sourceMasters.push({isin:data.profile.isin, fundId:data.profile.masterFundId, name:data.profile.masterFundName, baseCurrency:data.profile.baseCurrency, _profile:data.profile, _override:true});
-          toast(data.warning || 'บันทึก Master Fund Override ลง Google Drive แล้ว', data.warning ? 'warning' : 'success'); render();
+          toast('บันทึก Master Fund Override ลง Cloudflare R2 แล้ว', 'success'); render();
         } catch (err) { toast(err.message, 'error'); } finally { button.disabled = false; }
       });
       $('#mfd-delete', area)?.addEventListener('click', () => { delete drafts[selectedIsin]; saveJsonPreference(draftKey, drafts); toast('ลบแบบร่างแล้ว', 'success'); render(); });
@@ -13995,7 +14161,11 @@ const Pages = {
       ? funds.filter(f => State.selectedKeys.has(f.key))
       : funds;
 
-    const allYears = ['2010','2011','2012','2013','2014','2015','2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'];
+    const allYears = [...new Set(headers.flatMap(header => {
+      const text = String(header || '').trim();
+      const match = /^(?:Calendar Year Return|Percent Rank % Calendar Year|Rank % Calendar Year)\s+(\d{4})$/i.exec(text);
+      return match ? [match[1]] : [];
+    }))].sort((a, b) => Number(a) - Number(b));
     const returnCols = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, [
       `Calendar Year Return ${y}`,
     ])]));
@@ -14005,8 +14175,9 @@ const Pages = {
     ])]));
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
     const sortState = State.reportSorts['thai-calendar'];
-    const selectedYears = (State.reportOptions['thai-calendar-years'] || []).filter(y => allYears.includes(y));
-    const visibleYears = selectedYears.length ? selectedYears : ['2015','2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'];
+    const storedThaiYears = State.reportOptions['thai-calendar-years'];
+    const selectedYears = Array.isArray(storedThaiYears) ? storedThaiYears.filter(y => allYears.includes(y)) : allYears;
+    const visibleYears = selectedYears.length ? selectedYears : allYears;
     const { ranks: calendarRankMap, totals: calendarRankTotals } = buildMetricRanks(selected, visibleYears, (fund, year) => get(fund.row, returnCols[year]));
     const getRankNo = (fund, year) => calendarRankMap[fund.code]?.[year] ?? '';
     const leftMode = State.reportOptions['thai-calendar-left'] || 'return';
@@ -14092,11 +14263,11 @@ const Pages = {
     $$('[data-calendar-year]', area).forEach(el => {
       el.addEventListener('click', () => {
         const year = el.dataset.calendarYear;
-        const current = new Set(State.reportOptions['thai-calendar-years'] || []);
+        const current = new Set(visibleYears);
         if (current.has(year)) current.delete(year);
         else current.add(year);
         const next = allYears.filter(y => current.has(y));
-        State.reportOptions['thai-calendar-years'] = next.length ? next : ['2015','2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'];
+        State.reportOptions['thai-calendar-years'] = next.length ? next : allYears;
         Pages.thaiCalendar(area);
       });
     });
@@ -14483,7 +14654,10 @@ const Pages = {
     }
 
     const headers = rawRows[0] || [];
-    const allYears = ['2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'];
+    const allYears = [...new Set(headers.flatMap(header => {
+      const match = /^Return\(Cumulative\)\s+(\d{4})$/i.exec(String(header || '').trim());
+      return match ? [match[1]] : [];
+    }))].sort((a, b) => Number(a) - Number(b));
     const CI = {
       name: findColumnIndex(headers, ['Group/Investment']),
       fundId: findColumnIndex(headers, ['FundId', 'Fund ID']),
@@ -14493,7 +14667,8 @@ const Pages = {
     };
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
     const isinByFundId = buildMasterFundIdIsinFallback(selectRows, thaiQualityRows);
-    const selectedYears = (State.reportOptions['master-calendar-years'] || []).filter(y => allYears.includes(y));
+    const storedMasterYears = State.reportOptions['master-calendar-years'];
+    const selectedYears = Array.isArray(storedMasterYears) ? storedMasterYears.filter(y => allYears.includes(y)) : allYears;
     const visibleYears = selectedYears.length ? selectedYears : allYears;
 
     const masterRows = rawRows.slice(1).map((row, index) => ({
@@ -14628,7 +14803,7 @@ const Pages = {
     $$('[data-master-calendar-year]', area).forEach(el => {
       el.addEventListener('click', () => {
         const year = el.dataset.masterCalendarYear;
-        const current = new Set(State.reportOptions['master-calendar-years'] || []);
+        const current = new Set(visibleYears);
         if (current.has(year)) current.delete(year);
         else current.add(year);
         const next = allYears.filter(y => current.has(y));
@@ -14765,11 +14940,12 @@ const Pages = {
 
     try {
       const quarter = String(State.currentQuarter || CONFIG.PAGES['master-placeholder-4']?.tabName || '').trim();
-      const [rawSecRows, selectRows, thaiQualityRows, masterRawRows] = await Promise.all([
+      const [rawSecRows, selectRows, thaiQualityRows, masterRawRows, reportOverrides] = await Promise.all([
         fetchCachedForTab('master-placeholder-4', quarter),
         fetchCached('select-fund'),
         fetchCachedForTab('thai-annualized', quarter),
         fetchCachedForTab('master-placeholder-2', quarter),
+        loadReportDataOverrides(quarter),
       ]);
       const rawLookup = buildRawSecLookup(rawSecRows);
       const universe = buildSelectedFeeUniverseFromQualityRows(
@@ -14778,7 +14954,7 @@ const Pages = {
         buildMasterRecords(masterRawRows),
         rawLookup,
       );
-      const feeRows = buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true })
+      const feeRows = applyFeeReportDataOverrides(buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true }), reportOverrides)
         .sort((a, b) => compareValues(a.combined, b.combined, 'asc'))
         .map(row => {
           const matchedFund = Object.values(State.selectedFunds).find(f => f.code === row.thaiCode);
@@ -14796,9 +14972,20 @@ const Pages = {
 
       const source = 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID + Data For SEC API';
       const maxCombined = Math.max(...feeRows.map(item => item.combined || 0), 0);
+      const pageKey = 'master-placeholder-4';
+      const isEditing = !!State.reportDataEditModes?.[pageKey];
+      const thaiFeeFields = new Set(['thaiTerText','frontText','backText','initialText','subsequentText','fxHedgingText','sourceLink']);
+      const editButtons = isEditing
+        ? `<button class="btn btn-primary" id="fee-v2-save">บันทึก Override · ${esc(quarter)}</button><button class="btn btn-ghost" id="fee-v2-cancel">ยกเลิก</button>`
+        : '<button class="btn btn-ghost" id="fee-v2-edit">แก้ไขข้อมูลกองทุน</button>';
+      const feeCell = (row, field, className = '') => {
+        if (!isEditing) return `<td class="${className}">${esc(row[field] || '-')}</td>`;
+        const metadata = thaiFeeFields.has(field) ? row.overrideMetadata?.thai : row.overrideMetadata?.master;
+        return `<td class="${className} fee-v2-edit-cell"><input class="fund-input fee-v2-override-input" data-field="${esc(field)}" value="${esc(row[field] || '')}" placeholder="-"><small class="fee-v2-edit-meta">Base: ${esc(String(row.baseValues?.[field] || '-'))}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
+      };
 
       area.innerHTML = `
-        ${pageToolActions('master-placeholder-4', source)}
+        ${pageToolActions(pageKey, source, '', editButtons)}
         <div id="report-card" class="card report-card">
           <div class="fee-v2-table-wrap">
             <table class="fee-v2-table">
@@ -14850,23 +15037,63 @@ const Pages = {
                         ${row.mappingStatus === 'master-not-found' ? '<small class="fee-v2-mapping-warning">ไม่พบ FundId ใน AVP Master Fund ID</small>' : ''}
                       </td>
                       <td class="is-thai"${row.highlightColor ? ` style="background:${row.highlightColor}"` : ''}>${esc(row.thaiCode)}</td>
-                      <td class="fee-v2-ter-cell fee-v2-ter-cell-1">${esc(row.masterTerText || '-')}</td>
-                      <td class="fee-v2-ter-cell fee-v2-ter-cell-2">${esc(row.thaiTerText || '-')}</td>
+                      ${feeCell(row, 'masterTerText', 'fee-v2-ter-cell fee-v2-ter-cell-1')}
+                      ${feeCell(row, 'thaiTerText', 'fee-v2-ter-cell fee-v2-ter-cell-2')}
                       <td class="fee-v2-ter-cell fee-v2-ter-cell-3 is-combined"${combinedStyle.bg ? ` style="background:${combinedStyle.bg};color:${combinedStyle.color}"` : ''}>${esc(row.combinedText || '-')}</td>
                       <td class="fee-v2-td-spacer"></td>
-                      <td>${esc(row.frontText || '-')}</td>
-                      <td>${esc(row.backText || '-')}</td>
-                      <td>${esc(row.initialText || '-')}</td>
-                      <td>${esc(row.subsequentText || '-')}</td>
-                      <td>${esc(row.fxHedgingText || '-')}</td>
-                      <td>${esc(row.depositCurrencyText || '-')}</td>
-                      <td>${row.sourceLink ? `<a class="fee-v2-source-link" href="${esc(buildFactsheetViewerUrl(row.sourceLink))}" target="_blank" rel="noopener noreferrer" aria-label="เปิด factsheet ของ ${esc(row.thaiCode)}">LINK</a>` : '<span class="fee-v2-muted">-</span>'}</td>
+                      ${feeCell(row, 'frontText')}
+                      ${feeCell(row, 'backText')}
+                      ${feeCell(row, 'initialText')}
+                      ${feeCell(row, 'subsequentText')}
+                      ${feeCell(row, 'fxHedgingText')}
+                      ${feeCell(row, 'depositCurrencyText')}
+                      ${isEditing ? feeCell(row, 'sourceLink') : `<td>${row.sourceLink ? `<a class="fee-v2-source-link" href="${esc(buildFactsheetViewerUrl(row.sourceLink))}" target="_blank" rel="noopener noreferrer" aria-label="เปิด factsheet ของ ${esc(row.thaiCode)}">LINK</a>` : '<span class="fee-v2-muted">-</span>'}</td>`}
                     </tr>`;
                 }).join('')}
               </tbody>
             </table>
           </div>
-        </div>`;
+        </div>
+        <style>.fee-v2-table td.fee-v2-edit-cell{padding:4px;background:#fff8df;overflow:visible}.fee-v2-override-input{width:100%;min-width:78px;text-align:center}.fee-v2-edit-meta{display:block;margin-top:3px;color:#6b7280;font-size:.64rem;line-height:1.2;white-space:normal}</style>`;
+
+      $('#fee-v2-edit', area)?.addEventListener('click', () => {
+        State.reportDataEditModes[pageKey] = true;
+        Pages.masterFeesV2(area);
+      });
+      $('#fee-v2-cancel', area)?.addEventListener('click', () => {
+        State.reportDataEditModes[pageKey] = false;
+        Pages.masterFeesV2(area);
+      });
+      $('#fee-v2-save', area)?.addEventListener('click', async () => {
+        const changes = [];
+        $$('.fee-v2-table tbody tr', area).forEach((tr, index) => {
+          const row = feeRows[index];
+          const thaiValues = {};
+          const masterValues = {};
+          $$('.fee-v2-override-input', tr).forEach(input => {
+            const field = input.dataset.field;
+            const value = input.value.trim();
+            if (value === String(row.baseValues?.[field] || '').trim()) return;
+            (thaiFeeFields.has(field) ? thaiValues : masterValues)[field] = value;
+          });
+          if (Object.keys(thaiValues).length || row.overrideMetadata?.thai) changes.push({entityType:'thaiFunds', key:row.thaiKey, section:'fees', values:thaiValues});
+          if (row.masterKey && (Object.keys(masterValues).length || row.overrideMetadata?.master)) changes.push({entityType:'masterFunds', key:row.masterKey, section:'fees', values:masterValues});
+        });
+        if (!changes.length) {
+          toast('ไม่มีข้อมูลที่ต่างจาก Base และไม่มี Override ที่ต้องคืนค่า', 'info');
+          State.reportDataEditModes[pageKey] = false;
+          Pages.masterFeesV2(area);
+          return;
+        }
+        try {
+          await saveReportDataOverrideChanges(quarter, changes);
+          State.reportDataEditModes[pageKey] = false;
+          toast(`บันทึกค่าธรรมเนียม Override · ${quarter}`, 'success');
+          Pages.masterFeesV2(area);
+        } catch (error) {
+          toast(error.message || 'บันทึก Override ไม่สำเร็จ', 'error');
+        }
+      });
 
       App._currentExport = null;
       App._currentTableExport = () => buildFeeV2ExportPayload(
@@ -15009,7 +15236,11 @@ const Pages = {
     ];
     const CALENDAR_METRICS   = ANNUALIZED_METRICS.filter(m => !m.key.startsWith('sharpe'));
     const ANNUALIZED_PERIODS = ['3M','6M','YTD','1Y','3Y','5Y','10Y'];
-    const CALENDAR_YEARS     = ['2016','2017','2018','2019','2020','2021','2022','2023','2024','2025'];
+    const CALENDAR_YEARS = [...new Set(headers.flatMap(header => {
+      const text = String(header || '').trim();
+      const match = /^(?:Return\(Cumulative\)|Std Dev\(Annualized\)|Information Ratio.*|Sortino Ratio.*|Treynor Ratio.*|Max Drawdown)\s+(\d{4})$/i.exec(text);
+      return match ? [match[1]] : [];
+    }))].sort((a, b) => Number(a) - Number(b));
     const DOT_COLORS = [
       '#1a3c6e','#5aa2de','#e9b48c','#e3a72f','#8c3fe3',
       '#2f99bf','#7dc182','#dd6b20','#d946ef','#14b8a6',
@@ -16040,9 +16271,10 @@ const Pages = {
     let editableColumns = [];
     try {
       await ensureSelectedFundsCatalog();
-      const [thaiQualityRows, secRows] = await Promise.all([
+      const [thaiQualityRows, secRows, reportOverrides] = await Promise.all([
         fetchCached('thai-annualized-v2'),
         fetchCached('master-placeholder-4'),
+        loadReportDataOverrides(State.currentQuarter),
       ]);
 
       const buildThaiQualityLookup = (rawRows) => {
@@ -16093,6 +16325,7 @@ const Pages = {
             const quality = thaiQualityLookup.get(code) || {};
             const sec = secLookup.get(code) || {};
             return {
+              code,
               fundName: fund.code || fund.name || '-',
               highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
               fundSize: formatFundSizeMillion(quality.fundSize),
@@ -16118,6 +16351,16 @@ const Pages = {
             ytm: '',
             ytmValue: NaN,
           }));
+      rows = rows.map(row => {
+        if (!row.code) return row;
+        const baseValues = Object.fromEntries(['fundSize','fundSizeDate','recoveringPeriod','averageDuration','turnoverRatio','ytm'].map(key => [key, row[key] || '']));
+        const section = reportDataOverrideSection(reportOverrides, 'thaiFunds', row.code, 'fixedIncomeSummary');
+        const merged = { ...row, ...(section?.values || {}) };
+        merged.fundSizeValue = parseNum(merged.fundSize);
+        merged.turnoverValue = parseNum(merged.turnoverRatio);
+        merged.ytmValue = parseNum(merged.ytm);
+        return { ...merged, baseValues, overrideMetadata: section?.metadata || null };
+      });
     } catch (e) {
       setError(area, e.message, pageKey);
       return;
@@ -16173,8 +16416,16 @@ const Pages = {
     const sortHeader = (key, labelHtml) =>
       `<th class="of2-sort ${sortState.key === key ? 'is-active' : ''}" data-of2-sort="${esc(key)}">${renderSortLabel(labelHtml, sortState.key === key, sortState.dir, false)}</th>`;
 
+    const editing = Boolean(State.reportDataEditModes[pageKey]);
+    const editActions = editing
+      ? '<button class="btn btn-primary" id="of2-save">บันทึก Override</button><button class="btn btn-ghost" id="of2-cancel">ยกเลิก</button>'
+      : '<button class="btn btn-ghost" id="of2-edit">แก้ไขข้อมูลกองทุน</button>';
+    const cell = (row, field, value, cls = '') => editing
+      ? `<td class="${cls} report-override-cell"><input class="fund-input of2-override-input" data-field="${field}" value="${esc(value || '')}"><small>Base: ${esc(String(row.baseValues?.[field] || '-'))}${row.overrideMetadata?.updatedAt ? ` · แก้ ${esc(new Date(row.overrideMetadata.updatedAt).toLocaleString('th-TH'))}` : ''}</small></td>`
+      : `<td class="${cls}">${esc(value || '-')}</td>`;
     area.innerHTML = `
       ${pageToolActions(pageKey, source)}
+      <div class="report-edit-actions">${editActions}</div>
       <div class="card report-card" id="report-card">
         <div class="of2-table-wrap">
           <table class="of2-table">
@@ -16207,12 +16458,12 @@ const Pages = {
                 return `
                 <tr>
                   <td class="of2-name" style="${nameStyle}">${esc(row.fundName)}</td>
-                  <td class="of2-size ${row.fundSize ? '' : 'of2-placeholder'}" style="${fundSizeHeatStyle(row.fundSizeValue)}">${esc(row.fundSize || '-')}</td>
-                  <td class="${row.fundSizeDate ? '' : 'of2-placeholder'}">${esc(row.fundSizeDate || '-')}</td>
-                  <td class="${row.recoveringPeriod ? '' : 'of2-placeholder'}">${esc(row.recoveringPeriod || '-')}</td>
-                  <td class="${row.averageDuration ? '' : 'of2-placeholder'}">${esc(row.averageDuration || '-')}</td>
-                  <td class="${row.turnoverRatio ? '' : 'of2-placeholder'}">${esc(row.turnoverRatio || '-')}</td>
-                  <td class="${row.ytm ? '' : 'of2-placeholder'}">${esc(row.ytm || '-')}</td>
+                  ${cell(row,'fundSize',row.fundSize,`of2-size ${row.fundSize ? '' : 'of2-placeholder'}`)}
+                  ${cell(row,'fundSizeDate',row.fundSizeDate,row.fundSizeDate ? '' : 'of2-placeholder')}
+                  ${cell(row,'recoveringPeriod',row.recoveringPeriod,row.recoveringPeriod ? '' : 'of2-placeholder')}
+                  ${cell(row,'averageDuration',row.averageDuration,row.averageDuration ? '' : 'of2-placeholder')}
+                  ${cell(row,'turnoverRatio',row.turnoverRatio,row.turnoverRatio ? '' : 'of2-placeholder')}
+                  ${cell(row,'ytm',row.ytm,row.ytm ? '' : 'of2-placeholder')}
                 </tr>
               `;}).join('')}
             </tbody>
@@ -16236,6 +16487,20 @@ const Pages = {
         .of2-table td.of2-placeholder{color:#8b98aa;font-weight:700}
         @media(max-width:760px){.of2-table{min-width:980px}.of2-table th{font-size:.74rem;height:50px}.of2-table td{font-size:.78rem;height:40px}}
       </style>`;
+
+    $('#of2-edit', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = true; Pages.otherFactorsFixedIncomeTable(area); });
+    $('#of2-cancel', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = false; Pages.otherFactorsFixedIncomeTable(area); });
+    $('#of2-save', area)?.addEventListener('click', async () => {
+      const changes = sortedRows.map((row, index) => {
+        const values = {};
+        $$('.of2-override-input', area).slice(index * 6, index * 6 + 6).forEach(input => {
+          if (String(input.value).trim() !== String(row.baseValues?.[input.dataset.field] || '').trim()) values[input.dataset.field] = String(input.value).trim();
+        });
+        return (Object.keys(values).length || row.overrideMetadata) ? { entityType:'thaiFunds', key:row.code, section:'fixedIncomeSummary', values } : null;
+      }).filter(Boolean);
+      try { await saveReportDataOverrideChanges(State.currentQuarter, changes); State.reportDataEditModes[pageKey] = false; toast('บันทึก Report Data Override แล้ว','success'); Pages.otherFactorsFixedIncomeTable(area); }
+      catch (error) { toast(error.message || 'บันทึกไม่สำเร็จ','error'); }
+    });
 
     $$('.of2-sort', area).forEach(el => {
       el.addEventListener('click', () => {
@@ -16407,7 +16672,7 @@ const Pages = {
         const override = State.fixedIncomeFactorsOverrides?.items?.[fund.key] || State.fixedIncomeFactorsOverrides?.items?.[String(fund.code || '').trim().toUpperCase()];
         const baseValues = Object.fromEntries(editableColumns.map(key => [key, row[key] || '']));
         if (!override) return { ...row, baseValues };
-        const next = { ...row, baseValues, isOverride: true };
+        const next = { ...row, baseValues, isOverride: true, overrideMetadata:override._metadata || null };
         editableColumns.forEach(key => {
           if (Object.prototype.hasOwnProperty.call(override, key)) next[key] = String(override[key] ?? '').trim();
         });
@@ -16496,6 +16761,7 @@ const Pages = {
       return `
         <td class="of3-edit-cell">
           <input class="fund-input fund-input-editable of3-override-input" data-key="${esc(key)}" value="${esc(value)}" placeholder="-">
+          <small class="of3-edit-meta">Base: ${esc(String(row?.baseValues?.[key] || '-'))}${row?.overrideMetadata?.updatedAt ? ` · แก้ ${esc(new Date(row.overrideMetadata.updatedAt).toLocaleString('th-TH'))}` : ''}${row?.overrideMetadata?.updatedBy ? ` · ${esc(row.overrideMetadata.updatedBy)}` : ''}</small>
         </td>`;
     };
 
@@ -16583,6 +16849,7 @@ const Pages = {
         .of3-table td.of3-placeholder{color:#8b98aa;font-weight:700}
         .of3-table td.of3-edit-cell{padding:3px;background:#fff8df}
         .of3-table .of3-override-input{height:28px;min-width:0;width:100%;padding:3px 5px;text-align:center;font-size:.78rem}
+        .of3-table .of3-edit-meta{display:block;margin-top:3px;color:#6b7280;font-size:.62rem;line-height:1.2;white-space:normal}
         @media(max-width:760px){.of3-table{min-width:1120px}.of3-table th{font-size:.7rem}.of3-table td{font-size:.76rem}}
       </style>`;
 
@@ -16665,11 +16932,12 @@ const Pages = {
 
     let rows = [];
     try {
-      const [selectRows, qualityRows, masterRows, secRows] = await Promise.all([
+      const [selectRows, qualityRows, masterRows, secRows, reportOverrides] = await Promise.all([
         fetchCached('select-fund'),
         fetchCached('thai-annualized-v2'),
         fetchCached('master-annualized-v2'),
         fetchCached('master-placeholder-4'),
+        loadReportDataOverrides(State.currentQuarter),
       ]);
       const catalog = applyFundOverrides(buildSelectedFundsCatalog(selectRows));
       const previousSelectedFunds = State.selectedFunds || {};
@@ -16729,8 +16997,10 @@ const Pages = {
         const sec = secByCode.get(code) || {};
         const preferMaster = (masterIndex, qualityIndex) => two(get(master, masterIndex)) || two(get(quality, qualityIndex));
         const size = parseNum(get(quality, qi.fundSize));
-        return {
+        const baseRow = {
           key: fund.key,
+          code,
+          masterKey:String(fund.masterId || '').trim().toUpperCase(),
           masterName: get(master, mi.name) || fund.masterName || '-',
           thaiFund: fund.code || fund.name || '-',
           highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
@@ -16748,6 +17018,19 @@ const Pages = {
           initial: formatMinimumPurchaseDisplay(sec.initial),
           subsequent: formatMinimumPurchaseDisplay(sec.subsequent),
         };
+        const thaiSection = reportDataOverrideSection(reportOverrides, 'thaiFunds', code, 'equityOverview');
+        const masterSection = reportDataOverrideSection(reportOverrides, 'masterFunds', baseRow.masterKey, 'equityOverview');
+        const thaiFields = ['cyclical','defensive','sensitive','fundSize','sourceDate','initial','subsequent'];
+        const masterFields = ['holdings','top10','maxDd3y','sd3y','sd5y'];
+        const next = {...baseRow, baseValues:{}, overrideMetadata:{thai:thaiSection || null, master:masterSection || null}};
+        [...thaiFields, ...masterFields].forEach(field => { next.baseValues[field] = baseRow[field] || ''; });
+        thaiFields.forEach(field => {
+          if (Object.prototype.hasOwnProperty.call(thaiSection?.values || {}, field)) next[field] = String(thaiSection.values[field] ?? '').trim();
+        });
+        masterFields.forEach(field => {
+          if (Object.prototype.hasOwnProperty.call(masterSection?.values || {}, field)) next[field] = String(masterSection.values[field] ?? '').trim();
+        });
+        return next;
       });
     } catch (e) {
       setError(area, e.message, pageKey);
@@ -16764,6 +17047,15 @@ const Pages = {
     const maxOf = key => Math.max(0, ...rows.map(row => parseNum(row[key])).filter(Number.isFinite));
     const holdingsMax = maxOf('holdings');
     const fundSizeMax = maxOf('fundSize');
+    const numericRange = (key, transform = value => value) => {
+      const values = rows.map(row => parseNum(row[key])).filter(Number.isFinite).map(transform);
+      return values.length ? { min:Math.min(...values), max:Math.max(...values) } : { min:NaN, max:NaN };
+    };
+    const riskRanges = {
+      dd:numericRange('maxDd3y', value => Math.abs(value)),
+      sd3y:numericRange('sd3y'),
+      sd5y:numericRange('sd5y'),
+    };
     const header = (key, html, attrs = '') => `<th ${attrs} class="of4-sort ${sortState.key === key ? 'is-active' : ''}" data-of4-sort="${key}">${renderSortLabel(html, sortState.key === key, sortState.dir, false)}</th>`;
     const bar = (value, color, maximum = 100) => {
       const n = parseNum(value);
@@ -16771,16 +17063,38 @@ const Pages = {
       const pct = maximum > 0 ? (n / maximum) * 100 : 0;
       return `background-image:linear-gradient(90deg,${color} 0,${color} ${Math.max(0, Math.min(100, pct))}%,transparent ${Math.max(0, Math.min(100, pct))}%);`;
     };
+    const mixHex = (from, to, ratio) => {
+      const parse = color => [1,3,5].map(index => parseInt(color.slice(index, index + 2), 16));
+      const a = parse(from), b = parse(to);
+      return `#${a.map((value, index) => Math.round(value + ((b[index] - value) * ratio)).toString(16).padStart(2, '0')).join('')}`;
+    };
     const risk = (value, kind) => {
       const n = parseNum(value);
-      if (Number.isNaN(n)) return '';
-      if (kind === 'dd') return `background:${n <= -15 ? '#f47f88' : n <= -10 ? '#f7b0b6' : '#f9d4d7'};`;
-      return `background:${n <= 9 ? '#61be7b' : n <= 12 ? '#8dd0a2' : n <= 15 ? '#b7dfc4' : '#e4f2e8'};`;
+      if (!Number.isFinite(n)) return 'background:#f1f5f9;color:#94a3b8;';
+      const range = riskRanges[kind];
+      const scaleValue = kind === 'dd' ? Math.abs(n) : n;
+      const ratio = Number.isFinite(range?.min) && Number.isFinite(range?.max) && range.max > range.min
+        ? Math.max(0, Math.min(1, (scaleValue - range.min) / (range.max - range.min)))
+        : 0.5;
+      const color = kind === 'dd'
+        ? mixHex('#fee2e2', '#f87171', ratio)
+        : mixHex('#dcfce7', '#86d39d', ratio);
+      return `background:${color};`;
     };
-    const cell = (row, key, style = '') => `<td class="${row[key] ? '' : 'of4-empty'}" style="${style}">${esc(row[key] || '-')}</td>`;
+    const isEditing = !!State.reportDataEditModes?.[pageKey];
+    const thaiFields = new Set(['cyclical','defensive','sensitive','fundSize','sourceDate','initial','subsequent']);
+    const editableFields = ['cyclical','defensive','sensitive','holdings','top10','fundSize','maxDd3y','sd3y','sd5y','sourceDate','initial','subsequent'];
+    const editButtons = isEditing
+      ? '<button class="btn btn-primary" id="of4-save">บันทึก Override</button><button class="btn btn-ghost" id="of4-cancel">ยกเลิก</button>'
+      : '<button class="btn btn-ghost" id="of4-edit">แก้ไขข้อมูลกองทุน</button>';
+    const cell = (row, key, style = '') => {
+      if (!isEditing || !editableFields.includes(key)) return `<td class="${row[key] ? '' : 'of4-empty'}" style="${style}">${esc(row[key] || '-')}</td>`;
+      const metadata = thaiFields.has(key) ? row.overrideMetadata?.thai : row.overrideMetadata?.master;
+      return `<td class="of4-edit-cell"><input class="fund-input of4-override-input" data-key="${esc(key)}" value="${esc(row[key] || '')}" placeholder="-"><small class="of4-edit-meta">Base: ${esc(String(row.baseValues?.[key] || '-'))}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
+    };
 
     area.innerHTML = `
-      ${pageToolActions(pageKey, source)}
+      ${pageToolActions(pageKey, source, '', editButtons)}
       <div class="card report-card" id="report-card">
         <div class="of4-wrap"><table class="of4-table">
           <colgroup><col class="master"><col class="thai"><col span="3" class="sector"><col class="holdings"><col class="top10"><col class="size"><col span="3" class="risk"><col class="date"><col span="2" class="minimum"></colgroup>
@@ -16812,7 +17126,7 @@ const Pages = {
               ${cell(row, 'holdings', bar(row.holdings, 'rgba(91,197,125,.58)', holdingsMax))}
               ${cell(row, 'top10', bar(row.top10, 'rgba(91,197,125,.58)'))}
               ${cell(row, 'fundSize', bar(row.fundSize, 'rgba(106,158,214,.48)', fundSizeMax))}
-              ${cell(row, 'maxDd3y', risk(row.maxDd3y, 'dd'))}${cell(row, 'sd3y', risk(row.sd3y, 'sd'))}${cell(row, 'sd5y', risk(row.sd5y, 'sd'))}
+              ${cell(row, 'maxDd3y', risk(row.maxDd3y, 'dd'))}${cell(row, 'sd3y', risk(row.sd3y, 'sd3y'))}${cell(row, 'sd5y', risk(row.sd5y, 'sd5y'))}
               ${cell(row, 'sourceDate')}${cell(row, 'initial')}${cell(row, 'subsequent')}
             </tr>`;
           }).join('')}</tbody>
@@ -16820,7 +17134,47 @@ const Pages = {
       </div>
       <style>
         .of4-wrap{overflow:auto;background:#fff;padding:12px}.of4-table{width:100%;min-width:1780px;border-collapse:collapse;table-layout:fixed;font-family:inherit;color:#334155;font-size:.98rem}.of4-table col.master{width:290px}.of4-table col.thai{width:170px}.of4-table col.sector{width:96px}.of4-table col.holdings{width:110px}.of4-table col.top10{width:110px}.of4-table col.size{width:92px}.of4-table col.risk{width:92px}.of4-table col.date{width:115px}.of4-table col.minimum{width:92px}.of4-table th{padding:10px 9px;background:#1f3f74;color:#fff;border:1px solid #e4e9f2;font-size:.99rem;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.of4-table th span{display:block}.of4-table th.of4-sort{cursor:pointer}.of4-table th.of4-sort:hover{background:#294d82}.of4-table th.of4-sort.is-active{background:#f2c75b;color:#443200}.of4-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.of4-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;font-size:.98rem;font-weight:400;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.of4-table tbody tr:nth-child(even) td{background-color:#f6f8fb}.of4-table td.of4-name,.of4-table td.of4-thai{text-align:left}.of4-table td.of4-name{font-weight:400}.of4-table td.of4-thai{font-weight:700}.of4-table td.of4-empty{color:#94a3b8}@media(max-width:760px){.of4-table{min-width:1650px}.of4-table th,.of4-table td{font-size:.9rem}}
+        .of4-table td.of4-edit-cell{padding:4px;background:#fff8df;overflow:visible}.of4-override-input{width:100%;min-width:72px;text-align:center}.of4-edit-meta{display:block;margin-top:3px;color:#6b7280;font-size:.68rem;line-height:1.2;white-space:normal}
       </style>`;
+
+    $('#of4-edit', area)?.addEventListener('click', () => {
+      State.reportDataEditModes[pageKey] = true;
+      Pages.otherFactorsEquityOverviewTable(area);
+    });
+    $('#of4-cancel', area)?.addEventListener('click', () => {
+      State.reportDataEditModes[pageKey] = false;
+      Pages.otherFactorsEquityOverviewTable(area);
+    });
+    $('#of4-save', area)?.addEventListener('click', async () => {
+      const changes = [];
+      $$('.of4-table tbody tr', area).forEach((tr, index) => {
+        const row = sortedRows[index];
+        const thaiValues = {};
+        const masterValues = {};
+        $$('.of4-override-input', tr).forEach(input => {
+          const field = input.dataset.key;
+          const value = input.value.trim();
+          if (value === String(row.baseValues?.[field] || '').trim()) return;
+          (thaiFields.has(field) ? thaiValues : masterValues)[field] = value;
+        });
+        if (Object.keys(thaiValues).length || row.overrideMetadata?.thai) changes.push({entityType:'thaiFunds', key:row.code, section:'equityOverview', values:thaiValues});
+        if (row.masterKey && (Object.keys(masterValues).length || row.overrideMetadata?.master)) changes.push({entityType:'masterFunds', key:row.masterKey, section:'equityOverview', values:masterValues});
+      });
+      if (!changes.length) {
+        toast('ไม่มีข้อมูลที่ต่างจาก Base และไม่มี Override ที่ต้องคืนค่า', 'info');
+        State.reportDataEditModes[pageKey] = false;
+        Pages.otherFactorsEquityOverviewTable(area);
+        return;
+      }
+      try {
+        await saveReportDataOverrideChanges(State.currentQuarter, changes);
+        State.reportDataEditModes[pageKey] = false;
+        toast(`บันทึก Report Data Override · ${State.currentQuarter}`, 'success');
+        Pages.otherFactorsEquityOverviewTable(area);
+      } catch (error) {
+        toast(error.message || 'บันทึก Override ไม่สำเร็จ', 'error');
+      }
+    });
 
     $$('.of4-sort', area).forEach(el => el.addEventListener('click', () => {
       toggleNamedSort(sortState, el.dataset.of4Sort);
@@ -16854,9 +17208,10 @@ const Pages = {
 
     let rows = [];
     try {
-      const [selectRows, qualityRows] = await Promise.all([
+      const [selectRows, qualityRows, reportOverrides] = await Promise.all([
         fetchCached('select-fund'),
         fetchCached('thai-annualized-v2'),
+        loadReportDataOverrides(State.currentQuarter),
       ]);
       const catalog = applyFundOverrides(buildSelectedFundsCatalog(selectRows));
       const catalogByKey = Object.fromEntries(catalog.map(fund => [fund.key, fund]));
@@ -16880,11 +17235,17 @@ const Pages = {
           const raw = qualityByCode.get(String(fund.code || '').trim().toUpperCase()) || [];
           return {
             key: fund.key,
+            code: String(fund.code || '').trim().toUpperCase(),
             fundName: fund.code || fund.name || '-',
             highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
             ...Object.fromEntries(sectors.map(sector => [sector.key, format(get(raw, sectorIndexes[sector.key]))])),
           };
         });
+      rows = rows.map(row => {
+        const baseValues = Object.fromEntries(sectors.map(sector => [sector.key, row[sector.key] || '']));
+        const section = reportDataOverrideSection(reportOverrides, 'thaiFunds', row.code, 'equitySectors');
+        return { ...row, ...(section?.values || {}), baseValues, overrideValues: { ...(section?.values || {}) }, overrideMetadata: section?.metadata || null };
+      });
     } catch (e) {
       setError(area, e.message, pageKey);
       return;
@@ -16904,26 +17265,71 @@ const Pages = {
       return `background-image:linear-gradient(90deg,rgba(255,183,47,.82) 0,rgba(255,183,47,.82) ${pct}%,transparent ${pct}%);`;
     };
 
+    if (!Array.isArray(State.equitySectorVisibleColumns)) State.equitySectorVisibleColumns = sectors.map(sector => sector.key);
+    const visibleKeys = new Set(State.equitySectorVisibleColumns);
+    const visibleSectors = sectors.filter(sector => visibleKeys.has(sector.key));
+
+    const editing = Boolean(State.reportDataEditModes[pageKey]);
+    const editActions = editing ? '<button class="btn btn-primary" id="of5-save">บันทึก Override</button><button class="btn btn-ghost" id="of5-cancel">ยกเลิก</button>' : '<button class="btn btn-ghost" id="of5-edit">แก้ไขข้อมูลกองทุน</button>';
     area.innerHTML = `
       ${pageToolActions(pageKey, source)}
+      <div class="metric-toggle-group of5-column-controls">
+        <span class="metric-toggle-label">อุตสาหกรรมที่แสดง</span>
+        <div class="view-toggle of5-column-toggle-group" role="group" aria-label="เลือกอุตสาหกรรมที่แสดง">
+          ${sectors.map(sector => `<button class="btn btn-ghost view-toggle-btn of5-column-toggle ${visibleKeys.has(sector.key) ? 'is-active' : ''}" data-sector="${sector.key}">${esc(sector.label)}</button>`).join('')}
+        </div>
+        <button class="btn btn-ghost of5-column-all">${visibleSectors.length === sectors.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
+      </div>
+      <div class="report-edit-actions">${editActions}</div>
       <div class="card report-card" id="report-card">
         <div class="of5-wrap"><table class="of5-table">
-          <colgroup><col class="fund"><col span="11" class="sector"></colgroup>
+          <colgroup><col class="fund"><col span="${visibleSectors.length}" class="sector"></colgroup>
           <thead><tr>
             ${header('fundName', 'ชื่อกอง')}
-            ${sectors.map(sector => header(sector.key, sector.label)).join('')}
+            ${visibleSectors.map(sector => header(sector.key, sector.label)).join('')}
           </tr></thead>
           <tbody>${sortedRows.map((row, index) => {
             return `<tr>
               <td class="of5-name"${row.highlightColor ? ` style="background-color:${esc(row.highlightColor)}"` : ''}>${esc(row.fundName)}</td>
-              ${sectors.map(sector => `<td class="${row[sector.key] ? '' : 'of5-empty'}" style="${barStyle(row[sector.key])}">${esc(row[sector.key] || '-')}</td>`).join('')}
+              ${visibleSectors.map(sector => editing
+                ? `<td class="report-override-cell"><input class="fund-input of5-override-input" data-field="${sector.key}" value="${esc(row[sector.key] || '')}"><small>Base: ${esc(String(row.baseValues?.[sector.key] || '-'))}${row.overrideMetadata?.updatedAt ? ` · แก้ ${esc(new Date(row.overrideMetadata.updatedAt).toLocaleString('th-TH'))}` : ''}</small></td>`
+                : `<td class="${row[sector.key] ? '' : 'of5-empty'}" style="${barStyle(row[sector.key])}">${esc(row[sector.key] || '-')}</td>`).join('')}
             </tr>`;
           }).join('')}</tbody>
         </table></div>
       </div>
       <style>
-        .of5-wrap{overflow:auto;background:#fff;padding:12px}.of5-table{width:100%;min-width:1660px;border-collapse:collapse;table-layout:fixed;font-family:inherit;color:#334155;font-size:.98rem}.of5-table col.fund{width:190px}.of5-table col.sector{width:133px}.of5-table th{padding:11px 9px;background:#1f3f74;color:#fff;border:1px solid #e4e9f2;font-size:.99rem;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.of5-table th.of5-sort{cursor:pointer}.of5-table th.of5-sort:hover{background:#294d82}.of5-table th.of5-sort.is-active{background:#f2c75b;color:#443200}.of5-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.of5-table td{padding:11px 12px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;font-size:.98rem;font-weight:400;line-height:1.35;white-space:nowrap}.of5-table tbody tr:nth-child(even) td{background-color:#f6f8fb}.of5-table td.of5-name{text-align:left;font-weight:700;color:#334155}.of5-table td.of5-empty{color:#94a3b8}@media(max-width:760px){.of5-table{min-width:1540px}.of5-table th,.of5-table td{font-size:.9rem}}
+        .of5-column-controls{margin:10px 0 4px;align-items:flex-start}.of5-column-toggle-group{display:flex;flex-wrap:wrap;max-width:100%}.of5-column-toggle-group .view-toggle-btn{font-size:.72rem;padding:7px 9px}.of5-column-all{font-size:.74rem;white-space:nowrap}.of5-wrap{overflow:auto;background:#fff;padding:12px}.of5-table{width:100%;min-width:${Math.max(360,190+(visibleSectors.length*133))}px;border-collapse:collapse;table-layout:fixed;font-family:inherit;color:#334155;font-size:.98rem}.of5-table col.fund{width:190px}.of5-table col.sector{width:133px}.of5-table th{padding:11px 9px;background:#1f3f74;color:#fff;border:1px solid #e4e9f2;font-size:.99rem;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.of5-table th.of5-sort{cursor:pointer}.of5-table th.of5-sort:hover{background:#294d82}.of5-table th.of5-sort.is-active{background:#f2c75b;color:#443200}.of5-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.of5-table td{padding:11px 12px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;font-size:.98rem;font-weight:400;line-height:1.35;white-space:nowrap}.of5-table tbody tr:nth-child(even) td{background-color:#f6f8fb}.of5-table td.of5-name{text-align:left;font-weight:700;color:#334155}.of5-table td.of5-empty{color:#94a3b8}@media(max-width:760px){.of5-table th,.of5-table td{font-size:.9rem}}
       </style>`;
+
+    $$('.of5-column-toggle[data-sector]', area).forEach(button => button.addEventListener('click', () => {
+      const key = button.dataset.sector;
+      const next = new Set(State.equitySectorVisibleColumns || []);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      State.equitySectorVisibleColumns = sectors.map(sector => sector.key).filter(sectorKey => next.has(sectorKey));
+      Pages.equitySectorAllocationTable(area);
+    }));
+    $('.of5-column-all', area)?.addEventListener('click', () => {
+      State.equitySectorVisibleColumns = visibleSectors.length === sectors.length ? [] : sectors.map(sector => sector.key);
+      Pages.equitySectorAllocationTable(area);
+    });
+
+    $('#of5-edit', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = true; Pages.equitySectorAllocationTable(area); });
+    $('#of5-cancel', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = false; Pages.equitySectorAllocationTable(area); });
+    $('#of5-save', area)?.addEventListener('click', async () => {
+      const inputs = $$('.of5-override-input', area);
+      const changes = sortedRows.map((row, index) => {
+        const values = { ...(row.overrideValues || {}) };
+        inputs.slice(index * visibleSectors.length, (index + 1) * visibleSectors.length).forEach(input => {
+          const value = String(input.value).trim();
+          if (value !== String(row.baseValues?.[input.dataset.field] || '').trim()) values[input.dataset.field] = value;
+          else delete values[input.dataset.field];
+        });
+        return (Object.keys(values).length || row.overrideMetadata) ? {entityType:'thaiFunds',key:row.code,section:'equitySectors',values} : null;
+      }).filter(Boolean);
+      try { await saveReportDataOverrideChanges(State.currentQuarter, changes); State.reportDataEditModes[pageKey] = false; toast('บันทึก Report Data Override แล้ว','success'); Pages.equitySectorAllocationTable(area); }
+      catch (error) { toast(error.message || 'บันทึกไม่สำเร็จ','error'); }
+    });
 
     $$('.of5-sort', area).forEach(el => el.addEventListener('click', () => {
       toggleNamedSort(sortState, el.dataset.of5Sort);
@@ -16944,14 +17350,15 @@ const Pages = {
   async masterFundCalendarMaxDrawdownTable(area) {
     const pageKey = 'master-placeholder-14';
     const source = 'AVP Master Fund ID';
-    const years = Array.from({ length: 10 }, (_, index) => 2016 + index);
+    let years = [];
     setLoading(area, 'กำลังโหลด Max Drawdown ของ Master Fund...');
 
     let rows = [];
     try {
-      const [selectRows, masterRows] = await Promise.all([
+      const [selectRows, masterRows, reportOverrides] = await Promise.all([
         fetchCached('select-fund'),
         fetchCached('master-annualized-v2'),
+        loadReportDataOverrides(State.currentQuarter),
       ]);
       const catalog = applyFundOverrides(buildSelectedFundsCatalog(selectRows));
       const catalogByKey = Object.fromEntries(catalog.map(fund => [fund.key, fund]));
@@ -16961,6 +17368,15 @@ const Pages = {
         : catalogByKey;
 
       const headers = masterRows[0] || [];
+      const baseYears = headers.flatMap(header => {
+        const match = /^Max Drawdown\s+(\d{4})$/i.exec(String(header || '').trim());
+        return match ? [Number(match[1])] : [];
+      });
+      const overrideYears = Object.values(reportOverrides?.masterFunds || {}).flatMap(entity => {
+        const values = entity?.sections?.maxDrawdownByYear?.values || {};
+        return Object.keys(values).filter(key => /^\d{4}$/.test(key)).map(Number);
+      });
+      years = [...new Set([...baseYears, ...overrideYears])].filter(Number.isFinite).sort((a, b) => a - b);
       const ci = {
         name: findColumnIndex(headers, ['Group/Investment']),
         isin: findColumnIndex(headers, ['ISIN']),
@@ -16987,12 +17403,18 @@ const Pages = {
           const master = masterById.get(String(fund.masterId || '').trim().toUpperCase())?.row || [];
           return {
             key: fund.key,
+            masterKey: String(fund.masterId || '').trim().toUpperCase(),
             masterName: get(master, ci.name) || fund.masterName || '-',
             thaiFund: fund.code || fund.name || '-',
             highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
             ...Object.fromEntries(years.map(year => [year, format(get(master, yearIndexes[year]))])),
           };
         });
+      rows = rows.map(row => {
+        const baseValues = Object.fromEntries(years.map(year => [year, row[year] || '']));
+        const section = reportDataOverrideSection(reportOverrides, 'masterFunds', row.masterKey, 'maxDrawdownByYear');
+        return { ...row, ...(section?.values || {}), baseValues, overrideValues: { ...(section?.values || {}) }, overrideMetadata: section?.metadata || null };
+      });
     } catch (e) {
       setError(area, e.message, pageKey);
       return;
@@ -17004,33 +17426,78 @@ const Pages = {
       ['masterName', 'thaiFund'].includes(sortState.key) ? b[sortState.key] : parseNum(b[sortState.key]),
       sortState.dir
     )) : rows;
-    const maxDrawdown = Math.max(0, ...rows.flatMap(row => years.map(year => Math.abs(parseNum(row[year])))).filter(Number.isFinite));
+    if (!Array.isArray(State.maxDrawdownVisibleYears)) State.maxDrawdownVisibleYears = years.map(String);
+    else State.maxDrawdownVisibleYears = State.maxDrawdownVisibleYears.filter(year => years.map(String).includes(year));
+    const visibleYearKeys = new Set(State.maxDrawdownVisibleYears);
+    const visibleYears = years.filter(year => visibleYearKeys.has(String(year)));
+    const maxDrawdown = Math.max(0, ...rows.flatMap(row => visibleYears.map(year => Math.abs(parseNum(row[year])))).filter(Number.isFinite));
     const header = (key, label) => `<th class="of6-sort ${sortState.key === String(key) ? 'is-active' : ''}" data-of6-sort="${key}">${renderSortLabel(label, sortState.key === String(key), sortState.dir, false)}</th>`;
     const barStyle = value => {
       const n = parseNum(value);
       if (Number.isNaN(n) || !maxDrawdown) return '';
       const pct = Math.max(0, Math.min(100, (Math.abs(n) / maxDrawdown) * 100));
-      return `background-image:linear-gradient(90deg,transparent 0,rgba(255,118,118,.28) ${Math.max(0, pct - 18)}%,rgba(255,47,47,.78) ${pct}%,transparent ${pct}%);`;
+      return `background-image:linear-gradient(90deg,rgba(239,68,68,.72) 0,rgba(239,68,68,.72) ${pct}%,transparent ${pct}%,transparent 100%);`;
     };
 
+    const editing = Boolean(State.reportDataEditModes[pageKey]);
+    const editActions = editing ? '<button class="btn btn-primary" id="of6-save">บันทึก Override</button><button class="btn btn-ghost" id="of6-cancel">ยกเลิก</button>' : '<button class="btn btn-ghost" id="of6-edit">แก้ไขข้อมูลกองทุน</button>';
     area.innerHTML = `
       ${pageToolActions(pageKey, source)}
+      <div class="metric-toggle-group of6-year-controls">
+        <span class="metric-toggle-label">ปีที่แสดง</span>
+        <div class="view-toggle" role="group" aria-label="เลือกปี Max Drawdown ที่แสดง">
+          ${years.map(year => `<button class="btn btn-ghost view-toggle-btn of6-year-toggle ${visibleYearKeys.has(String(year)) ? 'is-active' : ''}" data-year="${year}">${year}</button>`).join('')}
+        </div>
+        <button class="btn btn-ghost of6-year-all">${visibleYears.length === years.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
+      </div>
+      <div class="report-edit-actions">${editActions}</div>
       <div class="card report-card" id="report-card">
         <div class="of6-wrap"><table class="of6-table">
-          <colgroup><col class="master"><col class="thai"><col span="10" class="year"></colgroup>
-          <thead><tr>${header('masterName', 'Master Fund')}${header('thaiFund', 'ชื่อกอง')}${years.map(year => header(year, year)).join('')}</tr></thead>
+          <colgroup><col class="master"><col class="thai"><col span="${visibleYears.length}" class="year"></colgroup>
+          <thead><tr>${header('masterName', 'Master Fund')}${header('thaiFund', 'ชื่อกอง')}${visibleYears.map(year => header(year, year)).join('')}</tr></thead>
           <tbody>${sortedRows.map((row, index) => {
             return `<tr>
               <td class="of6-master">${esc(row.masterName)}</td>
               <td class="of6-thai"${row.highlightColor ? ` style="background-color:${esc(row.highlightColor)}"` : ''}>${esc(row.thaiFund)}</td>
-              ${years.map(year => `<td class="${row[year] ? '' : 'of6-empty'}" style="${barStyle(row[year])}">${esc(row[year] || '-')}</td>`).join('')}
+              ${visibleYears.map(year => editing
+                ? `<td class="report-override-cell"><input class="fund-input of6-override-input" data-field="${year}" value="${esc(row[year] || '')}"><small>Base: ${esc(String(row.baseValues?.[year] || '-'))}${row.overrideMetadata?.updatedAt ? ` · แก้ ${esc(new Date(row.overrideMetadata.updatedAt).toLocaleString('th-TH'))}` : ''}</small></td>`
+                : `<td class="${row[year] ? '' : 'of6-empty'}" style="${barStyle(row[year])}">${esc(row[year] || '-')}</td>`).join('')}
             </tr>`;
           }).join('')}</tbody>
         </table></div>
       </div>
       <style>
-        .of6-wrap{overflow:auto;background:#fff;padding:12px}.of6-table{width:100%;min-width:1500px;border-collapse:collapse;table-layout:fixed;font-family:inherit;color:#334155;font-size:.98rem}.of6-table col.master{width:320px}.of6-table col.thai{width:155px}.of6-table col.year{width:82px}.of6-table th{padding:11px 8px;background:#1f3f74;color:#fff;border:1px solid #e4e9f2;font-size:.99rem;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.of6-table th.of6-sort{cursor:pointer}.of6-table th.of6-sort:hover{background:#294d82}.of6-table th.of6-sort.is-active{background:#f2c75b;color:#443200}.of6-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.of6-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;font-size:.98rem;font-weight:400;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.of6-table tbody tr:nth-child(even) td{background-color:#f6f8fb}.of6-table td.of6-master,.of6-table td.of6-thai{text-align:left}.of6-table td.of6-master{font-weight:400}.of6-table td.of6-thai{font-weight:700}.of6-table td.of6-empty{color:#94a3b8}@media(max-width:760px){.of6-table{min-width:1380px}.of6-table th,.of6-table td{font-size:.9rem}}
+        .of6-year-controls{margin:10px 0 4px}.of6-year-controls .view-toggle-btn{min-width:54px}.of6-year-all{font-size:.74rem;white-space:nowrap}.of6-wrap{overflow:auto;background:#fff;padding:12px}.of6-table{width:100%;min-width:${Math.max(560,475+(visibleYears.length*82))}px;border-collapse:collapse;table-layout:fixed;font-family:inherit;color:#334155;font-size:.98rem}.of6-table col.master{width:320px}.of6-table col.thai{width:155px}.of6-table col.year{width:82px}.of6-table th{padding:11px 8px;background:#1f3f74;color:#fff;border:1px solid #e4e9f2;font-size:.99rem;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.of6-table th.of6-sort{cursor:pointer}.of6-table th.of6-sort:hover{background:#294d82}.of6-table th.of6-sort.is-active{background:#f2c75b;color:#443200}.of6-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.of6-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;font-size:.98rem;font-weight:400;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.of6-table tbody tr:nth-child(even) td{background-color:#f6f8fb}.of6-table td.of6-master,.of6-table td.of6-thai{text-align:left}.of6-table td.of6-master{font-weight:400}.of6-table td.of6-thai{font-weight:700}.of6-table td.of6-empty{color:#94a3b8}@media(max-width:760px){.of6-table th,.of6-table td{font-size:.9rem}}
       </style>`;
+
+    $$('.of6-year-toggle', area).forEach(button => button.addEventListener('click', () => {
+      const year = String(button.dataset.year || '');
+      const next = new Set(State.maxDrawdownVisibleYears || []);
+      if (next.has(year)) next.delete(year); else next.add(year);
+      State.maxDrawdownVisibleYears = years.map(String).filter(item => next.has(item));
+      Pages.masterFundCalendarMaxDrawdownTable(area);
+    }));
+    $('.of6-year-all', area)?.addEventListener('click', () => {
+      State.maxDrawdownVisibleYears = visibleYears.length === years.length ? [] : years.map(String);
+      Pages.masterFundCalendarMaxDrawdownTable(area);
+    });
+
+    $('#of6-edit', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = true; Pages.masterFundCalendarMaxDrawdownTable(area); });
+    $('#of6-cancel', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = false; Pages.masterFundCalendarMaxDrawdownTable(area); });
+    $('#of6-save', area)?.addEventListener('click', async () => {
+      const inputs = $$('.of6-override-input', area);
+      const changes = sortedRows.map((row, index) => {
+        const values = { ...(row.overrideValues || {}) };
+        inputs.slice(index * visibleYears.length, (index + 1) * visibleYears.length).forEach(input => {
+          const value = String(input.value).trim();
+          if (value !== String(row.baseValues?.[input.dataset.field] || '').trim()) values[input.dataset.field] = value;
+          else delete values[input.dataset.field];
+        });
+        return row.masterKey && (Object.keys(values).length || row.overrideMetadata) ? {entityType:'masterFunds',key:row.masterKey,section:'maxDrawdownByYear',values} : null;
+      }).filter(Boolean);
+      try { await saveReportDataOverrideChanges(State.currentQuarter, changes); State.reportDataEditModes[pageKey] = false; toast('บันทึก Report Data Override แล้ว','success'); Pages.masterFundCalendarMaxDrawdownTable(area); }
+      catch (error) { toast(error.message || 'บันทึกไม่สำเร็จ','error'); }
+    });
 
     $$('.of6-sort', area).forEach(el => el.addEventListener('click', () => {
       toggleNamedSort(sortState, el.dataset.of6Sort);
@@ -17039,7 +17506,7 @@ const Pages = {
     const columns = ['Master Fund', 'ชื่อกอง', ...years.map(String)];
     App._currentExport = null;
     App._currentTableExport = () => buildSimpleTablePayload(
-      CONFIG.PAGES[pageKey]?.title || 'เปรียบเทียบ Max DD Master Fund',
+      CONFIG.PAGES[pageKey]?.title || 'Max DD Master Fund',
       source,
       columns,
       sortedRows.map(row => [row.masterName, row.thaiFund, ...years.map(year => row[year] || '-')])
@@ -23127,7 +23594,7 @@ const App = {
       'master-placeholder-10': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'ใช้สำหรับแก้ไขข้อมูลกองทุนรวมตราสารหนี้ โดยสามารถกด "แก้ไขข้อมูลกองทุน" เพื่อปรับปรุงข้อมูลให้ถูกต้อง เช่น ข้อมูลอันดับความน่าเชื่อถือ (Rating) ที่ปัจจุบันปรากฏอยู่ใน Fund Factsheet แต่ยังไม่สามารถดึงข้อมูลผ่าน API ของ SEC ได้' },
       'master-placeholder-11': { title: 'ปัจจัยประกอบอื่นๆ 4', subtitle: 'Equity Super Sector, Holdings, Fund Size, Risk และขั้นต่ำลงทุน' },
       'master-placeholder-13': { title: 'สัดส่วนลงทุนแยกตามอุตสาหกรรม', subtitle: 'ปัจจัยประกอบอื่นๆ 5 · เปรียบเทียบสัดส่วน Equity Sector ของกองทุนที่เลือก' },
-      'master-placeholder-14': { title: 'เปรียบเทียบ Max DD Master Fund', subtitle: 'ปัจจัยประกอบอื่นๆ 6 · Max Drawdown รายปี 2016–2025' },
+      'master-placeholder-14': { title: 'Max DD Master Fund', subtitle: 'Max Drawdown รายปีตามข้อมูลที่มี' },
       'notes': { title: 'บันทึกข้อมูล', subtitle: 'ดราฟงานค้างและโหลดกลับมาทำต่อ' },
       'guide':             { title: 'คู่มือการใช้งาน', subtitle: '' },
       'fund-list-update':  { title: 'Fund List Update', subtitle: 'ติดตามการเพิ่ม นำออก และสลับตำแหน่ง Fund List ราย Quarter' },
