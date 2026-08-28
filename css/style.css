@@ -3770,7 +3770,30 @@ body.flu-row-dragging * {
 }
 .fee-compare-card-head {
   padding: 16px 18px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
+.fee-compare-edit-cell {
+  background: #fff8df !important;
+  padding: 4px !important;
+}
+.fee-compare-override-input {
+  width: 100%;
+  min-width: 72px;
+  text-align: center;
+}
+.fee-compare-edit-meta {
+  display: block;
+  margin-top: 3px;
+  color: #6b7280;
+  font-size: .64rem;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.report-edit-actions{display:flex;justify-content:flex-end;gap:8px;margin:8px 0 10px}.report-override-cell{padding:5px!important;background:#fff8df!important;overflow:visible!important}.report-override-cell .fund-input{width:100%;min-width:72px;text-align:center}.report-override-cell small{display:block;margin-top:3px;color:#6b7280;font-size:.62rem;line-height:1.2;white-space:normal}
 .fee-compare-card-head h3 {
   margin: 0;
   font-size: 1.14rem;
