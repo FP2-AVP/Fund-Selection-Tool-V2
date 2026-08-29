@@ -4,6 +4,9 @@ compatibility_date = "2026-08-27"
 
 [vars]
 FRONTEND_URL = "https://fp2-avp.github.io/Fund-Selection-Tool-V2/"
+GITHUB_REPO = "FP2-AVP/Fund-Selection-Tool-V2"
+GITHUB_WORKFLOW = "ft-historical-prices-database.yml"
+GITHUB_REF = "main"
 
 [[r2_buckets]]
 binding = "FUND_DATA"

@@ -57,6 +57,17 @@ GET /ft/symbols/{SYMBOL_SLUG}
 GET /ft/symbols/{SYMBOL_SLUG}/prices/{YYYY}
 GET /ft/symbols/{SYMBOL_SLUG}/qualitative/latest
 GET /ft/symbols/{SYMBOL_SLUG}/qualitative/snapshots/{YYYY-MM-DD}
+POST /ft/jobs/historical
+POST /ft/jobs/qualitative-all
+POST /ft/jobs/ytd-all
+GET  /ft/jobs/{JOB_ID}
+```
+
+The three job routes dispatch the FT GitHub Actions workflow without exposing a GitHub token to the browser.
+Configure the rotated, repository-scoped token as a Worker secret before deployment:
+
+```bash
+npx wrangler secret put GITHUB_TOKEN
 ```
 
 Build the objects locally without uploading:
