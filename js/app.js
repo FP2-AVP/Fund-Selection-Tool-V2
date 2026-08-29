@@ -86,6 +86,7 @@ const State = {
     'thai-calendar-years': null,
   },
   selectedKeys: new Set(),   // keys of selected rows in select-fund page
+  selectFundShowSelectedOnly: false,
   incomeFundSelectedKeys: new Set(),
   incomeFundSelectionRows: [],
   incomeFundSelectionLoaded: false,
@@ -14168,6 +14169,7 @@ const Pages = {
 
       /* Filter */
       let visible = allFunds.filter(f => {
+        if (State.selectFundShowSelectedOnly) return State.selectedKeys.has(f.key);
         const mappingText = masterMappingDisplay(f).searchText.toLowerCase();
         if (State.selectFundFilters.query && !f.code.toLowerCase().includes(State.selectFundFilters.query) && !f.masterName.toLowerCase().includes(State.selectFundFilters.query) && !mappingText.includes(State.selectFundFilters.query)) return false;
         if (State.selectFundFilters.category && f.category !== State.selectFundFilters.category) return false;
@@ -14257,6 +14259,9 @@ const Pages = {
           <div class="sf-meta">
             <span class="row-count-badge">${total.toLocaleString()} รายการ</span>
             <span class="row-count-badge is-info" id="sf-selected-count">เลือกแล้ว ${State.selectedKeys.size.toLocaleString()} กองทุน</span>
+            <button class="btn btn-ghost btn-sm view-toggle-btn ${State.selectFundShowSelectedOnly ? 'is-active' : ''}" id="sf-show-selected" type="button" ${State.selectedKeys.size ? '' : 'disabled'}>
+              ${State.selectFundShowSelectedOnly ? 'กลับไปดูทั้งหมด' : 'ดูกองทุนที่เลือก'}
+            </button>
             ${sourceBadgeHtml('select-fund', cfg.source)}
             ${getPageDataSourceBadge('select-fund') ? `<span class="badge badge-data-origin">${esc(getPageDataSourceBadge('select-fund'))}</span>` : ''}
             <span class="badge badge-accent" id="sf-highlight-count" ${Object.keys(State.highlights).length > 0 ? '' : 'hidden'}>
@@ -14331,6 +14336,10 @@ const Pages = {
       $('#sf-type',  area).addEventListener('change', e => { State.selectFundFilters.type  = e.target.value; render(1); });
       $('#sf-style', area).addEventListener('change', e => { State.selectFundFilters.style = e.target.value; render(1); });
       $('#sf-div',   area).addEventListener('change', e => { State.selectFundFilters.dividend = e.target.value; render(1); });
+      $('#sf-show-selected', area)?.addEventListener('click', () => {
+        State.selectFundShowSelectedOnly = !State.selectFundShowSelectedOnly;
+        render(1);
+      });
       $$('.sf-sort', area).forEach(el => {
         el.addEventListener('click', () => {
           toggleNamedSort(State.selectFundSort, el.dataset.sortKey);
@@ -14352,6 +14361,7 @@ const Pages = {
         State.tablePage = 1;
         State.pageSize = SELECT_FUND_DEFAULT_PAGE_SIZE;
         State.selectedKeys.clear();
+        State.selectFundShowSelectedOnly = false;
         State.selectedFunds = {};
         State.highlights = {};
         render(1);
@@ -14383,6 +14393,7 @@ const Pages = {
             cb.closest('tr')?.classList.toggle('row-selected', chkAll.checked);
           });
           syncSelectionUi();
+          if (State.selectFundShowSelectedOnly && !chkAll.checked) render(1, { preserveScroll: true });
         });
       }
 
@@ -14393,6 +14404,7 @@ const Pages = {
           else State.selectedKeys.delete(key);
           el.closest('tr')?.classList.toggle('row-selected', el.checked);
           syncSelectionUi();
+          if (State.selectFundShowSelectedOnly && !el.checked) render(pg, { preserveScroll: true });
         });
       });
 
