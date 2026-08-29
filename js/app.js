@@ -3098,6 +3098,20 @@ async function loadFtR2Job(jobId) {
   return fetchR2Json(`/ft/jobs/${encodeURIComponent(jobId)}`);
 }
 
+async function rebuildFtR2Index() {
+  const baseUrl = r2DataApiUrl();
+  const session = readAuthSession();
+  if (!baseUrl) throw new Error('R2 data API is not configured');
+  if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับสร้าง FT index');
+  const response = await fetch(`${baseUrl}/ft/rebuild-index`, {
+    method:'POST', headers:{Authorization:`Bearer ${session.sessionToken}`}, cache:'no-store',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `สร้าง FT index ไม่สำเร็จ (${response.status})`);
+  State.ftR2Index = null;
+  return data;
+}
+
 async function watchFtR2Job(job, {resultSummary, resultDetail, onReady} = {}) {
   const maxAttempts = 60;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
