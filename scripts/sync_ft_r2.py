@@ -181,7 +181,7 @@ def export_objects(db_path: Path, build_root: Path) -> dict[str, Any]:
     return index_payload
 
 
-def upload_objects(build_root: Path, prefix: str) -> dict[str, Any]:
+def upload_objects(build_root: Path, prefix: str, db_path: Path | None = None) -> dict[str, Any]:
     account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"].strip()
     bucket = os.environ["CLOUDFLARE_R2_BUCKET"].strip()
     import boto3
@@ -212,6 +212,15 @@ def upload_objects(build_root: Path, prefix: str) -> dict[str, Any]:
         client.put_object(**args)
         uploaded.append({"key": key, "bytes": len(body)})
         print(f"Uploaded s3://{bucket}/{key} ({len(body):,} bytes)")
+    if db_path and db_path.is_file():
+        key = f"{prefix.strip('/')}/database/ft_historical_prices.sqlite"
+        body = db_path.read_bytes()
+        client.put_object(
+            Bucket=bucket, Key=key, Body=body, ContentType="application/vnd.sqlite3",
+            Metadata={"sha256": hashlib.sha256(body).hexdigest()},
+        )
+        uploaded.append({"key": key, "bytes": len(body)})
+        print(f"Uploaded s3://{bucket}/{key} ({len(body):,} bytes)")
     return {"bucket": bucket, "prefix": prefix, "uploaded": len(uploaded), "objects": uploaded}
 
 
@@ -229,7 +238,7 @@ def main() -> int:
         "priceRows": result["counts"]["priceRows"],
     }
     if args.upload:
-        summary["upload"] = upload_objects(args.build_root, args.prefix)
+        summary["upload"] = upload_objects(args.build_root, args.prefix, args.db_path)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
