@@ -995,6 +995,19 @@ function buildHighlightDotPicker(code, currentValue, fallbackColor) {
     </div>`;
 }
 
+const COPY_IMAGE_EXCLUDED_PAGES = new Set([
+  'thai-performance-ratios',
+  'master-placeholder-5',
+  'robustness-ft-import',
+  'robustness-notes',
+  'ft-top10-holding',
+  'upside-downside-capture',
+]);
+
+function isCopyImageExcludedPage(pageKey) {
+  return COPY_IMAGE_EXCLUDED_PAGES.has(String(pageKey || '').trim());
+}
+
 function pageToolActions(pageKey, sourceLabel = '', extraActions = '', extraButtons = '') {
   const sourceBadge = getPageDataSourceBadge(pageKey);
   return `
@@ -1009,6 +1022,11 @@ function pageToolActions(pageKey, sourceLabel = '', extraActions = '', extraButt
         <button class="btn btn-ghost" id="btn-copy-table" title="คัดลอกข้อมูลแบบคงรูปแบบ">
           คัดลอกแบบมีฟอร์แมต
         </button>
+        ${isCopyImageExcludedPage(pageKey) ? '' : `
+          <button class="btn btn-ghost" id="btn-copy-image" title="คัดลอกตารางทั้งหมดเป็นภาพ PNG ความละเอียดสูง">
+            คัดลอกเป็นภาพ
+          </button>
+        `}
       </div>
     </div>`;
 }
@@ -1319,6 +1337,9 @@ function renderedClipboardCellHtml(cell, rowHeight = 0, sizeScale = PRESENTATION
     `mso-fareast-font-size:${PRESENTATION_CLIPBOARD_HTML_FONT_PT}.0pt`,
     `mso-bidi-font-size:${PRESENTATION_CLIPBOARD_HTML_FONT_PT}.0pt`,
     `background-color:${bg}`,
+    `background:${bg}`,
+    `mso-shading:${bg}`,
+    'mso-pattern:auto',
     `color:${color}`,
     `font-weight:${weight}`,
     `border:${renderedClipboardBorderStyle(computed)}`,
@@ -1527,9 +1548,6 @@ function buildRenderedTableClipboardHtml(card, payload = {}) {
   const sourceTable = card?.querySelector?.('table');
   if (!sourceTable) return '';
 
-  const title = String(payload.title || '').trim();
-  const subtitle = String(payload.subtitle || '').trim();
-  const source = String(payload.source || '').trim();
   const fontFamily = "font-family:'TH Sarabun New','THSarabunNew','Sarabun',Arial,sans-serif";
   const clipboardFontStyle = presentationClipboardFontStyle();
   const tableHtml = buildCleanRenderedClipboardTable(sourceTable, payload);
@@ -1542,9 +1560,6 @@ function buildRenderedTableClipboardHtml(card, payload = {}) {
     </head>
     <body lang="TH" style="margin:0;padding:0;background:#ffffff;${clipboardFontStyle};color:#334155;mso-fareast-language:TH;">
       <div style="display:inline-block;max-width:none;${clipboardFontStyle};">
-        ${title ? `<div lang="TH" style="${fontFamily};${clipboardFontStyle};line-height:1.2;font-weight:700;color:#1a3c6e;margin:0 0 4px;mso-fareast-language:TH;">${esc(title)}</div>` : ''}
-        ${subtitle ? `<div lang="TH" style="${fontFamily};${clipboardFontStyle};line-height:1.2;color:#64748b;margin:0 0 4px;mso-fareast-language:TH;">${esc(subtitle)}</div>` : ''}
-        ${source ? `<div lang="TH" style="${fontFamily};${clipboardFontStyle};line-height:1.2;color:#64748b;margin:0 0 10px;mso-fareast-language:TH;">ที่มา : ${esc(source)}</div>` : ''}
         ${tableHtml}
       </div>
     </body>
@@ -1795,6 +1810,74 @@ async function elementToImageBlob(el) {
   }
 }
 
+async function copyElementAsImageToClipboard(el) {
+  if (!navigator.clipboard?.write || !window.ClipboardItem) {
+    throw new Error('เบราว์เซอร์นี้ยังไม่รองรับการคัดลอกภาพ');
+  }
+
+  const initialCaptureWidth = Math.ceil(Math.max(el.scrollWidth, el.getBoundingClientRect().width));
+  const captureHeight = Math.ceil(Math.max(el.scrollHeight, el.getBoundingClientRect().height));
+  const captureNode = cloneNodeForCapture(el);
+  captureNode.removeAttribute('id');
+  captureNode.style.position = 'fixed';
+  captureNode.style.left = '-100000px';
+  captureNode.style.top = '0';
+  captureNode.style.width = `${initialCaptureWidth}px`;
+  captureNode.style.height = 'auto';
+  captureNode.style.maxWidth = 'none';
+  captureNode.style.overflow = 'visible';
+  captureNode.style.overflowX = 'visible';
+  captureNode.style.overflowY = 'visible';
+  captureNode.style.background = '#ffffff';
+  captureNode.style.boxSizing = 'border-box';
+  captureNode.querySelectorAll('.esb-wrap,.table-wrapper').forEach(wrap => {
+    wrap.style.overflow = 'visible';
+    wrap.style.overflowX = 'visible';
+    wrap.style.overflowY = 'visible';
+    wrap.style.maxWidth = 'none';
+  });
+  captureNode.querySelectorAll('.report-sort.is-active,.sort-label.is-active').forEach(node => {
+    node.classList.remove('is-active');
+  });
+  if (captureNode.matches('.report-card-master')) {
+    captureNode.querySelectorAll('thead tr:last-child > th:first-child,tbody tr > td:first-child').forEach(cell => {
+      cell.style.minWidth = '320px';
+      cell.style.width = '320px';
+    });
+  }
+  document.body.appendChild(captureNode);
+  const captureWidth = Math.ceil(Math.max(initialCaptureWidth, captureNode.scrollWidth));
+  captureNode.style.width = `${captureWidth}px`;
+
+  let blob = null;
+  try {
+    if (typeof window.html2canvas === 'function') {
+      const canvas = await window.html2canvas(captureNode, {
+      backgroundColor: '#ffffff',
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      width: captureWidth,
+      height: Math.ceil(Math.max(captureNode.scrollHeight, captureHeight)),
+      windowWidth: captureWidth,
+      windowHeight: Math.ceil(Math.max(captureNode.scrollHeight, captureHeight)),
+      scrollX: 0,
+      scrollY: 0,
+    });
+      blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    } else {
+      blob = await elementToImageBlob(captureNode);
+    }
+  } finally {
+    captureNode.remove();
+  }
+
+  if (!blob) throw new Error('สร้างภาพ PNG ไม่สำเร็จ');
+  await navigator.clipboard.write([
+    new ClipboardItem({ 'image/png': blob }),
+  ]);
+}
+
 function elementToImageSvgDataURL(el) {
   const rect = el.getBoundingClientRect();
   const cloned = cloneNodeForCapture(el);
@@ -1886,6 +1969,7 @@ function bindPageImageActions(area, cardId, filename) {
   const card = $(`#${cardId}`, area);
   if (!card) return;
   const copyBtn = $('#btn-copy-table', area);
+  const copyImageBtn = $('#btn-copy-image', area);
   if (copyBtn) {
     const supportsTable = typeof App._currentTableExport === 'function';
     const supportsClipboard = typeof App._currentClipboardExport === 'function';
@@ -1925,6 +2009,21 @@ function bindPageImageActions(area, cardId, filename) {
           : 'คัดลอกข้อมูลตารางแบบข้อความสำรองแล้ว', 'success');
     } catch (err) {
       toast(`คัดลอกไม่สำเร็จ: ${err.message || err}`, 'error');
+    }
+  });
+
+  copyImageBtn?.addEventListener('click', async () => {
+    const originalText = copyImageBtn.textContent;
+    try {
+      copyImageBtn.disabled = true;
+      copyImageBtn.textContent = 'กำลังสร้างภาพ...';
+      await copyElementAsImageToClipboard(card);
+      toast('คัดลอกตารางเป็นภาพ PNG แล้ว', 'success');
+    } catch (err) {
+      toast(`คัดลอกภาพไม่สำเร็จ: ${err.message || err}`, 'error');
+    } finally {
+      copyImageBtn.disabled = false;
+      copyImageBtn.textContent = originalText;
     }
   });
 }
@@ -2761,6 +2860,37 @@ async function loadFtR2Qualitative(symbol, force = false) {
   return result;
 }
 
+async function loadFtR2PriceRows(symbol, metadata = {}, force = false) {
+  const slug = ftSymbolSlug(symbol);
+  if (!slug) throw new Error('FT symbol is required');
+  State.ftR2PriceRows = State.ftR2PriceRows || new Map();
+  if (!force && State.ftR2PriceRows.has(slug)) return State.ftR2PriceRows.get(slug);
+  let years = (Array.isArray(metadata.priceFiles) ? metadata.priceFiles : [])
+    .map(item => String(item?.year || '').trim()).filter(Boolean);
+  const priceStart = metadata.priceStart || metadata.startDate || '';
+  const priceEnd = metadata.priceEnd || metadata.endDate || '';
+  if (!years.length && priceStart && priceEnd) {
+    const firstYear = Number(String(priceStart).slice(0, 4));
+    const lastYear = Number(String(priceEnd).slice(0, 4));
+    if (Number.isInteger(firstYear) && Number.isInteger(lastYear)) {
+      years = Array.from({length:lastYear - firstYear + 1}, (_, index) => String(firstYear + index));
+    }
+  }
+  const payloads = await Promise.all(years.map(year =>
+    fetchR2Json(`/ft/symbols/${encodeURIComponent(slug)}/prices/${encodeURIComponent(year)}`)
+  ));
+  const rows = payloads.flatMap(payload => Array.isArray(payload?.rows) ? payload.rows : (Array.isArray(payload) ? payload : []))
+    .map(row => ({
+      ...row,
+      symbol: row.symbol || symbol,
+      date: String(row.date || row.price_date || '').slice(0, 10),
+    }))
+    .filter(row => row.date && Number.isFinite(Number(row.close)))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  State.ftR2PriceRows.set(slug, rows);
+  return rows;
+}
+
 function findFtSymbolMatch(payload, lookupValue) {
   const value = String(lookupValue || '').trim();
   if (!value) return '';
@@ -3073,7 +3203,13 @@ async function fetchR2Json(path) {
   const response = await fetch(`${baseUrl}${path}`, {
     headers:{Authorization:`Bearer ${session.sessionToken}`}, cache:'no-store',
   });
-  const payload = await response.json().catch(() => ({}));
+  const raw = await response.text();
+  let payload = {};
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    throw new Error(`R2 ส่งข้อมูลที่ไม่ใช่ JSON: ${path}`);
+  }
   if (!response.ok) throw new Error(payload.error || `R2 data API HTTP ${response.status}`);
   return payload;
 }
@@ -16699,8 +16835,7 @@ const Pages = {
       ? `<td class="${cls} report-override-cell"><input class="fund-input of2-override-input" data-field="${field}" value="${esc(value || '')}"><small>Base: ${esc(String(row.baseValues?.[field] || '-'))}${row.overrideMetadata?.updatedAt ? ` · แก้ ${esc(new Date(row.overrideMetadata.updatedAt).toLocaleString('th-TH'))}` : ''}</small></td>`
       : `<td class="${cls}">${esc(value || '-')}</td>`;
     area.innerHTML = `
-      ${pageToolActions(pageKey, source)}
-      <div class="report-edit-actions">${editActions}</div>
+      ${pageToolActions(pageKey, source, '', editActions)}
       <div class="card report-card" id="report-card">
         <div class="of2-table-wrap">
           <table class="of2-table">
@@ -16947,7 +17082,10 @@ const Pages = {
         const override = State.fixedIncomeFactorsOverrides?.items?.[fund.key] || State.fixedIncomeFactorsOverrides?.items?.[String(fund.code || '').trim().toUpperCase()];
         const baseValues = Object.fromEntries(editableColumns.map(key => [key, row[key] || '']));
         if (!override) return { ...row, baseValues };
-        const next = { ...row, baseValues, isOverride: true, overrideMetadata:override._metadata || null };
+        const overrideValues = Object.fromEntries(editableColumns
+          .filter(key => Object.prototype.hasOwnProperty.call(override, key))
+          .map(key => [key, String(override[key] ?? '').trim()]));
+        const next = { ...row, baseValues, isOverride: true, overrideValues, overrideMetadata:override._metadata || null };
         editableColumns.forEach(key => {
           if (Object.prototype.hasOwnProperty.call(override, key)) next[key] = String(override[key] ?? '').trim();
         });
@@ -16993,28 +17131,49 @@ const Pages = {
       return;
     }
 
-    const columns = [
-      'กองไทย',
-      'Asset Alloc Cash',
-      'Asset Alloc Bond',
-      'Asset Alloc US Bond',
-      'Fixd-Inc Sector - Government',
-      'Fixd-Inc Sector - Corporate',
-      'ลงทุนต่างประเทศ',
-      'AAA',
-      'AA',
-      'A',
-      'BBB',
-      'อายุของตราสารหนี้เฉลี่ย',
-      'YTM',
-      'Number of Holdings',
-      '% Asset in Top 10',
-      'Fund Size (ลบ.)',
-      'Max DD 3Y',
-      'SD 3Y',
-      'Max DD 5Y',
-      'SD 5Y',
+    const columnDefs = [
+      { key:'cash', label:'Asset Alloc Cash', header:'<span>Asset Alloc</span><span>Cash</span>', col:'of3-col-small' },
+      { key:'bond', label:'Asset Alloc Bond', header:'<span>Asset Alloc</span><span>Bond</span>', col:'of3-col-small' },
+      { key:'usBond', label:'Asset Alloc US Bond', header:'<span>Asset Alloc</span><span>US Bond</span>', col:'of3-col-small' },
+      { key:'government', label:'Fixd-Inc Sector - Government', header:'<span>Fixd-Inc Sector</span><span>Government</span>', col:'of3-col-small' },
+      { key:'corporate', label:'Fixd-Inc Sector - Corporate', header:'<span>Fixd-Inc Sector</span><span>Corporate</span>', col:'of3-col-small' },
+      { key:'foreign', label:'ลงทุนต่างประเทศ', header:'<span>ลงทุน</span><span>ต่างประเทศ</span>', col:'of3-col-small' },
+      { key:'aaa', label:'AAA', header:'AAA', col:'of3-col-rating', group:'rating' },
+      { key:'aa', label:'AA', header:'AA', col:'of3-col-rating', group:'rating' },
+      { key:'a', label:'A', header:'A', col:'of3-col-rating', group:'rating' },
+      { key:'bbb', label:'BBB', header:'BBB', col:'of3-col-rating', group:'rating' },
+      { key:'duration', label:'อายุของตราสารหนี้เฉลี่ย', header:'<span>อายุของตรา</span><span>สารหนี้เฉลี่ย</span>', col:'of3-col-duration' },
+      { key:'ytm', label:'YTM', header:'YTM', col:'of3-col-small' },
+      { key:'holdings', label:'Number of Holdings', header:'<span>Number of</span><span>Holdings</span>', col:'of3-col-holdings' },
+      { key:'top10', label:'% Asset in Top 10', header:'<span>% Asset in</span><span>Top 10</span>', col:'of3-col-holdings' },
+      { key:'fundSize', label:'Fund Size (ลบ.)', header:'<span>Fund Size</span><span>(ลบ.)</span>', col:'of3-col-size' },
+      { key:'maxDd3y', label:'Max DD 3Y', header:'Max DD 3Y', col:'of3-col-risk', group:'risk' },
+      { key:'sd3y', label:'SD 3Y', header:'SD 3Y', col:'of3-col-risk', group:'risk' },
+      { key:'maxDd5y', label:'Max DD 5Y', header:'Max DD 5Y', col:'of3-col-risk', group:'risk' },
+      { key:'sd5y', label:'SD 5Y', header:'SD 5Y', col:'of3-col-risk', group:'risk' },
     ];
+    if (!Array.isArray(State.fixedIncomeAllocationVisibleColumns)) {
+      State.fixedIncomeAllocationVisibleColumns = columnDefs.map(column => column.key);
+    } else {
+      State.fixedIncomeAllocationVisibleColumns = State.fixedIncomeAllocationVisibleColumns
+        .filter(key => columnDefs.some(column => column.key === key));
+    }
+    const visibleKeys = new Set(State.fixedIncomeAllocationVisibleColumns);
+    const visibleColumns = columnDefs.filter(column => visibleKeys.has(column.key));
+    const visibleRating = visibleColumns.filter(column => column.group === 'rating');
+    const visibleRisk = visibleColumns.filter(column => column.group === 'risk');
+    const hasGroupedHeaders = visibleRating.length > 0 || visibleRisk.length > 0;
+    const firstHeaderCells = [];
+    visibleColumns.forEach((column, index) => {
+      if (column.group) {
+        const previous = visibleColumns[index - 1];
+        if (previous?.group === column.group) return;
+        const grouped = visibleColumns.filter(item => item.group === column.group);
+        firstHeaderCells.push(`<th colspan="${grouped.length}" class="of3-group">${column.group === 'rating' ? 'Rating' : 'ความเสี่ยง'}</th>`);
+        return;
+      }
+      firstHeaderCells.push(`<th${hasGroupedHeaders ? ' rowspan="2"' : ''}>${column.header}</th>`);
+    });
     const isEditingFixedIncomeFactors = !!State.fixedIncomeFactorsEditMode;
     const editFundDataButton = isEditingFixedIncomeFactors
       ? `
@@ -17042,58 +17201,26 @@ const Pages = {
 
     area.innerHTML = `
       ${pageToolActions(pageKey, source, '', editFundDataButton)}
+      <div class="metric-toggle-group of3-column-controls">
+        <span class="metric-toggle-label">หัวตารางที่แสดง</span>
+        <div class="view-toggle of3-column-toggle-group" role="group" aria-label="เลือกคอลัมน์ของปัจจัยประกอบกองทุนตราสารหนี้">
+          ${columnDefs.map(column => `<button class="btn btn-ghost view-toggle-btn of3-column-toggle ${visibleKeys.has(column.key) ? 'is-active' : ''}" data-column="${column.key}">${esc(column.label)}</button>`).join('')}
+        </div>
+        <button class="btn btn-ghost of3-column-all">${visibleColumns.length === columnDefs.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
+      </div>
       <div class="card report-card" id="report-card">
         <div class="of3-table-wrap">
           <table class="of3-table">
             <colgroup>
               <col class="of3-col-fund">
-              <col class="of3-col-small">
-              <col class="of3-col-small">
-              <col class="of3-col-small">
-              <col class="of3-col-small">
-              <col class="of3-col-small">
-              <col class="of3-col-small">
-              <col class="of3-col-rating">
-              <col class="of3-col-rating">
-              <col class="of3-col-rating">
-              <col class="of3-col-rating">
-              <col class="of3-col-duration">
-              <col class="of3-col-small">
-              <col class="of3-col-holdings">
-              <col class="of3-col-holdings">
-              <col class="of3-col-size">
-              <col class="of3-col-risk">
-              <col class="of3-col-risk">
-              <col class="of3-col-risk">
-              <col class="of3-col-risk">
+              ${visibleColumns.map(column => `<col class="${column.col}">`).join('')}
             </colgroup>
             <thead>
               <tr>
-                <th rowspan="2">กองไทย</th>
-                <th rowspan="2"><span>Asset Alloc</span><span>Cash</span></th>
-                <th rowspan="2"><span>Asset Alloc</span><span>Bond</span></th>
-                <th rowspan="2"><span>Asset Alloc</span><span>US Bond</span></th>
-                <th rowspan="2"><span>Fixd-Inc Sector</span><span>Government</span></th>
-                <th rowspan="2"><span>Fixd-Inc Sector</span><span>Corporate</span></th>
-                <th rowspan="2"><span>ลงทุน</span><span>ต่างประเทศ</span></th>
-                <th colspan="4" class="of3-group">Rating</th>
-                <th rowspan="2"><span>อายุของตรา</span><span>สารหนี้เฉลี่ย</span></th>
-                <th rowspan="2">YTM</th>
-                <th rowspan="2"><span>Number of</span><span>Holdings</span></th>
-                <th rowspan="2"><span>% Asset in</span><span>Top 10</span></th>
-                <th rowspan="2"><span>Fund Size</span><span>(ลบ.)</span></th>
-                <th colspan="4" class="of3-group">ความเสี่ยง</th>
+                <th${hasGroupedHeaders ? ' rowspan="2"' : ''}>กองไทย</th>
+                ${firstHeaderCells.join('')}
               </tr>
-              <tr>
-                <th>AAA</th>
-                <th>AA</th>
-                <th>A</th>
-                <th>BBB</th>
-                <th>Max DD 3Y</th>
-                <th>SD 3Y</th>
-                <th>Max DD 5Y</th>
-                <th>SD 5Y</th>
-              </tr>
+              ${hasGroupedHeaders ? `<tr>${visibleColumns.filter(column => column.group).map(column => `<th>${column.header}</th>`).join('')}</tr>` : ''}
             </thead>
             <tbody>
               ${rows.map((row, rowIndex) => {
@@ -17104,7 +17231,7 @@ const Pages = {
                 return `
                   <tr>
                     <td class="of3-name" style="${nameStyle}">${esc(row.fundName)}</td>
-                    ${editableColumns.map(key => renderOf3Cell(row, key)).join('')}
+                    ${visibleColumns.map(column => renderOf3Cell(row, column.key)).join('')}
                   </tr>`;
               }).join('')}
             </tbody>
@@ -17113,7 +17240,7 @@ const Pages = {
       </div>
       <style>
         .of3-table-wrap{overflow-x:auto;background:#fff}
-        .of3-table{width:100%;min-width:1320px;border-collapse:collapse;table-layout:fixed;font-family:'Sarabun','THSarabunNew',sans-serif;color:#24364f}
+        .of3-column-controls{margin:10px 0 4px;align-items:flex-start}.of3-column-toggle-group{display:flex;flex-wrap:wrap;max-width:100%}.of3-column-toggle-group .view-toggle-btn{font-size:.72rem;padding:7px 9px}.of3-column-all{font-size:.74rem;white-space:nowrap}.of3-table{width:100%;min-width:${Math.max(360,150+(visibleColumns.length*82))}px;border-collapse:collapse;table-layout:fixed;font-family:'Sarabun','THSarabunNew',sans-serif;color:#24364f}
         .of3-col-fund{width:11%}.of3-col-small{width:7%}.of3-col-rating{width:6%}.of3-col-duration{width:9%}.of3-col-holdings{width:8%}.of3-col-size{width:7%}.of3-col-risk{width:6%}
         .of3-table th{height:38px;padding:6px 8px;background:#123a73;color:#fff;font-size:.74rem;font-weight:800;text-align:center;vertical-align:middle;border:1px solid #dbe4f0;line-height:1.15}
         .of3-table th span{display:block}
@@ -17128,6 +17255,19 @@ const Pages = {
         @media(max-width:760px){.of3-table{min-width:1120px}.of3-table th{font-size:.7rem}.of3-table td{font-size:.76rem}}
       </style>`;
 
+    $$('.of3-column-toggle', area).forEach(button => button.addEventListener('click', () => {
+      const key = button.dataset.column;
+      const next = new Set(State.fixedIncomeAllocationVisibleColumns || []);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      State.fixedIncomeAllocationVisibleColumns = columnDefs.map(column => column.key).filter(columnKey => next.has(columnKey));
+      Pages.otherFactorsFixedIncomeAllocationTable(area);
+    }));
+    $('.of3-column-all', area)?.addEventListener('click', () => {
+      State.fixedIncomeAllocationVisibleColumns = visibleColumns.length === columnDefs.length
+        ? []
+        : columnDefs.map(column => column.key);
+      Pages.otherFactorsFixedIncomeAllocationTable(area);
+    });
     $('#of3-edit-fund-data', area)?.addEventListener('click', () => {
       State.fixedIncomeFactorsEditMode = true;
       Pages.otherFactorsFixedIncomeAllocationTable(area);
@@ -17142,13 +17282,14 @@ const Pages = {
         const row = rows[idx];
         const code = String(row?.code || row?.key || '').trim().toUpperCase();
         if (!code) return;
-        const item = { key: code, code };
+        const item = { key: code, code, ...(row?.overrideValues || {}) };
         $$('.of3-override-input', tr).forEach(input => {
           const key = input.dataset.key;
           if (!key) return;
           const nextValue = input.value.trim();
           const baseValue = String(row?.baseValues?.[key] ?? '').trim();
           if (nextValue !== baseValue) item[key] = nextValue;
+          else delete item[key];
         });
         if (row?.isOverride || Object.keys(item).length > 2) items[code] = item;
       });
@@ -17172,29 +17313,8 @@ const Pages = {
     App._currentTableExport = () => buildSimpleTablePayload(
       CONFIG.PAGES[pageKey]?.title || 'ปัจจัยประกอบ กองทุนตราสารหนี้',
       source,
-      columns,
-      rows.map(row => [
-        row.fundName,
-        row.cash || '-',
-        row.bond || '-',
-        row.usBond || '-',
-        row.government || '-',
-        row.corporate || '-',
-        row.foreign || '-',
-        row.aaa || '-',
-        row.aa || '-',
-        row.a || '-',
-        row.bbb || '-',
-        row.duration || '-',
-        row.ytm || '-',
-        row.holdings || '-',
-        row.top10 || '-',
-        row.fundSize || '-',
-        row.maxDd3y || '-',
-        row.sd3y || '-',
-        row.maxDd5y || '-',
-        row.sd5y || '-',
-      ])
+      ['กองไทย', ...visibleColumns.map(column => column.label)],
+      rows.map(row => [row.fundName, ...visibleColumns.map(column => row[column.key] || '-')])
     );
     App._currentClipboardExport = null;
     bindPageImageActions(area, 'report-card', 'other-factors-fixed-income-allocation-table');
@@ -17591,7 +17711,7 @@ const Pages = {
     const editing = Boolean(State.reportDataEditModes[pageKey]);
     const editActions = editing ? '<button class="btn btn-primary" id="of5-save">บันทึก Override</button><button class="btn btn-ghost" id="of5-cancel">ยกเลิก</button>' : '<button class="btn btn-ghost" id="of5-edit">แก้ไขข้อมูลกองทุน</button>';
     area.innerHTML = `
-      ${pageToolActions(pageKey, source)}
+      ${pageToolActions(pageKey, source, '', editActions)}
       <div class="metric-toggle-group of5-column-controls">
         <span class="metric-toggle-label">อุตสาหกรรมที่แสดง</span>
         <div class="view-toggle of5-column-toggle-group" role="group" aria-label="เลือกอุตสาหกรรมที่แสดง">
@@ -17599,7 +17719,6 @@ const Pages = {
         </div>
         <button class="btn btn-ghost of5-column-all">${visibleSectors.length === sectors.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
       </div>
-      <div class="report-edit-actions">${editActions}</div>
       <div class="card report-card" id="report-card">
         <div class="of5-wrap"><table class="of5-table">
           <colgroup><col class="fund"><col span="${visibleSectors.length}" class="sector"></colgroup>
@@ -17761,7 +17880,7 @@ const Pages = {
     const editing = Boolean(State.reportDataEditModes[pageKey]);
     const editActions = editing ? '<button class="btn btn-primary" id="of6-save">บันทึก Override</button><button class="btn btn-ghost" id="of6-cancel">ยกเลิก</button>' : '<button class="btn btn-ghost" id="of6-edit">แก้ไขข้อมูลกองทุน</button>';
     area.innerHTML = `
-      ${pageToolActions(pageKey, source)}
+      ${pageToolActions(pageKey, source, '', editActions)}
       <div class="metric-toggle-group of6-year-controls">
         <span class="metric-toggle-label">ปีที่แสดง</span>
         <div class="view-toggle" role="group" aria-label="เลือกปี Max Drawdown ที่แสดง">
@@ -17769,7 +17888,6 @@ const Pages = {
         </div>
         <button class="btn btn-ghost of6-year-all">${visibleYears.length === years.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
       </div>
-      <div class="report-edit-actions">${editActions}</div>
       <div class="card report-card" id="report-card">
         <div class="of6-wrap"><table class="of6-table">
           <colgroup><col class="master"><col class="thai"><col span="${visibleYears.length}" class="year"></colgroup>
@@ -17943,7 +18061,7 @@ const Pages = {
     const groupedHeader = [
       styleMetrics.length ? `<th colspan="${styleMetrics.length}">Investment Style (%)</th>` : '',
       showStyleBoxGap ? '<th class="esb-spacer" rowspan="2" aria-hidden="true"></th>' : '',
-      boxMetrics.length ? '<th rowspan="2">Equity Style Box</th>' : '',
+      boxMetrics.length ? '<th rowspan="2" class="esb-box-heading">Equity Style Box</th>' : '',
       showBoxCapGap ? '<th class="esb-spacer" rowspan="2" aria-hidden="true"></th>' : '',
       capMetrics.length ? `<th colspan="${capMetrics.length}">Market Capitalization (%)</th>` : '',
     ].join('');
@@ -17953,7 +18071,7 @@ const Pages = {
     ].join('');
 
     area.innerHTML = `
-      ${pageToolActions(pageKey, source)}
+      ${pageToolActions(pageKey, source, '', editActions)}
       <div class="metric-toggle-group esb-column-controls">
         <span class="metric-toggle-label">หัวตารางที่แสดง</span>
         <div class="view-toggle esb-column-toggle-group" role="group" aria-label="เลือกหัวตาราง Equity Style Box ที่แสดง">
@@ -17961,10 +18079,9 @@ const Pages = {
         </div>
         <button class="btn btn-ghost esb-column-all">${visibleMetrics.length === metrics.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
       </div>
-      <div class="report-edit-actions">${editActions}</div>
       <div class="card report-card" id="report-card">
         <div class="esb-wrap"><table class="esb-table">
-          <colgroup><col class="fund"><col span="${styleMetrics.length}" class="metric">${showStyleBoxGap ? '<col class="spacer">' : ''}<col span="${boxMetrics.length}" class="metric">${showBoxCapGap ? '<col class="spacer">' : ''}<col span="${capMetrics.length}" class="metric"></colgroup>
+          <colgroup><col class="fund"><col span="${styleMetrics.length}" class="metric">${showStyleBoxGap ? '<col class="spacer">' : ''}<col span="${boxMetrics.length}" class="style-box">${showBoxCapGap ? '<col class="spacer">' : ''}<col span="${capMetrics.length}" class="metric"></colgroup>
           <thead>
             <tr><th rowspan="2" class="esb-sort ${sortState.key === 'fundName' ? 'is-active' : ''}" data-esb-sort="fundName">${renderSortLabel('ชื่อกอง', sortState.key === 'fundName', sortState.dir, false)}</th>${groupedHeader}</tr>
             <tr>${secondHeader}</tr>
@@ -17980,7 +18097,7 @@ const Pages = {
         </table></div>
       </div>
       <style>
-        .esb-column-controls{margin:10px 0 4px;align-items:flex-start}.esb-column-toggle-group{display:flex;flex-wrap:wrap;max-width:100%}.esb-column-toggle-group .view-toggle-btn{font-size:.74rem;padding:7px 10px}.esb-column-all{font-size:.74rem;white-space:nowrap}.esb-wrap{overflow:auto;background:#fff;padding:12px}.esb-table{width:100%;min-width:${Math.max(520,200+(visibleMetrics.length*122)+(showStyleBoxGap ? 18 : 0)+(showBoxCapGap ? 18 : 0))}px;border-collapse:collapse;table-layout:fixed;color:#334155;font-size:.94rem}.esb-table col.fund{width:200px}.esb-table col.metric{width:122px}.esb-table col.spacer{width:18px}.esb-table th{padding:11px 8px;background:#2c80bf;color:#fff;border:1px solid #e4e9f2;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.esb-table th.esb-sort{cursor:pointer}.esb-table th.esb-sort:hover{background:#256fa8}.esb-table th.esb-sort.is-active{background:#f2c75b;color:#443200}.esb-table th.esb-spacer,.esb-table td.esb-spacer{width:18px;min-width:18px;padding:0;background:#fff!important;border-top:0;border-bottom:0}.esb-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.esb-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.esb-table tbody tr:nth-child(even) td{background-color:#f3f6fa}.esb-table td.esb-fund{text-align:left;font-weight:700}.esb-table td.esb-style-box{font-weight:600}.esb-table td.esb-empty{color:#94a3b8}.esb-table .report-override-cell{white-space:normal}.esb-table .report-override-cell small{display:block;margin-top:4px;color:#64748b;font-size:.66rem;line-height:1.25}@media(max-width:760px){.esb-table{font-size:.86rem}}
+        .esb-column-controls{margin:10px 0 4px;align-items:flex-start}.esb-column-toggle-group{display:flex;flex-wrap:wrap;max-width:100%}.esb-column-toggle-group .view-toggle-btn{font-size:.74rem;padding:7px 10px}.esb-column-all{font-size:.74rem;white-space:nowrap}.esb-wrap{overflow:auto;background:#fff;padding:12px}.esb-table{width:100%;min-width:${Math.max(520,200+(styleMetrics.length*122)+(boxMetrics.length*104)+(capMetrics.length*122)+(showStyleBoxGap ? 44 : 0)+(showBoxCapGap ? 44 : 0))}px;border-collapse:collapse;table-layout:fixed;color:#334155;font-size:.94rem}.esb-table col.fund{width:200px}.esb-table col.metric{width:122px}.esb-table col.style-box{width:104px}.esb-table col.spacer{width:44px}.esb-table th{padding:11px 8px;background:#2c80bf;color:#fff;border:1px solid #e4e9f2;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.esb-table th.esb-box-heading{padding-left:5px;padding-right:5px;font-size:.86rem;vertical-align:middle}.esb-table th.esb-sort{cursor:pointer}.esb-table th.esb-sort:hover{background:#256fa8}.esb-table th.esb-sort.is-active{background:#f2c75b;color:#443200}.esb-table th.esb-spacer,.esb-table td.esb-spacer,.esb-table tbody tr:nth-child(even) td.esb-spacer{position:relative;width:44px;min-width:44px;padding:0;background:#fff!important;background-color:#fff!important;background-image:none!important;border:0!important;box-shadow:none!important}.esb-table th.esb-spacer::after,.esb-table td.esb-spacer::after{content:"";position:absolute;z-index:2;inset:-2px 0;background:#fff;pointer-events:none}.esb-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.esb-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.esb-table tbody tr:nth-child(even) td{background-color:#f3f6fa}.esb-table td.esb-fund{text-align:left;font-weight:700}.esb-table td.esb-style-box{padding-left:6px;padding-right:6px;font-size:.88rem;font-weight:600}.esb-table td.esb-empty{color:#94a3b8}.esb-table .report-override-cell{white-space:normal}.esb-table .report-override-cell small{display:block;margin-top:4px;color:#64748b;font-size:.66rem;line-height:1.25}@media(max-width:760px){.esb-table{font-size:.86rem}}
       </style>`;
 
     $$('.esb-column-toggle', area).forEach(button => button.addEventListener('click', () => {
@@ -18886,8 +19003,41 @@ const Pages = {
 
   async robustnessNotes(area) {
     let currentDrafts = [];
-    let storageMode = 'local';
+    let storageMode = 'r2';
     let storageWarning = '';
+    const overwritePreferenceKey = 'robustness-snapshot-overwrite-target-v1';
+    let overwriteTarget = readJsonPreference(overwritePreferenceKey, null);
+    const setOverwriteTarget = draft => {
+      overwriteTarget = draft ? {
+        id: draft.id || '',
+        currentQuarter: draft.currentQuarter || '',
+        title: draft.title || draft.name || '',
+        note: draft.note || draft.notes || '',
+        createdAt: draft.createdAt || '',
+      } : null;
+      saveJsonPreference(overwritePreferenceKey, overwriteTarget);
+    };
+    const robustnessR2Request = async (action, payload = {}) => {
+      const session = readAuthSession();
+      if (!r2DataApiUrl()) throw new Error('R2 Data API is not configured');
+      if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับบันทึก Robustness');
+      let url = `${r2DataApiUrl()}/robustness/snapshots`;
+      const options = {method:'GET', headers:{Authorization:`Bearer ${session.sessionToken}`}, cache:'no-store'};
+      if (action === 'list') {
+        if (payload.quarter) url += `?quarter=${encodeURIComponent(payload.quarter)}`;
+      } else if (action === 'get' || action === 'delete') {
+        url += `/${encodeURIComponent(payload.id || '')}?quarter=${encodeURIComponent(payload.quarter || '')}`;
+        options.method = action === 'delete' ? 'DELETE' : 'GET';
+      } else {
+        options.method = 'POST';
+        options.headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify({snapshot:payload.snapshot || payload});
+      }
+      const response = await fetch(url, options);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) throw new Error(data.error || `R2 Robustness API ${action} failed (${response.status})`);
+      return data;
+    };
     const loadLocalDrafts = () => {
       const drafts = readJsonPreference(ROBUSTNESS_DRAFTS_PREF_KEY, []);
       return Array.isArray(drafts) ? drafts : [];
@@ -18997,49 +19147,26 @@ const Pages = {
     const sortDrafts = drafts => [...(Array.isArray(drafts) ? drafts : [])]
       .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
     const loadDrafts = async () => {
-      const localDrafts = loadLocalDrafts();
       try {
-        if (!hasDraftApi() && !shouldUseLocalDraftProxy()) throw new Error('Draft API URL is not configured');
-        const data = await robustDraftApiRequest('list');
-        const driveDrafts = (Array.isArray(data.drafts) ? data.drafts : [])
-          .filter(draft => draft?.draftKind === 'robustness');
-        const driveIds = new Set(driveDrafts.map(draft => String(draft.id || '')));
-        const draftsToMigrate = localDrafts.filter(draft => draft?.id && !driveIds.has(String(draft.id)));
-        for (const draft of draftsToMigrate) {
-          try {
-            await robustDraftApiRequest('save', { draft: { ...draft, draftKind: 'robustness', migratedFromLocalStorage: true } });
-          } catch {
-            /* keep local copy if migration fails */
-          }
-        }
-        if (draftsToMigrate.length) localStorage.removeItem(ROBUSTNESS_DRAFTS_PREF_KEY);
-        storageMode = 'drive';
+        const data = await robustnessR2Request('list');
+        storageMode = 'r2';
         storageWarning = '';
-        if (draftsToMigrate.length) {
-          const migratedData = await robustDraftApiRequest('list');
-          return sortDrafts((Array.isArray(migratedData.drafts) ? migratedData.drafts : []).filter(draft => draft?.draftKind === 'robustness'));
-        }
-        return sortDrafts(driveDrafts);
+        return sortDrafts(Array.isArray(data.snapshots) ? data.snapshots : []);
       } catch (err) {
-        storageMode = 'local';
-        storageWarning = `Draft API ใช้งานไม่ได้: ${err.message || err}`;
-        return sortDrafts(localDrafts);
+        storageMode = 'r2-error';
+        storageWarning = `Cloudflare R2 ใช้งานไม่ได้: ${err.message || err}`;
+        return [];
       }
     };
     const saveDraft = async draft => {
-      if (storageMode === 'drive') return await robustDraftApiRequest('save', { draft });
-      const draftsNow = loadLocalDrafts().filter(item => String(item.id || '') !== String(draft.id || ''));
-      const nextDrafts = sortDrafts([draft, ...draftsNow]);
-      saveLocalDrafts(nextDrafts);
-      return { ok: true, draft, localOnly: true };
+      if (storageMode === 'r2-error') throw new Error('ยังเชื่อมต่อ Cloudflare R2 ไม่สำเร็จ');
+      return await robustnessR2Request('save', {snapshot:draft});
     };
     const deleteDraft = async draft => {
-      if (storageMode === 'drive') return await robustDraftApiRequest('delete', {
+      return await robustnessR2Request('delete', {
         id: draft?.id || '',
         quarter: draft?.currentQuarter || draft?.quarter || '',
       });
-      saveLocalDrafts(loadLocalDrafts().filter(item => String(item.id || '') !== String(draft?.id || '')));
-      return { ok: true, localOnly: true };
     };
     const currentCaptureState = () => readJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY, {}) || {};
     const cleanRows = rows => (Array.isArray(rows) ? rows : [])
@@ -19067,7 +19194,7 @@ const Pages = {
         endDate: allDates[allDates.length - 1] || '',
       };
     };
-    const buildDraftPayload = () => {
+    const buildDraftPayload = (existing = null) => {
       const state = currentCaptureState();
       const summary = captureSummary(state);
       const nowIso = new Date().toISOString();
@@ -19079,7 +19206,7 @@ const Pages = {
         summary.compareSymbols.length ? `${summary.compareSymbols.length} compare` : '',
       ].filter(Boolean).join(' · ');
       return {
-        id: Date.now().toString(),
+        id: existing?.id || Date.now().toString(),
         draftKind: 'robustness',
         avpCategory: 'Robustness Fund',
         fundType: 'Upside Downside Capture',
@@ -19088,9 +19215,9 @@ const Pages = {
         note: noteInput,
         notes: noteInput,
         userDate: new Date().toISOString().slice(0, 10),
-        createdAt: nowIso,
+        createdAt: existing?.createdAt || nowIso,
         updatedAt: nowIso,
-        currentQuarter: State.currentQuarter || '',
+        currentQuarter: existing?.currentQuarter || State.currentQuarter || '',
         state,
         summary,
       };
@@ -19113,7 +19240,7 @@ const Pages = {
         ...((summary.compareFundCodes || []).length ? summary.compareFundCodes : summary.compareSymbols || []).map((item, idx) => `Compare ${idx + 1}: ${item}`),
       ];
       return `
-        <article class="robustness-draft-card" data-id="${esc(draft.id || '')}">
+        <article class="robustness-draft-card${String(overwriteTarget?.id || '') === String(draft.id || '') ? ' is-overwrite-target' : ''}" data-id="${esc(draft.id || '')}">
           <div class="robustness-draft-main">
             <div class="robustness-draft-title">${esc(draft.title || 'Robustness snapshot')}</div>
             <div class="robustness-draft-meta">
@@ -19127,6 +19254,7 @@ const Pages = {
           </div>
           <div class="robustness-draft-actions">
             <button class="btn btn-primary robustness-load-draft" type="button">โหลดไปวิเคราะห์</button>
+            <button class="btn robustness-overwrite-draft robustness-edit-draft" type="button">บันทึกทับ</button>
             <button class="btn btn-ghost robustness-delete-draft" type="button">ลบ</button>
           </div>
         </article>
@@ -19134,24 +19262,17 @@ const Pages = {
     };
     const render = () => {
       const drafts = currentDrafts;
+      const activeOverwriteDraft = drafts.find(draft => String(draft.id || '') === String(overwriteTarget?.id || '')) || null;
+      if (overwriteTarget && !activeOverwriteDraft) setOverwriteTarget(null);
       const currentState = currentCaptureState();
       const summary = captureSummary(currentState);
-      const storageLabel = storageMode === 'drive'
-        ? 'Google Drive JSON'
-        : 'Local snapshot';
+      const storageLabel = storageMode === 'r2-error' ? 'R2 ไม่พร้อมใช้งาน' : 'Cloudflare R2';
       area.innerHTML = `
         <div class="card robustness-notes-card">
-          <div class="robustness-notes-head">
-            <div>
-              <h3>บันทึกข้อมูล Robustness</h3>
-              <p>บันทึกชุดวันที่, Benchmark, สินทรัพย์เปรียบเทียบ และการตั้งค่าจากหน้า Upside Downside Capture</p>
-            </div>
-            <span class="badge badge-data-origin">${esc(storageLabel)}</span>
-          </div>
-          ${storageWarning ? `<div class="robustness-storage-warning">${esc(storageWarning)} · ระบบจะใช้ localStorage สำรองไว้ก่อน</div>` : ''}
           <div class="robustness-notes-grid">
             <section class="robustness-save-panel">
-              <h4>Snapshot ปัจจุบัน</h4>
+              <h4 class="robustness-section-title"><span><span class="robustness-step">1</span> Snapshot ที่จะบันทึก</span><span class="badge badge-data-origin">${esc(storageLabel)}</span></h4>
+              ${storageWarning ? `<div class="robustness-storage-warning">${esc(storageWarning)} · ระบบจะไม่บันทึกลงเครื่องแทน เพื่อป้องกันข้อมูลสับสน</div>` : ''}
               <div class="robustness-summary-grid">
                 <div><span>Benchmark</span><strong>${esc(summary.benchmark)}</strong></div>
                 <div><span>Fund Code</span><strong>${esc(summary.benchmarkFundCode)}</strong></div>
@@ -19166,19 +19287,20 @@ const Pages = {
               </div>
               <label class="robustness-field">
                 <span>ชื่อบันทึก</span>
-                <input id="robustness-draft-title" type="text" placeholder="เช่น Healthcare Cycle Research รอบเดือนนี้">
+                <input id="robustness-draft-title" type="text" value="${esc(activeOverwriteDraft?.title || '')}" placeholder="เช่น Healthcare Cycle Research รอบเดือนนี้">
               </label>
               <label class="robustness-field">
                 <span>หมายเหตุ</span>
-                <textarea id="robustness-draft-note" rows="3" placeholder="ใส่เหตุผล/สมมติฐาน/สิ่งที่ต้องกลับมาดูต่อ"></textarea>
+                <textarea id="robustness-draft-note" rows="3" placeholder="ใส่เหตุผล/สมมติฐาน/สิ่งที่ต้องกลับมาดูต่อ">${esc(activeOverwriteDraft?.note || activeOverwriteDraft?.notes || '')}</textarea>
               </label>
               <div class="robustness-actions">
-                <button class="btn btn-primary" id="robustness-save-draft" type="button">บันทึก Snapshot</button>
+                <button class="btn btn-primary" id="robustness-save-draft" type="button">บันทึกข้อมูล</button>
+                ${activeOverwriteDraft ? '<button class="btn btn-secondary" id="robustness-cancel-overwrite" type="button">ยกเลิกการแก้ไข</button>' : ''}
                 <button class="btn btn-secondary" id="robustness-open-capture" type="button">ไปหน้า Upside Downside Capture</button>
               </div>
             </section>
             <section class="robustness-list-panel">
-              <h4>รายการที่บันทึกไว้ (${drafts.length.toLocaleString()})</h4>
+              <h4><span class="robustness-step">2</span> รายการ Snapshot บน R2 (${drafts.length.toLocaleString()})</h4>
               <div class="robustness-draft-list">
                 ${drafts.length ? drafts.map(renderDraftCard).join('') : '<div class="robustness-empty">ยังไม่มีบันทึก Robustness</div>'}
               </div>
@@ -19187,11 +19309,9 @@ const Pages = {
         </div>
         <style>
           .robustness-notes-card{overflow:hidden}
-          .robustness-notes-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 20px;border-bottom:1px solid var(--border-light)}
-          .robustness-notes-head h3{margin:0;color:var(--text)}
-          .robustness-notes-head p{margin:4px 0 0;color:var(--text-muted)}
-          .robustness-storage-warning{margin:14px 20px 0;padding:9px 12px;border:1px solid #fcd34d;background:#fffbeb;color:#92400e;border-radius:8px;font-weight:700}
-          .robustness-notes-grid{display:grid;grid-template-columns:minmax(360px,0.9fr) minmax(420px,1.1fr);gap:18px;padding:18px 20px}
+          .robustness-storage-warning{margin:0 0 14px;padding:9px 12px;border:1px solid #fcd34d;background:#fffbeb;color:#92400e;border-radius:8px;font-weight:700}
+          .robustness-section-title{display:flex;align-items:center;justify-content:space-between;gap:12px}.robustness-step{display:inline-flex;align-items:center;justify-content:center;width:25px;height:25px;margin-right:7px;border-radius:50%;background:#1f4f86;color:#fff}
+          .robustness-notes-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;padding:18px 20px}
           .robustness-save-panel,.robustness-list-panel{border:1px solid var(--border-light);border-radius:10px;background:#fff;padding:16px}
           .robustness-save-panel h4,.robustness-list-panel h4{margin:0 0 12px;color:var(--text)}
           .robustness-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:14px}
@@ -19207,8 +19327,9 @@ const Pages = {
           .robustness-field span{font-weight:700;color:var(--text-muted)}
           .robustness-field input,.robustness-field textarea{border:1px solid var(--border);border-radius:8px;padding:9px 10px;font:inherit;color:var(--text)}
           .robustness-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
-          .robustness-draft-list{display:flex;flex-direction:column;gap:10px;max-height:680px;overflow:auto}
+          .robustness-draft-list{display:flex;flex-direction:column;gap:10px;max-height:none;overflow:visible}
           .robustness-draft-card{display:flex;gap:12px;justify-content:space-between;border:1px solid var(--border-light);border-radius:10px;padding:13px;background:#fbfdff}
+          .robustness-draft-card.is-overwrite-target{border-color:#f59e0b;box-shadow:0 0 0 2px rgba(245,158,11,.16);background:#fffbeb}
           .robustness-draft-main{min-width:0}
           .robustness-draft-title{font-weight:800;color:var(--text);font-size:1.02rem}
           .robustness-draft-meta{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
@@ -19216,25 +19337,35 @@ const Pages = {
           .robustness-draft-assets{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
           .robustness-draft-note{margin-top:8px;color:var(--text-muted);font-size:0.93rem}
           .robustness-draft-actions{display:flex;flex-direction:column;gap:7px;flex:0 0 auto}
+          .robustness-edit-draft{color:#92400e !important;background:#fef3c7;border:1px solid #f59e0b;font-weight:800}
+          .robustness-edit-draft:hover{color:#78350f !important;background:#fde68a;border-color:#d97706}
           .robustness-delete-draft{color:#ef4444 !important;border-color:#fecaca}
           .robustness-empty{padding:34px;text-align:center;color:var(--text-muted);border:1px dashed var(--border);border-radius:10px;background:#f8fafc}
-          @media(max-width:980px){.robustness-notes-grid{grid-template-columns:1fr}.robustness-draft-card{flex-direction:column}.robustness-draft-actions{flex-direction:row}}
+          @media(max-width:980px){.robustness-draft-card{flex-direction:column}.robustness-draft-actions{flex-direction:row}}
         </style>
       `;
       $('#robustness-save-draft', area)?.addEventListener('click', async () => {
-        const draft = buildDraftPayload();
+        const overwriteDraft = currentDrafts.find(item => String(item.id || '') === String(overwriteTarget?.id || '')) || null;
+        const draft = buildDraftPayload(overwriteDraft);
         const saveBtn = $('#robustness-save-draft', area);
         try {
           if (saveBtn) saveBtn.disabled = true;
           const result = await saveDraft(draft);
           currentDrafts = await loadDrafts();
-          toast(result?.driveUploaded ? 'บันทึก Snapshot Robustness ลง Google Drive แล้ว' : 'บันทึก Snapshot Robustness แล้ว', result?.localOnly ? 'warning' : 'success', 3600);
+          setOverwriteTarget(null);
+          toast(overwriteDraft
+            ? 'บันทึกการแก้ไขลงรายการเดิมแล้ว'
+            : (result?.r2Uploaded ? 'บันทึกข้อมูล Robustness ลง Cloudflare R2 แล้ว' : 'บันทึกข้อมูล Robustness แล้ว'), 'success', 3600);
           render();
         } catch (err) {
           toast(`บันทึก Robustness ไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
         } finally {
           if (saveBtn) saveBtn.disabled = false;
         }
+      });
+      $('#robustness-cancel-overwrite', area)?.addEventListener('click', () => {
+        setOverwriteTarget(null);
+        render();
       });
       $('#robustness-open-capture', area)?.addEventListener('click', () => App.navigate('upside-downside-capture'));
       $('.robustness-draft-list', area)?.addEventListener('click', async event => {
@@ -19244,16 +19375,48 @@ const Pages = {
         const draftsNow = currentDrafts;
         const draft = draftsNow.find(item => String(item.id || '') === id);
         if (!draft) return;
+        if (event.target.closest('.robustness-overwrite-draft')) {
+          const overwriteBtn = event.target.closest('.robustness-overwrite-draft');
+          try {
+            overwriteBtn.disabled = true;
+            overwriteBtn.textContent = 'กำลังบันทึก...';
+            const state = currentCaptureState();
+            const updatedDraft = {
+              ...draft,
+              state,
+              summary: captureSummary(state),
+              updatedAt: new Date().toISOString(),
+            };
+            await saveDraft(updatedDraft);
+            currentDrafts = await loadDrafts();
+            setOverwriteTarget(null);
+            toast('บันทึกทับรายการเดิมแล้ว', 'success', 3000);
+            render();
+          } catch (err) {
+            overwriteBtn.disabled = false;
+            overwriteBtn.textContent = 'บันทึกทับ';
+            toast(`บันทึกทับไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
+          }
+          return;
+        }
         if (event.target.closest('.robustness-load-draft')) {
-          State.upsideDownsideCapture = draft.state || {};
-          saveJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY, draft.state || {});
-          toast('โหลด Snapshot แล้ว', 'success', 2200);
-          App.navigate('upside-downside-capture');
+          try {
+            const detail = await robustnessR2Request('get', {id:draft.id, quarter:draft.currentQuarter || State.currentQuarter || ''});
+            const snapshot = detail.snapshot || {};
+            State.upsideDownsideCapture = snapshot.state || {};
+            saveJsonPreference(UPSIDE_DOWNSIDE_CAPTURE_PREF_KEY, snapshot.state || {});
+            setOverwriteTarget(snapshot);
+            toast('โหลด Snapshot จาก R2 แล้ว', 'success', 2200);
+            App.navigate('upside-downside-capture');
+          } catch (err) {
+            toast(`โหลด Snapshot ไม่สำเร็จ: ${err.message || err}`, 'error', 6000);
+          }
         }
         if (event.target.closest('.robustness-delete-draft')) {
           if (!confirm('ลบบันทึก Robustness นี้?')) return;
           try {
             await deleteDraft(draft);
+            if (String(overwriteTarget?.id || '') === String(draft.id || '')) setOverwriteTarget(null);
             currentDrafts = await loadDrafts();
             toast('ลบบันทึก Robustness แล้ว', 'success', 2200);
             render();
@@ -19265,6 +19428,7 @@ const Pages = {
     };
     setLoading(area, 'กำลังโหลดบันทึก Robustness...');
     currentDrafts = await loadDrafts();
+    setOverwriteTarget(null);
     render();
     App._currentExport = null;
     App._currentTableExport = null;
@@ -20614,8 +20778,10 @@ const Pages = {
     const normalizeFtName = (value = '') => String(value || '').replace(/\s+/g, ' ').trim().toUpperCase();
     const addFtSymbolAvpMatch = (lookup, key, fund) => {
       if (!key || !fund?.code) return;
-      const existing = lookup.get(key) || { codes: new Set(), categories: new Set() };
+      const existing = lookup.get(key) || { codes: new Set(), generalCodes: new Set(), categories: new Set() };
       existing.codes.add(String(fund.code || '').trim());
+      const fundType = String(fund.type || deriveFundType(fund.code) || '').trim();
+      if (/general/i.test(fundType)) existing.generalCodes.add(String(fund.code || '').trim());
       if (fund.category) existing.categories.add(String(fund.category || '').trim());
       lookup.set(key, existing);
     };
@@ -20672,9 +20838,14 @@ const Pages = {
         const sourceLabel = String(payload.source || '').includes('Cloudflare R2')
           ? 'Cloudflare R2 · Data For FT.com/index.json'
           : (payload.source || 'ฐานข้อมูล FT เดิม');
+        const latestQualitativeAsOf = symbols
+          .map(item => String(item.qualitativeAsOf || item.qualitative_as_of || '').slice(0, 10))
+          .filter(Boolean)
+          .sort()
+          .pop() || '';
         if (summary) {
           summary.textContent = symbols.length
-            ? `พบ ${symbols.length.toLocaleString()} symbols ในฐานข้อมูล · ${sourceLabel} · ${health.updatedAt ? `อัปเดต ${health.updatedAt}` : health.text}`
+            ? `พบ ${symbols.length.toLocaleString()} symbols ในฐานข้อมูล · เชิงคุณภาพล่าสุด ${latestQualitativeAsOf || 'ยังไม่มี'} · ${sourceLabel} · ${health.updatedAt ? `อัปเดต ${health.updatedAt}` : health.text}`
             : 'ยังไม่มี symbol ในฐานข้อมูล';
         }
         if (!symbols.length) {
@@ -20684,7 +20855,10 @@ const Pages = {
         const displayRows = symbols.map(item => {
           const matched = avpLookup.byIsin.get(normalizeFtIsin(item.isin || item.symbol))
             || avpLookup.byName.get(normalizeFtName(symbolDisplayName(item)));
-          const fundCodes = matched ? [...matched.codes].filter(Boolean) : [];
+          const generalCodes = matched ? [...(matched.generalCodes || [])].filter(Boolean) : [];
+          const fundCodes = generalCodes.length
+            ? generalCodes
+            : (matched ? [...matched.codes].filter(Boolean) : []);
           const categories = matched ? [...matched.categories].filter(Boolean) : [];
           return {
             fundCodes,
@@ -20695,6 +20869,7 @@ const Pages = {
             rows: Number(item.rowCount || item.rows || 0),
             start: item.startDate || item.start || '',
             end: item.endDate || item.end || '',
+            qualitativeAsOf: String(item.qualitativeAsOf || item.qualitative_as_of || '').slice(0, 10),
           };
         });
         const sortableValue = (row, key) => ({
@@ -20705,6 +20880,7 @@ const Pages = {
           rows: row.rows,
           start: row.start,
           end: row.end,
+          qualitativeAsOf: row.qualitativeAsOf,
         })[key];
         const sortedRows = sortState.key
           ? [...displayRows].sort((a, b) => compareValues(sortableValue(a, sortState.key), sortableValue(b, sortState.key), sortState.dir))
@@ -20720,6 +20896,7 @@ const Pages = {
                 <col class="ft-symbol-col-rows">
                 <col class="ft-symbol-col-date">
                 <col class="ft-symbol-col-date">
+                <col class="ft-symbol-col-qualitative-date">
               </colgroup>
               <thead>
                 <tr>
@@ -20730,6 +20907,7 @@ const Pages = {
                   ${sortHeader('rows', 'Rows')}
                   ${sortHeader('start', 'Start')}
                   ${sortHeader('end', 'End')}
+                  ${sortHeader('qualitativeAsOf', 'เชิงคุณภาพล่าสุด')}
                 </tr>
               </thead>
               <tbody>
@@ -20742,20 +20920,24 @@ const Pages = {
                     <td class="td-num">${int(row.rows || 0)}</td>
                     <td>${esc(row.start || '')}</td>
                     <td>${esc(row.end || '')}</td>
+                    <td>${esc(row.qualitativeAsOf || '—')}</td>
                   </tr>
                 `).join('')}
               </tbody>
             </table>
           </div>
           <style>
-            .ft-symbol-table{min-width:1180px;table-layout:fixed}
+            .ft-symbol-table{min-width:1420px;table-layout:fixed}
             .ft-symbol-table-wrap{max-height:min(70vh, 720px)}
-            .ft-symbol-col-code{width:250px}
-            .ft-symbol-col-category{width:120px}
-            .ft-symbol-col-symbol{width:170px}
-            .ft-symbol-col-name{width:auto}
+            .ft-symbol-col-code{width:180px}
+            .ft-symbol-col-category{width:130px}
+            .ft-symbol-col-symbol{width:180px}
+            .ft-symbol-col-name{width:430px}
             .ft-symbol-col-rows{width:90px}
             .ft-symbol-col-date{width:120px}
+            .ft-symbol-col-qualitative-date{width:150px}
+            .ft-symbol-table th:nth-child(1),.ft-symbol-table td:nth-child(1){width:180px;min-width:180px;max-width:180px}
+            .ft-symbol-table th:nth-child(4),.ft-symbol-table td:nth-child(4){width:430px;min-width:430px;max-width:430px}
             .ft-symbol-sort{cursor:pointer;user-select:none}
             .ft-symbol-sort:hover{background:#315d96}
             .ft-symbol-sort.is-active{background:#f7d774;color:#4e3500;border-color:#d79a12}
@@ -20873,7 +21055,7 @@ const Pages = {
           </div>
           <div class="toolbar">
             <button class="btn btn-secondary btn-sm" id="ft-run-all-ytd" type="button">ดึงราคา YTD ทั้งหมด</button>
-            <button class="btn btn-secondary btn-sm" id="ft-run-all-qualitative" type="button">ดึงเชิงคุณภาพทั้งหมด</button>
+            <button class="btn btn-secondary btn-sm" id="ft-run-all-qualitative" type="button">ดึงเชิงคุณภาพล่าสุดทั้งหมด</button>
             <button class="btn btn-secondary btn-sm" id="ft-refresh-symbols" type="button">↻ รีเฟรชฐานข้อมูล</button>
           </div>
         </div>
@@ -21077,7 +21259,7 @@ const Pages = {
       } finally {
         if (runBtn) {
           runBtn.disabled = false;
-          runBtn.textContent = 'ดึงเชิงคุณภาพทั้งหมด';
+          runBtn.textContent = 'ดึงเชิงคุณภาพล่าสุดทั้งหมด';
         }
       }
     });
@@ -21274,7 +21456,7 @@ const Pages = {
 
   async upsideDownsideCapture(area) {
     const pageKey = 'upside-downside-capture';
-    setLoading(area, 'กำลังโหลดข้อมูล Historical Prices จาก Google Drive JSON...');
+    setLoading(area, 'กำลังโหลดรายการ Historical Prices จาก Cloudflare R2...');
 
     const pct = (value) => Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : '-';
     const num = (value, digits = 2) => Number.isFinite(value) ? Number(value).toLocaleString(undefined, { maximumFractionDigits: digits, minimumFractionDigits: digits }) : '-';
@@ -21282,22 +21464,21 @@ const Pages = {
 
     let payload;
     try {
-      payload = await loadFtHistoricalPayloadForPage(5000);
+      payload = await loadFtR2Index();
     } catch (err) {
       area.innerHTML = `
         <div class="card">
           <div class="state-box">
             <div class="state-icon">!</div>
-            <strong>ยังโหลดข้อมูล FT จาก Google Drive JSON ไม่ได้</strong>
-            <p>${esc(err.message || 'กรุณาตรวจว่า ft_historical_prices_database.json ถูกสร้างใน Drive แล้ว')}</p>
+            <strong>ยังโหลดข้อมูล FT จาก Cloudflare R2 ไม่ได้</strong>
+            <p>${esc(err.message || 'กรุณาตรวจ Data For FT.com/index.json ใน R2')}</p>
           </div>
         </div>`;
       return;
     }
 
     const symbols = payload.symbols || [];
-    const rows = payload.prices || payload.rows || [];
-    const profileRows = payload.profile || [];
+    let rows = [];
     const normalizeUcIsin = (value = '') => String(value || '').split(':')[0].replace(/\s+/g, '').trim().toUpperCase();
     const normalizeUcName = (value = '') => String(value || '').replace(/\s+/g, ' ').trim().toUpperCase();
     const addUcAvpMatch = (lookup, key, category) => {
@@ -21372,6 +21553,14 @@ const Pages = {
     const defaultSymbol = symbolOptions.includes(savedBenchmark)
       ? savedBenchmark
       : (payload.selectedSymbol || symbolOptions[0] || '');
+    if (defaultSymbol) {
+      try {
+        rows = await loadFtR2PriceRows(defaultSymbol, symbolMetaBySymbol.get(defaultSymbol) || {});
+      } catch (err) {
+        area.innerHTML = `<div class="card"><div class="state-box"><div class="state-icon">!</div><strong>โหลด Price Shards จาก R2 ไม่สำเร็จ</strong><p>${esc(err.message || err)}</p></div></div>`;
+        return;
+      }
+    }
     const selectedRowsForStats = rows
       .filter(row => row.symbol === defaultSymbol && row.date && Number.isFinite(Number(row.close)))
       .sort((a, b) => String(a.date).localeCompare(String(b.date)));
@@ -21443,7 +21632,14 @@ const Pages = {
       { value: '#f97316', label: 'ส้มสด' },
       { value: '#c026d3', label: 'ชมพูม่วง' },
       { value: '#64748b', label: 'เทา slate' },
+      { value: '#06b6d4', label: 'ฟ้า cyan' },
+      { value: '#65a30d', label: 'เขียว lime' },
+      { value: '#92400e', label: 'น้ำตาล' },
+      { value: '#db2777', label: 'ชมพู rose' },
+      { value: '#4338ca', label: 'คราม indigo' },
     ];
+    const MAX_UPSIDE_DOWNSIDE_ASSETS = 15;
+    const MAX_UPSIDE_DOWNSIDE_COMPARE_ASSETS = MAX_UPSIDE_DOWNSIDE_ASSETS - 1;
     const chartColorPickerHtml = (inputClass, selectedColor = '', inputId = '') => {
       const selected = chartColorPalette.some(color => color.value === selectedColor)
         ? selectedColor
@@ -21529,7 +21725,9 @@ const Pages = {
       : Array.from({ length: 5 }, () => ['', '', '']);
     while (initialDateRows.length < 1) initialDateRows.push(['', '', '']);
     const initialCompareSymbols = Array.isArray(savedUcState?.compareSymbols)
-      ? savedUcState.compareSymbols.filter(symbol => symbolOptions.includes(symbol))
+      ? savedUcState.compareSymbols
+          .filter(symbol => symbolOptions.includes(symbol))
+          .slice(0, MAX_UPSIDE_DOWNSIDE_COMPARE_ASSETS)
       : [];
     const initialBenchmarkFundCode = String(savedUcState?.benchmarkFundCode || '').trim() || resolveFundCodeForSymbol(defaultSymbol);
     const initialCompareFundCodes = Array.isArray(savedUcState?.compareFundCodes)
@@ -21679,8 +21877,9 @@ const Pages = {
 
     const lookupClose = async (symbol, dateValue) => {
       if (!symbol || !dateValue) return null;
-      const localMatch = [...localPriceRows]
-        .filter(row => row.symbol === symbol && row.date <= dateValue)
+      const symbolRows = await getSymbolPriceRows(symbol);
+      const localMatch = [...symbolRows]
+        .filter(row => row.date <= dateValue)
         .pop();
       if (localMatch) {
         return {
@@ -21690,26 +21889,13 @@ const Pages = {
           source: 'loaded-page',
         };
       }
-      const url = `/api/ft-price-on-date?symbol=${encodeURIComponent(symbol)}&date=${encodeURIComponent(dateValue)}`;
-      const resp = await fetch(url, { cache: 'no-store' });
-      const data = await resp.json().catch(() => ({}));
-      if (resp.status === 404) {
-        throw new Error('ไม่พบ API /api/ft-price-on-date กรุณา restart fund_server.py');
-      }
-      if (!resp.ok || data.ok === false) throw new Error(data.error || `โหลด NAV ไม่สำเร็จ (${resp.status})`);
-      return data.price || null;
+      return null;
     };
 
     const getSymbolPriceRows = async (symbol) => {
       if (!symbol) return [];
       if (symbolRowsCache.has(symbol)) return symbolRowsCache.get(symbol);
-      const url = `/api/ft-historical-prices?symbol=${encodeURIComponent(symbol)}&limit=5000`;
-      const resp = await fetch(url, { cache: 'no-store' });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok || data.ok === false) throw new Error(data.error || `โหลดราคา ${symbol} ไม่สำเร็จ`);
-      const priceRows = (data.rows || [])
-        .filter(row => row.symbol && row.date && Number.isFinite(Number(row.close)))
-        .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      const priceRows = await loadFtR2PriceRows(symbol, symbolMetaBySymbol.get(symbol) || {});
       symbolRowsCache.set(symbol, priceRows);
       return priceRows;
     };
@@ -21931,7 +22117,15 @@ const Pages = {
         const idx = nearestIndex(dateAtX(Math.max(padLeft, Math.min(padLeft + chartWidth, svgX))));
         const selectedX = xAtTime(dateTimes[idx]);
         const tooltipWidth = 360;
-        const tooltipX = Math.max(padLeft, Math.min(padLeft + chartWidth - tooltipWidth, selectedX + 10));
+        const tooltipGap = 12;
+        const pointerIsOnRightHalf = selectedX > padLeft + (chartWidth / 2);
+        const preferredTooltipX = pointerIsOnRightHalf
+          ? selectedX - tooltipWidth - tooltipGap
+          : selectedX + tooltipGap;
+        const tooltipX = Math.max(
+          padLeft,
+          Math.min(padLeft + chartWidth - tooltipWidth, preferredTooltipX),
+        );
         const parts = dates[idx].split('-');
         const label = parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : dates[idx];
         const valueRows = visibleSeries.map(item => {
@@ -22502,8 +22696,12 @@ const Pages = {
       try {
         const price = await lookupClose(symbol, dateValue);
         if (!price) {
+          const meta = symbolMetaBySymbol.get(symbol) || {};
+          const firstAvailableDate = String(meta.priceStart || meta.startDate || '').slice(0, 10);
           navInput.placeholder = '-';
-          actualEl.textContent = 'ไม่มีข้อมูลก่อนวันที่นี้';
+          actualEl.textContent = firstAvailableDate
+            ? `ข้อมูลราคาเริ่ม ${firstAvailableDate}`
+            : 'ไม่มีข้อมูลก่อนวันที่นี้';
           updateCaptureCalculations(rowEl);
           if (rowEl.matches('tr[data-uc-row]')) refreshComparisonCalculations();
           return;
@@ -22642,10 +22840,35 @@ const Pages = {
       });
     }
 
+    const updateCompareAssetLimit = () => {
+      const compareCount = $$('.uc-compare-block', area).length;
+      const addButton = $('#uc-add-compare-asset', area);
+      if (!addButton) return;
+      addButton.disabled = compareCount >= MAX_UPSIDE_DOWNSIDE_COMPARE_ASSETS;
+      addButton.textContent = compareCount >= MAX_UPSIDE_DOWNSIDE_COMPARE_ASSETS
+        ? `ครบ ${MAX_UPSIDE_DOWNSIDE_ASSETS} สินทรัพย์แล้ว`
+        : `เพิ่มสินทรัพย์เปรียบเทียบ (${compareCount + 1}/${MAX_UPSIDE_DOWNSIDE_ASSETS})`;
+    };
+    updateCompareAssetLimit();
+
     const refreshBenchmarkLabels = () => {
       const symbol = $('#uc-benchmark-select', area)?.value || defaultSymbol || '-';
       $$('.uc-benchmark-cell', area).forEach(cell => {
         cell.textContent = symbolLabel(symbol);
+      });
+    };
+
+    const applyBenchmarkDateLimits = () => {
+      const symbol = $('#uc-benchmark-select', area)?.value || defaultSymbol || '';
+      const meta = symbolMetaBySymbol.get(symbol) || {};
+      const minDate = String(meta.priceStart || meta.startDate || '').slice(0, 10);
+      const maxDate = String(meta.priceEnd || meta.endDate || '').slice(0, 10);
+      $$('#uc-cycle-body .uc-date', area).forEach(input => {
+        if (minDate) input.min = minDate;
+        else input.removeAttribute('min');
+        if (maxDate) input.max = maxDate;
+        else input.removeAttribute('max');
+        input.title = minDate && maxDate ? `ข้อมูลราคามีช่วง ${minDate} ถึง ${maxDate}` : '';
       });
     };
 
@@ -22667,6 +22890,7 @@ const Pages = {
         benchmarkFundCodeInput.value = resolveFundCodeForSymbol($('#uc-benchmark-select', area)?.value || defaultSymbol);
       }
       refreshBenchmarkLabels();
+      applyBenchmarkDateLimits();
       renderResearchSummary();
       $$('#uc-cycle-body tr[data-uc-row]', area).forEach(rowEl => {
         [1, 2, 3].forEach(point => updateCaptureCell(rowEl, String(point)));
@@ -22716,6 +22940,7 @@ const Pages = {
         body.insertAdjacentHTML('beforeend', captureRowHtml(rowIdx));
       }
       refreshBenchmarkLabels();
+      applyBenchmarkDateLimits();
       refreshChartRowOptions();
       syncComparisonBlocks();
       renderResearchSummary();
@@ -22726,10 +22951,24 @@ const Pages = {
     $('#uc-add-compare-asset', area)?.addEventListener('click', () => {
       const container = $('#uc-compare-assets', area);
       if (!container) return;
-      const compareIdx = container.querySelectorAll('.uc-compare-block').length + 1;
+      if (container.querySelectorAll('.uc-compare-block').length >= MAX_UPSIDE_DOWNSIDE_COMPARE_ASSETS) {
+        toast(`เปรียบเทียบได้สูงสุด ${MAX_UPSIDE_DOWNSIDE_ASSETS} สินทรัพย์รวม Benchmark`, 'warning', 2600);
+        return;
+      }
+      const usedCompareIds = new Set(
+        [...container.querySelectorAll('.uc-compare-block')]
+          .map(block => Number(block.dataset.ucCompareId || 0))
+          .filter(Boolean),
+      );
+      const compareIdx = Array.from(
+        { length: MAX_UPSIDE_DOWNSIDE_COMPARE_ASSETS },
+        (_, index) => index + 1,
+      ).find(index => !usedCompareIds.has(index));
+      if (!compareIdx) return;
       container.insertAdjacentHTML('beforeend', compareBlockHtml(compareIdx));
       const blockEl = container.lastElementChild;
       if (blockEl) updateComparisonBlock(blockEl);
+      updateCompareAssetLimit();
       renderResearchSummary();
       saveUcState();
       renderNavChart();
@@ -22796,6 +23035,7 @@ const Pages = {
       if (!removeBtn) return;
       const blockEl = removeBtn.closest('.uc-compare-block');
       if (blockEl) blockEl.remove();
+      updateCompareAssetLimit();
       renderResearchSummary();
       saveUcState();
       renderNavChart();
@@ -22843,6 +23083,7 @@ const Pages = {
 
     refreshChartRowOptions();
     refreshBenchmarkLabels();
+    applyBenchmarkDateLimits();
     $$('#uc-cycle-body tr[data-uc-row]', area).forEach(rowEl => {
       [1, 2, 3].forEach(point => {
         if ($(`.uc-date[data-point="${point}"]`, rowEl)?.value) {
@@ -22865,7 +23106,9 @@ const Pages = {
      ───────────────────────────────────────────────────────── */
   async masterMenu02V3(area, pageKey = 'master-placeholder-8') {
     const isLocalFtPage = pageKey === 'ft-top10-holding';
-    const fundColors  = ['#1a3c6e','#e8a317','#2d9e6b','#d63b3b','#4a90d9','#8b5cf6','#f59e0b','#10b981'];
+    const MAX_COMPARE_ASSETS = 15;
+    const INITIAL_VISIBLE_ASSETS = 4;
+    const fundColors  = ['#1a3c6e','#e8a317','#2d9e6b','#d63b3b','#4a90d9','#8b5cf6','#f59e0b','#10b981','#0ea5e9','#ec4899','#84cc16','#f97316','#6366f1','#14b8a6','#a855f7'];
     const holdingsPalette = ['#1a3c6e','#2d9e6b','#8b5cf6','#e8a317','#4a90d9','#d63b3b','#5bb98c','#f3a93b','#6d8fd8','#c84a42','#7c5ce0','#5ca475'];
 
     setLoading(area, 'กำลังเตรียม Multi-Fund Compare Dashboard...');
@@ -22995,7 +23238,7 @@ const Pages = {
     const getSelections = () => {
       const thai = [];
       const iShareEl = area.querySelector('#v3-sel-0');
-      for (let i = 1; i <= 7; i++) {
+      for (let i = 1; i < MAX_COMPARE_ASSETS; i++) {
         const el = area.querySelector(`#v3-sel-${i}`);
         thai.push(el ? el.value.trim() : '');
       }
@@ -23012,11 +23255,15 @@ const Pages = {
 
     // ── Default selections from existing universe ──
     const defaultThaiCodes = Array.isArray(savedV3State?.selections?.thai) && savedV3State.selections.thai.length
-      ? savedV3State.selections.thai.slice(0, 7)
+      ? savedV3State.selections.thai.slice(0, MAX_COMPARE_ASSETS - 1)
       : (isLocalFtPage
-          ? ftSymbolItems.slice(1, 8).map(item => item.symbol)
-          : thaiCodes.slice(0, 7).map(item => item.code));
-    while (defaultThaiCodes.length < 7) defaultThaiCodes.push('');
+          ? ftSymbolItems.slice(1, INITIAL_VISIBLE_ASSETS).map(item => item.symbol)
+          : thaiCodes.slice(0, INITIAL_VISIBLE_ASSETS - 1).map(item => item.code));
+    while (defaultThaiCodes.length < MAX_COMPARE_ASSETS - 1) defaultThaiCodes.push('');
+    let visibleSelectorCount = Math.max(
+      INITIAL_VISIBLE_ASSETS,
+      Math.min(MAX_COMPARE_ASSETS, Number(savedV3State?.visibleSelectorCount || INITIAL_VISIBLE_ASSETS)),
+    );
     const savedFtSymbol = String(savedV3State?.selections?.iShare || '').trim();
     const selectedFtSymbol = ftSymbolMeta.has(savedFtSymbol) ? savedFtSymbol : '';
     const buildFtSymbolOptions = (selectedSymbol = '') => ftSymbolItems.length
@@ -23045,12 +23292,15 @@ const Pages = {
             </optgroup>
           `).join('');
         })()
-      : '<option value="">ยังไม่มีข้อมูล FT qualitative ในเครื่อง</option>';
+      : '<option value="">ยังไม่มีข้อมูล FT qualitative บน R2</option>';
 
     // ── Selector Card HTML builder ──
     const selectorCard = (idx, color, label, inputHtml) => `
       <div style="background:#fff;border-radius:12px;border:1px solid var(--border);border-top:3px solid ${color};padding:12px 14px;display:flex;flex-direction:column;gap:6px;">
-        <div style="font-size:0.88rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;">${label}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div style="font-size:0.88rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;">${label}</div>
+          ${idx > 0 ? `<button class="v3-remove-selector" data-v3-remove-selector="${idx}" type="button" title="ลบสินทรัพย์นี้" aria-label="ลบสินทรัพย์นี้" style="width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #fecaca;border-radius:7px;background:#fff;color:#dc2626;font-size:17px;line-height:1;cursor:pointer;flex:0 0 26px;">×</button>` : ''}
+        </div>
         ${inputHtml}
         <div id="v3-card-info-${idx}" style="font-size:0.84rem;color:var(--text-muted);min-height:18px;"></div>
       </div>`;
@@ -23062,8 +23312,8 @@ const Pages = {
       </select>`
     );
 
-    const thaiCards = defaultThaiCodes.map((def, i) => selectorCard(
-      i + 1, fundColors[i + 1], `กองทุนไทย #${i + 1}`,
+    const thaiCards = defaultThaiCodes.map((def, i) => `<div class="v3-selector-slot" data-v3-selector-slot="${i + 1}" style="display:${i + 1 < visibleSelectorCount ? '' : 'none'};">${selectorCard(
+      i + 1, fundColors[i + 1], isLocalFtPage ? `สินทรัพย์ #${i + 2}` : `กองทุนไทย #${i + 1}`,
       isLocalFtPage
         ? `<select id="v3-sel-${i + 1}" style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:0.92rem;font-weight:600;color:var(--primary-dark);background:#fff;cursor:pointer;">
             <option value="">-- เลือกจาก FT qualitative --</option>
@@ -23075,7 +23325,7 @@ const Pages = {
           autocomplete="off"
           style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid var(--border);font-size:0.92rem;font-weight:600;color:var(--primary-dark);background:#fff;box-sizing:border-box;cursor:pointer;" />
       </div>`
-    )).join('');
+    )}</div>`).join('');
 
     // ── Main HTML ──
     area.innerHTML = `
@@ -23091,7 +23341,7 @@ const Pages = {
             <div class="thv2-panel-head">
               <div>
                 <h3>เลือกกองทุนที่ต้องการเปรียบเทียบ</h3>
-                <p>${isLocalFtPage ? 'อ่านข้อมูลจาก FT qualitative local snapshot โดยอัตโนมัติเมื่อเลือกกองทุน' : 'ช่องที่ 1: iShare Index (Dropdown) &nbsp;|&nbsp; ช่องที่ 2-8: กองทุนไทย (พิมพ์หรือเลือกจาก Dropdown)'}</p>
+                <p>${isLocalFtPage ? 'อ่านข้อมูล FT qualitative จาก Cloudflare R2 โดยอัตโนมัติเมื่อเลือกกองทุน' : 'ช่องที่ 1: iShare Index (Dropdown) &nbsp;|&nbsp; ช่องที่ 2-8: กองทุนไทย (พิมพ์หรือเลือกจาก Dropdown)'}</p>
               </div>
               <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
                 ${isLocalFtPage ? '' : `<button id="v3-load-btn" class="btn btn-primary" type="button" style="white-space:nowrap;">
@@ -23103,9 +23353,13 @@ const Pages = {
                 </div>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+            <div id="v3-selector-grid" style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;">
               ${iShareCard}
               ${thaiCards}
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+              <button id="v3-add-selector" class="btn btn-secondary" type="button"${visibleSelectorCount >= MAX_COMPARE_ASSETS ? ' disabled' : ''}>+ เพิ่มสินทรัพย์เปรียบเทียบ</button>
+              <span id="v3-selector-count" style="font-size:0.88rem;color:var(--text-muted);">แสดง ${visibleSelectorCount} / ${MAX_COMPARE_ASSETS} สินทรัพย์</span>
             </div>
           </section>
 
@@ -23118,8 +23372,9 @@ const Pages = {
                   <p>การถือครองหลัก 10 อันดับแรกของแต่ละกองทุน (% น้ำหนัก)</p>
                 </div>
               </div>
-              <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:0.92rem;">
+              <div class="v3-holdings-scroll" style="overflow-x:auto;overscroll-behavior-inline:contain;">
+                <table id="v3-holdings-table" style="width:100%;border-collapse:collapse;font-size:0.92rem;table-layout:fixed;">
+                  <colgroup id="v3-holdings-colgroup"></colgroup>
                   <thead id="v3-holdings-thead"></thead>
                   <tbody id="v3-holdings-tbody"></tbody>
                 </table>
@@ -23181,7 +23436,7 @@ const Pages = {
         </div>
       </div>`;
 
-    for (let si = 1; si <= 7; si++) {
+    for (let si = 1; si < MAX_COMPARE_ASSETS; si++) {
       const inp = area.querySelector(`#v3-sel-${si}`);
       if (!inp) continue;
       inp.addEventListener('change', () => { inp._v3prev = inp.value; });
@@ -23197,6 +23452,40 @@ const Pages = {
       });
     }
     area.querySelector('#v3-sel-0')?.addEventListener('change', () => { saveV3State({ selections: getSelections() }); });
+    const refreshSelectorVisibility = () => {
+      area.querySelectorAll('[data-v3-selector-slot]').forEach(slot => {
+        const idx = Number(slot.dataset.v3SelectorSlot || 0);
+        slot.style.display = idx < visibleSelectorCount ? '' : 'none';
+      });
+      const addButton = area.querySelector('#v3-add-selector');
+      if (addButton) addButton.disabled = visibleSelectorCount >= MAX_COMPARE_ASSETS;
+      const countLabel = area.querySelector('#v3-selector-count');
+      if (countLabel) countLabel.textContent = `แสดง ${visibleSelectorCount} / ${MAX_COMPARE_ASSETS} สินทรัพย์`;
+    };
+    area.querySelector('#v3-add-selector')?.addEventListener('click', () => {
+      visibleSelectorCount = Math.min(MAX_COMPARE_ASSETS, visibleSelectorCount + 1);
+      refreshSelectorVisibility();
+      saveV3State({ visibleSelectorCount, selections: getSelections() });
+      if (isLocalFtPage) renderLocalFtData();
+    });
+    area.querySelector('#v3-selector-grid')?.addEventListener('click', event => {
+      const removeButton = event.target.closest('[data-v3-remove-selector]');
+      if (!removeButton || visibleSelectorCount <= 1) return;
+      const removedIndex = Number(removeButton.dataset.v3RemoveSelector || 0);
+      if (!removedIndex || removedIndex >= visibleSelectorCount) return;
+      for (let idx = removedIndex; idx < visibleSelectorCount - 1; idx++) {
+        const current = area.querySelector(`#v3-sel-${idx}`);
+        const next = area.querySelector(`#v3-sel-${idx + 1}`);
+        if (current) current.value = next?.value || '';
+      }
+      const lastInput = area.querySelector(`#v3-sel-${visibleSelectorCount - 1}`);
+      if (lastInput) lastInput.value = '';
+      visibleSelectorCount = Math.max(1, visibleSelectorCount - 1);
+      area.querySelectorAll('[id^="v3-card-info-"]').forEach(info => { info.textContent = ''; });
+      refreshSelectorVisibility();
+      saveV3State({ visibleSelectorCount, selections: getSelections() });
+      if (isLocalFtPage) renderLocalFtData();
+    });
 
     // ── Chart registry ──
     const chartReg = {};
@@ -23285,14 +23574,22 @@ const Pages = {
       // Top 10 Holdings comparison table
       const holdThead = document.getElementById('v3-holdings-thead');
       const holdTbody = document.getElementById('v3-holdings-tbody');
+      const holdTable = document.getElementById('v3-holdings-table');
+      const holdColgroup = document.getElementById('v3-holdings-colgroup');
       const MAX_HOLD = 10;
+      const holdingFundColumnWidth = 260;
+      if (holdTable) holdTable.style.minWidth = `${72 + (data.length * holdingFundColumnWidth)}px`;
+      if (holdColgroup) holdColgroup.innerHTML = `
+        <col style="width:72px;min-width:72px;">
+        ${data.map(() => `<col style="width:${holdingFundColumnWidth}px;min-width:${holdingFundColumnWidth}px;">`).join('')}
+      `;
       if (holdThead) holdThead.innerHTML = `
         <tr style="background:#1a3c6e;color:#fff;font-size:0.86rem;">
           <th style="padding:10px 10px;text-align:center;min-width:36px;border-right:1px solid rgba(255,255,255,0.15);background:transparent;font-weight:700;">#</th>
-          ${data.map(f => `<th style="padding:10px 10px;text-align:center;font-weight:700;min-width:190px;max-width:260px;white-space:normal;line-height:1.3;vertical-align:middle;">
+          ${data.map(f => `<th style="padding:10px 10px;text-align:center;font-weight:700;width:${holdingFundColumnWidth}px;min-width:${holdingFundColumnWidth}px;white-space:normal;line-height:1.3;vertical-align:middle;">
             <span style="display:inline-flex;align-items:flex-start;justify-content:center;gap:6px;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">
               <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${f.color};margin-top:5px;opacity:0.9;flex:0 0 7px;"></span>
-              <span style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${esc((f._selectorName || f.name).split('–')[0].trim())}</span>
+              <span style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${esc((f._selectorName || f.name).split('–')[0].trim())}</span>
             </span>
           </th>`).join('')}
         </tr>`;
@@ -23307,7 +23604,7 @@ const Pages = {
             const combinedText = [name, holdingSymbol, wt].filter(Boolean).join(' · ');
             return `<td style="padding:8px 10px;font-size:0.86rem;color:var(--text);">
               <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;width:100%;min-width:0;" title="${esc(combinedText)}">
-                <span style="min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;">${esc(name)}</span>
+                <span style="min-width:0;white-space:normal;overflow-wrap:anywhere;word-break:break-word;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${esc(name)}</span>
                 ${wt ? `<span style="margin-left:auto;white-space:nowrap;font-size:0.88rem;color:var(--text-muted);font-weight:700;flex-shrink:0;text-align:right;">${esc(wt)}</span>` : ''}
               </div>
             </td>`;
@@ -23480,9 +23777,9 @@ const Pages = {
 
       return rawRows
         .map((item) => {
-          const name = item?.companyName || item?.name || item?.company || item?.holding || '';
+          const name = item?.companyName || item?.holdingName || item?.holding_name || item?.name || item?.company || item?.holding || '';
           const weightNum = (() => {
-            const candidates = [item?.weight, item?.percent, item?.weightPercent, item?.portfolioWeight];
+            const candidates = [item?.weight, item?.percent, item?.weightPercent, item?.portfolioWeight, item?.portfolio_weight];
             for (const candidate of candidates) {
               const parsed = parseFloat(String(candidate ?? '').replace(/%/g, '').trim());
               if (!Number.isNaN(parsed)) return parsed;
@@ -23507,29 +23804,7 @@ const Pages = {
       const cleanSymbol = String(symbol || '').trim();
       if (!cleanSymbol) return null;
       try {
-        if (r2DataApiUrl()) {
-          try {
-            return await loadFtR2Qualitative(cleanSymbol);
-          } catch (r2Error) {
-            console.warn(`FT qualitative R2 fallback for ${cleanSymbol}`, r2Error);
-          }
-        }
-        if (ftHistoricalApiUrl()) {
-          const payload = await loadFtHistoricalDatabase();
-          return getFtQualitativeFromPayload(payload, cleanSymbol);
-        }
-        const resp = await fetch(`/api/ft-historical-prices?symbol=${encodeURIComponent(cleanSymbol)}&limit=1`, { cache: 'no-store' });
-        const payload = await resp.json().catch(() => ({}));
-        if (!resp.ok || payload.ok === false) return null;
-        const profileMap = Object.fromEntries((payload.profile || []).map(row => [row.field, row.value]));
-        return {
-          symbol: payload.selectedSymbol || cleanSymbol,
-          displayName: payload.selectedDisplayName || profileMap['FT display name'] || '',
-          profile: payload.profile || [],
-          profileMap,
-          risk: payload.risk || [],
-          holdings: payload.holdings || [],
-        };
+        return await loadFtR2Qualitative(cleanSymbol);
       } catch {
         return null;
       }
@@ -23555,7 +23830,9 @@ const Pages = {
           color: fundColors[0],
         });
       }
-      for (let fi = 1; fi <= 7; fi++) {
+      for (let fi = 1; fi < MAX_COMPARE_ASSETS; fi++) {
+        const slot = area.querySelector(`[data-v3-selector-slot="${fi}"]`);
+        if (slot?.style.display === 'none') continue;
         const inp = area.querySelector(`#v3-sel-${fi}`);
         const code = inp?.value?.trim() || '';
         if (code && !code.startsWith('กองทุนไทย #')) {
@@ -23605,14 +23882,14 @@ const Pages = {
       _feesExit: null,
       _manager: null,
       _topHoldings: (ft?.holdings || []).map(item => ({
-        name: item.holdingName || '',
-        companyName: item.holdingName || '',
-        symbol: item.holdingSymbol || '',
-        weight: parseFloat(String(item.portfolioWeight || '').replace(/%/g, '').trim()),
-        weightText: item.portfolioWeight || '',
-        oneYearChange: item.oneYearChange || '',
-        top10PortfolioPercent: item.top10PortfolioPercent || '',
-        asOfDate: item.asOfDate || '',
+        name: item.holdingName || item.holding_name || '',
+        companyName: item.holdingName || item.holding_name || '',
+        symbol: item.holdingSymbol || item.holding_symbol || '',
+        weight: parseFloat(String(item.portfolioWeight || item.portfolio_weight || '').replace(/%/g, '').trim()),
+        weightText: item.portfolioWeight || item.portfolio_weight || '',
+        oneYearChange: item.oneYearChange || item.one_year_change || '',
+        top10PortfolioPercent: item.top10PortfolioPercent || item.top10_portfolio_percent || '',
+        asOfDate: item.asOfDate || item.as_of_date || '',
       })).filter(item => item.name),
       _ftSymbol: ft?.symbol || '',
       _ftDisplayName: ft?.displayName || '',
@@ -23636,7 +23913,7 @@ const Pages = {
       if (statusEl) {
         statusEl.style.background = 'var(--primary-faint)';
         statusEl.style.color = 'var(--primary)';
-        statusEl.textContent = `กำลังอ่าน FT qualitative จาก ${ftHistoricalApiUrl() ? 'Google Drive JSON' : 'Local'} (${fundList.length} กองทุน)...`;
+        statusEl.textContent = `กำลังอ่าน FT qualitative จาก Cloudflare R2 (${fundList.length} กองทุน)...`;
       }
       const ftCalls = await Promise.allSettled(fundList.map(f => loadFtQualitative(f.isin)));
       const liveData = fundList.map((fund, index) => {
@@ -23676,7 +23953,7 @@ const Pages = {
       area.querySelector('#v3-sel-0')?.addEventListener('change', () => {
         renderLocalFtData();
       });
-      for (let si = 1; si <= 7; si++) {
+      for (let si = 1; si < MAX_COMPARE_ASSETS; si++) {
         area.querySelector(`#v3-sel-${si}`)?.addEventListener('change', () => {
           renderLocalFtData();
         });
@@ -24157,7 +24434,7 @@ const App = {
       'income-fund-2': { title: 'Income Fund 2', subtitle: 'Focus Group จากกองที่ติ๊กไว้ใน Income Fund พร้อมประวัติปันผล SEC/Finnomena' },
       'robustness-ft-import': { title: 'เตรียมข้อมูลจาก FT.com', subtitle: 'เตรียม Historical Prices สำหรับ Robustness Fund จาก FT Markets' },
       'robustness-notes': { title: 'บันทึกข้อมูล Robustness', subtitle: 'บันทึกชุดวันที่และสินทรัพย์จาก Upside Downside Capture เพื่อโหลดกลับมาทำต่อ' },
-      'ft-top10-holding': { title: 'Top 10 Holding', subtitle: 'อ่านข้อมูลจาก FT qualitative local snapshot เป็นหลัก' },
+      'ft-top10-holding': { title: 'Top 10 Holding', subtitle: 'อ่านข้อมูล FT qualitative จาก Cloudflare R2' },
       'upside-downside-capture': { title: 'Upside Downside Capture', subtitle: 'เตรียมหน้าวิเคราะห์การจับ upside/downside ของกองทุนเทียบ benchmark' },
       'master-placeholder-9': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'Fund Size, Duration, Turnover และ Yield to Maturity' },
       'master-placeholder-10': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'ใช้สำหรับแก้ไขข้อมูลกองทุนรวมตราสารหนี้ โดยสามารถกด "แก้ไขข้อมูลกองทุน" เพื่อปรับปรุงข้อมูลให้ถูกต้อง เช่น ข้อมูลอันดับความน่าเชื่อถือ (Rating) ที่ปัจจุบันปรากฏอยู่ใน Fund Factsheet แต่ยังไม่สามารถดึงข้อมูลผ่าน API ของ SEC ได้' },
