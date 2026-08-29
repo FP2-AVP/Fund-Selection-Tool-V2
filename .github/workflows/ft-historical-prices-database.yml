@@ -149,6 +149,34 @@ jobs:
             --output "Data/ft_historical_prices/ft_historical_prices.sqlite" \
             --optional
 
+      - name: Verify existing FT SQLite before mutation
+        run: |
+          python - <<'PY'
+          import sqlite3
+          from pathlib import Path
+
+          path = Path("Data/ft_historical_prices/ft_historical_prices.sqlite")
+          if not path.is_file() or path.stat().st_size == 0:
+              raise SystemExit(
+                  "Existing FT SQLite was not downloaded. Configure FT_HISTORICAL_APP_SCRIPT_URL "
+                  "before running a job; refusing to overwrite the R2 index with a partial database."
+              )
+          with sqlite3.connect(path) as conn:
+              tables = {row[0] for row in conn.execute("select name from sqlite_master where type='table'")}
+              expected = {
+                  "ft_historical_prices", "ft_profile_investment", "ft_performance_measures",
+                  "ft_risk_measures", "ft_top_holdings",
+              }
+              available = sorted(tables & expected)
+              if not available:
+                  raise SystemExit("Existing FT SQLite has no recognized FT tables; refusing to continue.")
+              unions = " union ".join(f"select symbol from {table}" for table in available)
+              symbol_count = conn.execute(f"select count(*) from ({unions})").fetchone()[0]
+              if symbol_count < 1:
+                  raise SystemExit("Existing FT SQLite has zero symbols; refusing to continue.")
+          print(f"Verified existing FT SQLite: {symbol_count} symbols")
+          PY
+
       - name: Sync FT historical prices
         if: ${{ github.event_name != 'schedule' && inputs.run_prices == 'true' }}
         run: |
