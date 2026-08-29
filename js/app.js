@@ -20808,9 +20808,9 @@ const Pages = {
       }
       if (outputEl) {
         outputEl.innerHTML = `
-          <div><strong>Price CSV</strong> Data/ft_historical_prices/prices/${esc(slug)}.csv</div>
-          <div><strong>Qualitative Snapshot</strong> Data/ft_historical_prices/qualitative/YYYY-MM/as_of_YYYY-MM-DD/${esc(slug)}/</div>
-          <div><strong>SQLite</strong> Data/ft_historical_prices/ft_historical_prices.sqlite</div>
+          <div><strong>Price Shards</strong> Data For FT.com/symbols/${esc(slug)}/prices/YYYY.json.gz</div>
+          <div><strong>Qualitative</strong> Data For FT.com/symbols/${esc(slug)}/qualitative/</div>
+          <div><strong>Working SQLite</strong> Data For FT.com/database/ft_historical_prices.sqlite</div>
         `;
       }
       if (statusEl) {
