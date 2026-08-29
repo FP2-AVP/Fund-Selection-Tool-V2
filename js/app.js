@@ -20784,12 +20784,14 @@ const Pages = {
 
     const renderPreview = () => {
       const url = $('#ft-url', area)?.value || '';
+      const urls = url.split(/\n+/).map(value => value.trim()).filter(Boolean);
+      const symbols = [...new Set(urls.map(parseFtSymbol).filter(Boolean))].slice(0, 5);
       const startDate = $('#ft-start-date', area)?.value || '';
       const endDate = $('#ft-end-date', area)?.value || '';
-      const symbol = parseFtSymbol(url);
+      const symbol = symbols[0] || '';
       const slug = symbolSlug(symbol || 'SYMBOL');
       const ranges = buildRanges(startDate, endDate);
-      State.ftHistoricalImport = { url, startDate, endDate, symbol };
+      State.ftHistoricalImport = { url, urls, startDate, endDate, symbol, symbols };
 
       const symbolEl = $('#ft-symbol-preview', area);
       const rangeEl = $('#ft-range-preview', area);
@@ -20797,10 +20799,10 @@ const Pages = {
       const statusEl = $('#ft-preview-status', area);
       const priceBtn = $('#ft-run-prices', area);
       const qualityBtn = $('#ft-run-qualitative', area);
-      const priceValid = Boolean(symbol && startDate && endDate && startDate <= endDate);
+      const priceValid = Boolean(symbols.length && urls.length <= 5 && symbols.length === urls.length && startDate && endDate && startDate <= endDate);
       const qualityValid = Boolean(symbol);
 
-      if (symbolEl) symbolEl.textContent = symbol || 'ยังอ่าน symbol ไม่ได้';
+      if (symbolEl) symbolEl.textContent = symbols.length ? symbols.join(', ') : 'ยังอ่าน symbol ไม่ได้';
       if (rangeEl) {
         rangeEl.innerHTML = ranges.length
           ? ranges.map((range, idx) => `<span class="badge">${idx + 1}. ${esc(range.start)} ถึง ${esc(range.end)}</span>`).join(' ')
@@ -20808,14 +20810,14 @@ const Pages = {
       }
       if (outputEl) {
         outputEl.innerHTML = `
-          <div><strong>Price Shards</strong> Data For FT.com/symbols/${esc(slug)}/prices/YYYY.json.gz</div>
+          <div><strong>Price Shards</strong> ${symbols.length > 1 ? `${symbols.length} symbols` : `Data For FT.com/symbols/${esc(slug)}/prices/YYYY.json.gz`}</div>
           <div><strong>Qualitative</strong> Data For FT.com/symbols/${esc(slug)}/qualitative/</div>
           <div><strong>Working SQLite</strong> Data For FT.com/database/ft_historical_prices.sqlite</div>
         `;
       }
       if (statusEl) {
         statusEl.className = qualityValid ? 'badge badge-primary' : 'badge badge-warning';
-        statusEl.textContent = priceValid ? `พร้อมดึงราคา ${ranges.length} ช่วง / ข้อมูลเชิงคุณภาพ` : (qualityValid ? 'พร้อมดึงข้อมูลเชิงคุณภาพ' : 'ยังไม่พร้อม');
+        statusEl.textContent = priceValid ? `พร้อมดึง ${symbols.length} symbols · ${ranges.length} ช่วง` : (urls.length > 5 ? 'ใส่ได้สูงสุด 5 ลิงก์' : 'ตรวจสอบ FT.com links');
       }
       if (priceBtn) priceBtn.disabled = !priceValid;
       if (qualityBtn) qualityBtn.disabled = !qualityValid;
@@ -20833,8 +20835,8 @@ const Pages = {
           </div>
           <div class="form-grid">
             <label class="form-field form-field-full">
-              <span>FT.com link</span>
-              <input id="ft-url" type="url" value="${esc(state.url)}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=IXN:PCQ:USD">
+              <span>FT.com links (สูงสุด 5 ลิงก์ · หนึ่งลิงก์ต่อหนึ่งบรรทัด)</span>
+              <textarea id="ft-url" rows="5" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=IXN:PCQ:USD">${esc(state.url)}</textarea>
             </label>
             <label class="form-field">
               <span>วันที่เริ่มต้น</span>
@@ -21077,11 +21079,12 @@ const Pages = {
       const payload = {
         url: $('#ft-url', area)?.value || '',
         symbol: State.ftHistoricalImport?.symbol || '',
+        symbols: State.ftHistoricalImport?.symbols || [],
         startDate: $('#ft-start-date', area)?.value || '',
         endDate: $('#ft-end-date', area)?.value || '',
       };
-      if (!payload.symbol || !payload.startDate || !payload.endDate || payload.startDate > payload.endDate) {
-        toast('กรุณาใส่ FT link และช่วงวันที่ให้ถูกต้อง', 'warning', 3000);
+      if (!payload.symbols.length || payload.symbols.length > 5 || !payload.startDate || !payload.endDate || payload.startDate > payload.endDate) {
+        toast('กรุณาใส่ FT links ไม่เกิน 5 ลิงก์ และช่วงวันที่ให้ถูกต้อง', 'warning', 3000);
         return;
       }
       resultCard?.classList.remove('hidden');
@@ -21096,7 +21099,7 @@ const Pages = {
         if (r2DataApiUrl()) {
           const job = await createFtR2Job('historical', payload);
           if (resultSummary) resultSummary.textContent = `สร้างงาน Historical Prices แล้ว: ${job.jobId}`;
-          toast(`สั่งดึง Historical Prices ${payload.symbol} แล้ว`, 'success', 4000);
+          toast(`สั่งดึง Historical Prices ${payload.symbols.length} symbols แล้ว`, 'success', 4000);
           await watchFtR2Job(job, {resultSummary, resultDetail, onReady:() => renderAvailableSymbols(true)});
           return;
         }
