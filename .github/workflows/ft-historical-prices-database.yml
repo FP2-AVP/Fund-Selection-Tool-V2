@@ -1,4 +1,6 @@
 name: Build FT Historical Prices Database
+run-name: >-
+  FT ${{ inputs.job_kind || 'manual' }}${{ inputs.job_id && format(' · {0}', inputs.job_id) || '' }}
 
 on:
   schedule:
@@ -82,6 +84,14 @@ on:
         description: "Delay between symbols during batch sync."
         required: false
         default: "1"
+      job_id:
+        description: "Job id supplied by the Cloudflare FT job runner."
+        required: false
+        default: ""
+      job_kind:
+        description: "Job type supplied by the Cloudflare FT job runner."
+        required: false
+        default: ""
 
 jobs:
   build-ft-historical-prices-database:
