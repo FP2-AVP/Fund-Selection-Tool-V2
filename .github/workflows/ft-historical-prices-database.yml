@@ -56,22 +56,10 @@ on:
         options:
           - "true"
           - "false"
-      drive_folder_id:
-        description: "Google Drive folder id for ft_historical_prices_database.json"
-        required: true
-        default: "1Locig3aW7hVs0SxCoeFpa76OJ0XcF1rg"
       file_name:
         description: "Output JSON file name"
         required: true
         default: "ft_historical_prices_database.json"
-      app_script_url:
-        description: "Apps Script web app URL for saving the output JSON to Drive"
-        required: false
-        default: ""
-      app_script_key:
-        description: "Apps Script API key"
-        required: false
-        default: ""
       continue_on_error:
         description: "Continue batch sync even if one symbol fails."
         required: true
@@ -102,10 +90,7 @@ jobs:
       EFFECTIVE_QUARTER: ${{ inputs.quarter || '2026-Q1' }}
       EFFECTIVE_SYMBOL: ${{ inputs.symbol || 'IXN:PCQ:USD' }}
       EFFECTIVE_SYMBOLS: ${{ inputs.symbols || '' }}
-      EFFECTIVE_DRIVE_FOLDER_ID: ${{ inputs.drive_folder_id || '1Locig3aW7hVs0SxCoeFpa76OJ0XcF1rg' }}
       EFFECTIVE_FILE_NAME: ${{ inputs.file_name || 'ft_historical_prices_database.json' }}
-      EFFECTIVE_APP_SCRIPT_URL: ${{ inputs.app_script_url || secrets.FT_HISTORICAL_APP_SCRIPT_URL }}
-      EFFECTIVE_APP_SCRIPT_KEY: ${{ inputs.app_script_key || secrets.FT_HISTORICAL_APP_SCRIPT_KEY }}
       EFFECTIVE_SLEEP_SECONDS: ${{ inputs.sleep_seconds || '1' }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
@@ -138,44 +123,10 @@ jobs:
           rm -rf Data/ft_historical_prices
           mkdir -p Data/ft_historical_prices
 
-      - name: Download existing FT SQLite from Google Drive
-        if: ${{ env.EFFECTIVE_APP_SCRIPT_URL != '' }}
+      - name: Restore FT working SQLite from Cloudflare R2
         run: |
-          python scripts/download_ft_historical_artifact_from_apps_script.py \
-            --url "${EFFECTIVE_APP_SCRIPT_URL}" \
-            --key "${EFFECTIVE_APP_SCRIPT_KEY}" \
-            --folder-id "${EFFECTIVE_DRIVE_FOLDER_ID}" \
-            --relative-path "ft_historical_prices.sqlite" \
-            --output "Data/ft_historical_prices/ft_historical_prices.sqlite" \
-            --optional
-
-      - name: Verify existing FT SQLite before mutation
-        run: |
-          python - <<'PY'
-          import sqlite3
-          from pathlib import Path
-
-          path = Path("Data/ft_historical_prices/ft_historical_prices.sqlite")
-          if not path.is_file() or path.stat().st_size == 0:
-              raise SystemExit(
-                  "Existing FT SQLite was not downloaded. Configure FT_HISTORICAL_APP_SCRIPT_URL "
-                  "before running a job; refusing to overwrite the R2 index with a partial database."
-              )
-          with sqlite3.connect(path) as conn:
-              tables = {row[0] for row in conn.execute("select name from sqlite_master where type='table'")}
-              expected = {
-                  "ft_historical_prices", "ft_profile_investment", "ft_performance_measures",
-                  "ft_risk_measures", "ft_top_holdings",
-              }
-              available = sorted(tables & expected)
-              if not available:
-                  raise SystemExit("Existing FT SQLite has no recognized FT tables; refusing to continue.")
-              unions = " union ".join(f"select symbol from {table}" for table in available)
-              symbol_count = conn.execute(f"select count(*) from ({unions})").fetchone()[0]
-              if symbol_count < 1:
-                  raise SystemExit("Existing FT SQLite has zero symbols; refusing to continue.")
-          print(f"Verified existing FT SQLite: {symbol_count} symbols")
-          PY
+          python -m pip install --disable-pip-version-check boto3==1.35.92
+          python scripts/restore_ft_sqlite_from_r2.py
 
       - name: Sync FT historical prices
         if: ${{ github.event_name != 'schedule' && inputs.run_prices == 'true' }}
@@ -221,27 +172,7 @@ jobs:
       - name: Export and upload sharded FT data to Cloudflare R2
         if: ${{ env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_R2_ACCESS_KEY_ID != '' && env.CLOUDFLARE_R2_SECRET_ACCESS_KEY != '' && env.CLOUDFLARE_R2_BUCKET != '' }}
         run: |
-          python -m pip install --disable-pip-version-check boto3==1.35.92
           python scripts/sync_ft_r2.py --upload
-
-      - name: Upload FT database JSON via Apps Script
-        if: ${{ env.EFFECTIVE_APP_SCRIPT_URL != '' }}
-        run: |
-          python scripts/upload_ft_historical_database_to_apps_script.py \
-            --url "${EFFECTIVE_APP_SCRIPT_URL}" \
-            --key "${EFFECTIVE_APP_SCRIPT_KEY}" \
-            --input "Data/ft_historical_prices/exports/${EFFECTIVE_FILE_NAME}" \
-            --folder-id "${EFFECTIVE_DRIVE_FOLDER_ID}" \
-            --file-name "${EFFECTIVE_FILE_NAME}"
-
-      - name: Upload FT SQLite CSV and raw artifacts via Apps Script
-        if: ${{ env.EFFECTIVE_APP_SCRIPT_URL != '' }}
-        run: |
-          python scripts/upload_ft_historical_artifacts_to_apps_script.py \
-            --url "${EFFECTIVE_APP_SCRIPT_URL}" \
-            --key "${EFFECTIVE_APP_SCRIPT_KEY}" \
-            --root "Data/ft_historical_prices" \
-            --folder-id "${EFFECTIVE_DRIVE_FOLDER_ID}"
 
       - name: Upload JSON artifact
         uses: actions/upload-artifact@v4
