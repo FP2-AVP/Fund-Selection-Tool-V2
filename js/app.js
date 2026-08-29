@@ -20759,6 +20759,7 @@ const Pages = {
             .ft-symbol-sort{cursor:pointer;user-select:none}
             .ft-symbol-sort:hover{background:#315d96}
             .ft-symbol-sort.is-active{background:#f7d774;color:#4e3500;border-color:#d79a12}
+            .ft-symbol-table thead th{position:sticky;top:0;z-index:4;background:#20477b!important;color:#fff!important}
             .ft-symbol-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%}
             .ft-symbol-code-cell{white-space:normal;line-height:1.45}
             .ft-symbol-code-cell div{margin:2px 0}
@@ -20824,7 +20825,7 @@ const Pages = {
     };
 
     area.innerHTML = `
-      <div class="grid grid-2">
+      <div>
         <section class="card">
           <div class="card-header">
             <div>
@@ -20849,21 +20850,7 @@ const Pages = {
           </div>
           <div class="toolbar">
             <button class="btn btn-primary" id="ft-run-prices" type="button">ดึงราคา Historical Prices</button>
-            <button class="btn btn-ghost" id="ft-reset-3y" type="button">ย้อนหลัง 3 ปี</button>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="card-header">
-            <div>
-              <h3>Preview Plan</h3>
-              <p>FT จำกัดการดูครั้งละประมาณ 1 ปี ระบบจะแบ่งช่วงให้ก่อนดึงจริง</p>
-            </div>
-          </div>
-          <div class="kv-list">
-            <div><span>Symbol</span><strong id="ft-symbol-preview">-</strong></div>
-            <div><span>แบ่งช่วง</span><div id="ft-range-preview" class="badge-row"></div></div>
-            <div><span>ไฟล์ปลายทาง</span><div id="ft-output-preview" class="mono-small"></div></div>
+            <button class="btn btn-secondary" id="ft-run-qualitative-links" type="button">ดึงเชิงคุณภาพจากลิงก์ด้านบน</button>
           </div>
         </section>
       </div>
@@ -20900,13 +20887,37 @@ const Pages = {
       $(`#${id}`, area)?.addEventListener('input', renderPreview);
       $(`#${id}`, area)?.addEventListener('change', renderPreview);
     });
-    $('#ft-reset-3y', area)?.addEventListener('click', () => {
-      $('#ft-start-date', area).value = defaultStart;
-      $('#ft-end-date', area).value = isoToday;
-      renderPreview();
-    });
     $('#ft-refresh-symbols', area)?.addEventListener('click', () => {
       renderAvailableSymbols(true);
+    });
+    $('#ft-run-qualitative-links', area)?.addEventListener('click', async () => {
+      renderPreview();
+      const runBtn = $('#ft-run-qualitative-links', area);
+      const symbols = State.ftHistoricalImport?.symbols || [];
+      const urls = State.ftHistoricalImport?.urls || [];
+      const url = $('#ft-url', area)?.value || '';
+      const resultCard = $('#ft-result-card', area);
+      const resultSummary = $('#ft-result-summary', area);
+      const resultDetail = $('#ft-result-detail', area);
+      if (!symbols.length || urls.length > 5 || symbols.length !== urls.length) {
+        toast('กรุณาใส่ FT.com links 1–5 ลิงก์ให้ถูกต้อง', 'warning', 3000);
+        return;
+      }
+      resultCard?.classList.remove('hidden');
+      if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'กำลังสั่งดึง...'; }
+      if (resultSummary) resultSummary.textContent = `กำลังสร้างงานเชิงคุณภาพ ${symbols.length} symbols...`;
+      if (resultDetail) resultDetail.innerHTML = '';
+      try {
+        const job = await createFtR2Job('qualitative', {url, symbol:symbols[0], symbols});
+        if (resultSummary) resultSummary.textContent = `สร้างงาน Qualitative แล้ว: ${job.jobId}`;
+        toast(`สั่งดึงเชิงคุณภาพ ${symbols.length} symbols แล้ว`, 'success', 4000);
+        await watchFtR2Job(job, {resultSummary, resultDetail, onReady:() => renderAvailableSymbols(true)});
+      } catch (err) {
+        if (resultSummary) resultSummary.textContent = err.message || 'ดึงข้อมูลเชิงคุณภาพไม่สำเร็จ';
+        toast(err.message || 'ดึงข้อมูลเชิงคุณภาพไม่สำเร็จ', 'error', 6000);
+      } finally {
+        if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'ดึงเชิงคุณภาพจากลิงก์ด้านบน'; }
+      }
     });
     $('#ft-run-all-ytd', area)?.addEventListener('click', async () => {
       const runBtn = $('#ft-run-all-ytd', area);
@@ -21083,7 +21094,8 @@ const Pages = {
         startDate: $('#ft-start-date', area)?.value || '',
         endDate: $('#ft-end-date', area)?.value || '',
       };
-      if (!payload.symbols.length || payload.symbols.length > 5 || !payload.startDate || !payload.endDate || payload.startDate > payload.endDate) {
+      const enteredUrls = State.ftHistoricalImport?.urls || [];
+      if (!payload.symbols.length || enteredUrls.length > 5 || payload.symbols.length !== enteredUrls.length || !payload.startDate || !payload.endDate || payload.startDate > payload.endDate) {
         toast('กรุณาใส่ FT links ไม่เกิน 5 ลิงก์ และช่วงวันที่ให้ถูกต้อง', 'warning', 3000);
         return;
       }
