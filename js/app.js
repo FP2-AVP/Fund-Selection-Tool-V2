@@ -109,8 +109,11 @@ const State = {
   reportDataOverrides: {},
   reportDataEditModes: {},
   feeComparisonEditSlot: '',
+  feeV2VisibleColumns: null,
   equitySectorVisibleColumns: null,
   maxDrawdownVisibleYears: null,
+  equityStyleBoxVisibleColumns: null,
+  equityOverviewVisibleColumns: null,
   fundDataManager: {
     query: '',
     selectedKey: '',
@@ -158,6 +161,8 @@ const State = {
     symbol: '',
   },
   ftHistoricalDatabase: null,
+  ftR2Index: null,
+  ftR2Qualitative: new Map(),
 	  masterAllocations: { items: {}, updatedAt: null },
 	};
 
@@ -246,6 +251,7 @@ const PAGE_DATASET_KEYS = {
   'master-placeholder-11': 'masterFund',
   'master-placeholder-13': 'thaiQuality',
   'master-placeholder-14': 'masterFund',
+  'master-placeholder-15': 'thaiQuality',
   'master-placeholder-12': 'secApi',
   'robustness-ft-import': 'masterFund',
   'ft-top10-holding': 'masterFund',
@@ -2137,6 +2143,14 @@ function ensureExtendedPageConfigs() {
       localFile: 'Data/AVP Master Fund ID - 2026-Q1.json',
       datasetKey: 'masterFund',
     },
+    'master-placeholder-15': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'Equity Style Box',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
+    },
     'master-placeholder-12': {
       sheetId: CONFIG.SHEETS?.RAW_FOR_SEC || '',
       tabName: '2026-Q1',
@@ -2678,6 +2692,73 @@ async function loadFtHistoricalPayloadForPage(limit = 5000) {
   }
   if (!resp.ok || payload.ok === false) throw new Error(payload.error || `โหลดข้อมูลไม่สำเร็จ (${resp.status})`);
   return normalizeFtDatabasePayload(payload);
+}
+
+function normalizeFtR2Index(payload = {}) {
+  const symbols = (Array.isArray(payload.symbols) ? payload.symbols : []).map(item => ({
+    ...item,
+    rowCount: Number(item.priceRows || item.rowCount || 0),
+    profileRowCount: Number(item.qualitativeCounts?.profile || item.profileRowCount || 0),
+    performanceRowCount: Number(item.qualitativeCounts?.performance || item.performanceRowCount || 0),
+    riskRowCount: Number(item.qualitativeCounts?.risk || item.riskRowCount || 0),
+    holdingsRowCount: Number(item.qualitativeCounts?.holdings || item.holdingsRowCount || 0),
+    startDate: item.priceStart || item.startDate || '',
+    endDate: item.priceEnd || item.endDate || '',
+    displayLabel: item.displayLabel || [item.symbol, item.displayName].filter(Boolean).join(' - '),
+  }));
+  return normalizeFtDatabasePayload({
+    ...payload,
+    symbols,
+    counts: {
+      ...(payload.counts || {}),
+      symbols: symbols.length,
+      price_rows: Number(payload.counts?.priceRows || payload.counts?.price_rows || 0),
+    },
+    generated_at: payload.generatedAt || payload.generated_at || '',
+    source: payload.source || 'Cloudflare R2: Data For FT.com/index.json',
+  });
+}
+
+async function loadFtR2Index(force = false) {
+  if (!force && State.ftR2Index) return State.ftR2Index;
+  const payload = await fetchR2Json('/ft/index');
+  const normalized = normalizeFtR2Index(payload);
+  if (!normalized.symbols.length) throw new Error('Data For FT.com/index.json ยังไม่มี Symbol');
+  State.ftR2Index = normalized;
+  return normalized;
+}
+
+async function loadFtAvailableSymbolsPayload(force = false) {
+  if (r2DataApiUrl()) {
+    try {
+      return await loadFtR2Index(force);
+    } catch (error) {
+      console.warn('FT R2 index unavailable; using legacy FT database', error);
+    }
+  }
+  if (force) State.ftHistoricalDatabase = null;
+  return loadFtHistoricalPayloadForPage(5000);
+}
+
+async function loadFtR2Qualitative(symbol, force = false) {
+  const slug = ftSymbolSlug(symbol);
+  if (!slug) throw new Error('FT symbol is required');
+  if (!force && State.ftR2Qualitative.has(slug)) return State.ftR2Qualitative.get(slug);
+  const payload = await fetchR2Json(`/ft/symbols/${encodeURIComponent(slug)}/qualitative/latest`);
+  const profile = Array.isArray(payload.profile) ? payload.profile : [];
+  const result = {
+    symbol: payload.symbol || symbol,
+    displayName: profile.find(row => row.section === 'metadata' && row.field === 'FT display name')?.value || '',
+    profile,
+    profileMap: Object.fromEntries(profile.map(row => [row.field, row.value])),
+    performance: Array.isArray(payload.performance) ? payload.performance : [],
+    risk: Array.isArray(payload.risk) ? payload.risk : [],
+    holdings: Array.isArray(payload.holdings) ? payload.holdings : [],
+    asOfDate: payload.asOfDate || '',
+    source: 'Cloudflare R2: Data For FT.com',
+  };
+  State.ftR2Qualitative.set(slug, result);
+  return result;
 }
 
 function findFtSymbolMatch(payload, lookupValue) {
@@ -4244,8 +4325,9 @@ function renderSortLabel(label, active, dir, escapeLabel = true) {
 }
 
 function isMissingValue(value) {
+  if (typeof value === 'number' && Number.isNaN(value)) return true;
   const s = String(value ?? '').trim();
-  return s === '' || s === '-' || s === '–';
+  return s === '' || s === '-' || s === '–' || s.toLowerCase() === 'nan';
 }
 
 function compareValues(a, b, dir = 'asc') {
@@ -4275,6 +4357,26 @@ function toggleNamedSort(target, key) {
   }
   target.key = key;
   target.dir = 'asc';
+}
+
+function rerenderPreservingTableScroll(area, renderPage) {
+  const pageScrollTop = area?.scrollTop || 0;
+  const horizontalPositions = area
+    ? Array.from(area.querySelectorAll('*'))
+      .filter(element => element.scrollWidth > element.clientWidth + 1)
+      .map(element => element.scrollLeft)
+    : [];
+  const rendered = renderPage();
+  Promise.resolve(rendered).then(() => requestAnimationFrame(() => {
+    if (!area?.isConnected) return;
+    area.scrollTop = pageScrollTop;
+    Array.from(area.querySelectorAll('*'))
+      .filter(element => element.scrollWidth > element.clientWidth + 1)
+      .forEach((element, index) => {
+        element.scrollLeft = Math.min(horizontalPositions[index] || 0, Math.max(0, element.scrollWidth - element.clientWidth));
+      });
+  }));
+  return rendered;
 }
 
 function buildMetricRanks(items, keys, getValue) {
@@ -4760,15 +4862,21 @@ function feeCombinedStyle(value, maxValue) {
 function renderFeeCompareMiniTable(rows, options = {}) {
   const title = options.title || 'ตารางเปรียบเทียบค่าธรรมเนียม';
   const sortState = options.sortState || { key: '', dir: 'asc' };
-  const sortableHeader = (label, key, attrs = '') =>
-    `<th ${attrs} class="fee-compare-sort ${sortState.key === key ? 'is-active' : ''}" data-fee-sort="${key}">${renderSortLabel(label, sortState.key === key, sortState.dir)}</th>`;
+  const sortableHeader = (label, key, attrs = '', escapeLabel = true) =>
+    `<th ${attrs} class="fee-compare-sort ${sortState.key === key ? 'is-active' : ''}" data-fee-sort="${key}">${renderSortLabel(label, sortState.key === key, sortState.dir, escapeLabel)}</th>`;
   const editing = !!options.editing;
   const slot = options.slot || '';
   const quarter = options.quarter || '';
+  const masterGroupCounts = rows.reduce((counts, row) => {
+    if (row?.masterKey && !row.isPlaceholder) counts.set(row.masterKey, (counts.get(row.masterKey) || 0) + 1);
+    return counts;
+  }, new Map());
   const editCell = (row, field, owner) => {
     if (!editing || row.isPlaceholder) return `<td class="fee-compare-num">${esc(row[field] || '-')}</td>`;
     const metadata = row.overrideMetadata?.[owner];
-    return `<td class="fee-compare-num fee-compare-edit-cell"><input class="fund-input fee-compare-override-input" data-field="${field}" data-owner="${owner}" value="${esc(row[field] || '')}" placeholder="-"><small class="fee-compare-edit-meta">Base: ${esc(String(row.baseValues?.[field] || '-'))}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
+    const entityKey = owner === 'master' ? row.masterKey : row.thaiKey;
+    const linkedCount = owner === 'master' ? (masterGroupCounts.get(row.masterKey) || 1) : 1;
+    return `<td class="fee-compare-num fee-compare-edit-cell"><input class="fund-input fee-compare-override-input" data-field="${field}" data-owner="${owner}" data-entity-key="${esc(entityKey)}" value="${esc(row[field] || '')}" placeholder="-"><small class="fee-compare-edit-meta">Base: ${esc(String(row.baseValues?.[field] || '-'))}${linkedCount > 1 ? ` · Share Class เดียวกัน ${linkedCount} กอง` : ''}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
   };
   return `
     <div class="card fee-compare-card" data-fee-slot="${esc(slot)}" data-fee-quarter="${esc(quarter)}">
@@ -4792,7 +4900,7 @@ function renderFeeCompareMiniTable(rows, options = {}) {
               <th colspan="3">ค่าใช้จ่าย (%)</th>
             </tr>
             <tr>
-              ${sortableHeader('Master Ongoing Cost', 'masterTer')}
+              ${sortableHeader('Master Ongoing<br>Charges', 'masterTer', '', false)}
               ${sortableHeader('กองไทย TER', 'thaiTer')}
               ${sortableHeader('รวมโดยประมาณ', 'combined')}
             </tr>
@@ -4808,11 +4916,12 @@ function renderFeeCompareMiniTable(rows, options = {}) {
                 <tr${row.isPlaceholder ? ' class="fee-compare-placeholder"' : ''}>
                   <td class="fee-compare-master">
                     ${row.masterNameHtml || esc(row.masterName)}
+                    ${masterGroupCounts.get(row.masterKey) > 1 ? `<small class="fee-compare-shared-master">ใช้ Share Class เดียวกัน ${masterGroupCounts.get(row.masterKey)} กองไทย</small>` : ''}
                     ${missingMasterCost && missingCostIds ? `<small class="fee-compare-missing-ids">${esc(missingCostIds)}</small>` : ''}
                     ${row.changeBadge ? `<span class="fee-quarter-change-line"><span class="fee-quarter-change fee-quarter-change--${esc(row.changeType || 'changed')}">${esc(row.changeBadge)}</span>${row.changeDetail ? `<span class="fee-quarter-change-detail">${esc(row.changeDetail)}</span>` : ''}</span>` : ''}
                     ${row.mappingStatus === 'missing-master-id' ? '<small class="fee-compare-warning">ไม่มี Master FundId ใน AVP Thai Fund for Quality</small>' : ''}
                     ${row.mappingStatus === 'master-not-found' ? '<small class="fee-compare-warning">ไม่พบ FundId นี้ใน AVP Master Fund ID</small>' : ''}
-                    ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-compare-warning">ระบุ Share Class ไม่ได้ — ไม่คำนวณค่ารวม</small>' : ''}
+                    ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-compare-warning">ระบุ Share Class ไม่ได้ — คำนวณค่ารวมจากข้อมูลที่มี</small>' : ''}
                   </td>
                   <td class="fee-compare-thai"${row.highlightColor ? ` style="background:${row.highlightColor}"` : ''}>${esc(row.thaiCode)}</td>
                   ${editCell(row, 'masterTerText', 'master')}
@@ -4843,7 +4952,7 @@ function buildFeeV2ExportPayload(title, source, feeRows) {
     columns: [
       { key: 'master', label: 'Master Fund', weight: 1.55, align: 'left', bg: '#1f3f74', color: '#ffffff' },
       { key: 'thai', label: 'กองไทย', weight: 1.2, widthPx: preset.columnWidthsPx?.thai, align: 'center', bg: '#1f3f74', color: '#ffffff' },
-      { key: 'masterTer', label: 'Master Ongoing Cost', weight: 0.9, widthPx: preset.columnWidthsPx?.masterTer, bg: '#1f3f74', color: '#ffffff' },
+      { key: 'masterTer', label: 'Master Ongoing Charges', weight: 0.9, widthPx: preset.columnWidthsPx?.masterTer, bg: '#1f3f74', color: '#ffffff' },
       { key: 'thaiTer', label: 'กองไทย TER (SEC)', weight: 0.9, widthPx: preset.columnWidthsPx?.thaiTer, bg: '#1f3f74', color: '#ffffff' },
       { key: 'combined', label: 'รวมโดยประมาณ', weight: 0.9, widthPx: preset.columnWidthsPx?.combined, bg: '#1f3f74', color: '#ffffff' },
       { key: 'spacer', label: '', weight: 0.28, widthPx: preset.columnWidthsPx?.spacer, bg: '#eef2f7', color: '#eef2f7' },
@@ -6196,8 +6305,11 @@ function buildFeeComparisonRows(universe, rawLookup, options = {}) {
     const thaiTer = parseNum(raw?.ter);
     const hasMasterTer = !Number.isNaN(masterTer);
     const hasThaiTer = !Number.isNaN(thaiTer);
-    // Keep Thai-only rows visible, but never present Thai TER alone as a combined cost.
-    const combined = hasMasterTer && hasThaiTer ? masterTer + thaiTer : NaN;
+    // Sum every available fee component. A missing component contributes zero;
+    // keep the total blank only when neither component has a numeric value.
+    const combined = hasMasterTer || hasThaiTer
+      ? (hasMasterTer ? masterTer : 0) + (hasThaiTer ? thaiTer : 0)
+      : NaN;
     const front = toFixedSafe(raw?.front, 4);
     const back = toFixedSafe(raw?.back, 4);
     const fxHedging = toFixedSafe(raw?.fxHedging, 2);
@@ -6231,7 +6343,9 @@ function applyFeeReportDataOverrides(rows, document) {
   const masterFields = ['masterTerText','depositCurrencyText'];
   return rows.map(row => {
     const thaiKey = String(row.thaiCode || '').trim().toUpperCase();
-    const masterKey = String(row.masterId || row.masterIsin || '').trim().toUpperCase();
+    // Ongoing cost belongs to a Master Fund share class. Use ISIN first so
+    // share classes under the same FundId can keep different base costs.
+    const masterKey = String(row.masterIsin || row.masterId || '').trim().toUpperCase();
     const thaiSection = reportDataOverrideSection(document, 'thaiFunds', thaiKey, 'fees');
     const masterSection = reportDataOverrideSection(document, 'masterFunds', masterKey, 'fees');
     const next = {
@@ -6250,7 +6364,11 @@ function applyFeeReportDataOverrides(rows, document) {
     });
     next.masterTer = parseNum(next.masterTerText);
     next.thaiTer = parseNum(next.thaiTerText);
-    next.combined = !Number.isNaN(next.masterTer) && !Number.isNaN(next.thaiTer) ? next.masterTer + next.thaiTer : NaN;
+    const hasMasterTer = !Number.isNaN(next.masterTer);
+    const hasThaiTer = !Number.isNaN(next.thaiTer);
+    next.combined = hasMasterTer || hasThaiTer
+      ? (hasMasterTer ? next.masterTer : 0) + (hasThaiTer ? next.thaiTer : 0)
+      : NaN;
     next.combinedText = Number.isNaN(next.combined) ? '' : next.combined.toFixed(2);
     return next;
   });
@@ -9127,7 +9245,7 @@ const Pages = {
       area.innerHTML = `
         ${pageToolActions(pageKey, source)}
         <div id="report-card" class="fee-compare-page">
-          <p class="fee-compare-note">จับคู่ Master Fund ด้วย FundId และใช้ ISIN เป็น fallback เมื่อ FundId ไม่พบ · ค่ารวมเป็นค่าโดยประมาณจาก Master Ongoing Cost + TER กองไทย</p>
+          <p class="fee-compare-note">จับคู่ Master Fund ด้วย FundId และใช้ ISIN เป็น fallback เมื่อ FundId ไม่พบ · ค่ารวมเป็นค่าโดยประมาณจาก Master Ongoing Charges + TER กองไทย</p>
           <div class="fee-compare-grid"></div>
         </div>`;
       let rowSyncFrame = 0;
@@ -9181,6 +9299,15 @@ const Pages = {
           State.feeComparisonEditSlot = '';
           renderTables();
         }));
+        grid.addEventListener('input', event => {
+          const input = event.target.closest('.fee-compare-override-input[data-owner="master"]');
+          if (!input?.dataset.entityKey) return;
+          $$('.fee-compare-override-input[data-owner="master"]', input.closest('.fee-compare-card')).forEach(peer => {
+            if (peer !== input && peer.dataset.entityKey === input.dataset.entityKey && peer.dataset.field === input.dataset.field) {
+              peer.value = input.value;
+            }
+          });
+        });
         $$('.fee-compare-save', grid).forEach(button => button.addEventListener('click', async () => {
           const slot = button.dataset.slot || '';
           const isCurrent = slot === 'current';
@@ -9188,19 +9315,31 @@ const Pages = {
           const sourceRows = pairs.map(pair => isCurrent ? pair.current : pair.previous);
           const card = button.closest('.fee-compare-card');
           const changes = [];
+          const masterChanges = new Map();
           $$('.fee-compare-table tbody tr', card).forEach((tr, index) => {
             const row = sourceRows[index];
             if (!row || row.isPlaceholder) return;
             const thaiValues = {};
-            const masterValues = {};
             $$('.fee-compare-override-input', tr).forEach(input => {
               const field = input.dataset.field;
               const value = input.value.trim();
-              if (value === String(row.baseValues?.[field] || '').trim()) return;
-              (input.dataset.owner === 'master' ? masterValues : thaiValues)[field] = value;
+              if (input.dataset.owner !== 'master') {
+                if (value !== String(row.baseValues?.[field] || '').trim()) thaiValues[field] = value;
+                return;
+              }
+              if (!row.masterKey || masterChanges.has(row.masterKey)) return;
+              const values = {};
+              $$('.fee-compare-override-input[data-owner="master"]', tr).forEach(masterInput => {
+                const masterField = masterInput.dataset.field;
+                const masterValue = masterInput.value.trim();
+                if (masterValue !== String(row.baseValues?.[masterField] || '').trim()) values[masterField] = masterValue;
+              });
+              masterChanges.set(row.masterKey, {values, hadOverride:!!row.overrideMetadata?.master});
             });
             if (Object.keys(thaiValues).length || row.overrideMetadata?.thai) changes.push({entityType:'thaiFunds', key:row.thaiKey, section:'fees', values:thaiValues});
-            if (row.masterKey && (Object.keys(masterValues).length || row.overrideMetadata?.master)) changes.push({entityType:'masterFunds', key:row.masterKey, section:'fees', values:masterValues});
+          });
+          masterChanges.forEach((change, masterKey) => {
+            if (Object.keys(change.values).length || change.hadOverride) changes.push({entityType:'masterFunds', key:masterKey, section:'fees', values:change.values});
           });
           if (!changes.length) {
             toast('ไม่มีข้อมูลที่ต่างจาก Base และไม่มี Override ที่ต้องคืนค่า', 'info');
@@ -14906,7 +15045,7 @@ const Pages = {
             ${buildInsightTable(feeRows, [
               { key: 'masterName', label: 'Master Fund', className: 'td-left' },
               { key: 'thaiCode', label: 'กองไทย', className: 'td-chip', render: row => `<span class="linked-fund-chip">${esc(row.thaiCode)}</span>` },
-              { key: 'masterTerText', label: 'Master Ongoing Cost' },
+              { key: 'masterTerText', label: 'Master Ongoing Charges' },
               { key: 'thaiTerText', label: 'กองไทย TER' },
               { key: 'feeDate', label: 'Date' },
               { key: 'combinedText', label: 'รวมโดยประมาณ', className: 'td-strong td-accent' },
@@ -14919,7 +15058,7 @@ const Pages = {
       App._currentTableExport = () => buildSimpleTablePayload(
         CONFIG.PAGES['master-placeholder-1']?.title || 'ค่าธรรมเนียม',
         'AVP Thai Fund for Quality + AVP Master Fund ID + Data For SEC API',
-        ['Master Fund', 'กองไทย', 'Master Ongoing Cost', 'กองไทย TER', 'Date', 'รวมโดยประมาณ'],
+        ['Master Fund', 'กองไทย', 'Master Ongoing Charges', 'กองไทย TER', 'Date', 'รวมโดยประมาณ'],
         feeRows.map(row => [
           row.masterName,
           row.thaiCode,
@@ -14954,8 +15093,9 @@ const Pages = {
         buildMasterRecords(masterRawRows),
         rawLookup,
       );
-      const feeRows = applyFeeReportDataOverrides(buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true }), reportOverrides)
-        .sort((a, b) => compareValues(a.combined, b.combined, 'asc'))
+      const pageKey = 'master-placeholder-4';
+      const sortState = State.reportSorts[pageKey] || (State.reportSorts[pageKey] = {key:'', dir:'asc'});
+      const baseFeeRows = applyFeeReportDataOverrides(buildFeeComparisonRows(universe, rawLookup, { includeThaiOnly: true }), reportOverrides)
         .map(row => {
           const matchedFund = Object.values(State.selectedFunds).find(f => f.code === row.thaiCode);
           const colorIdx = matchedFund ? State.highlights[matchedFund.key] : undefined;
@@ -14964,6 +15104,9 @@ const Pages = {
             highlightColor: colorIdx !== undefined ? HL_COLORS[colorIdx]?.bg || '' : '',
           };
         });
+      const feeRows = sortState.key
+        ? [...baseFeeRows].sort((a, b) => compareValues(a[sortState.key], b[sortState.key], sortState.dir))
+        : [...baseFeeRows].sort((a, b) => compareValues(a.combined, b.combined, 'asc'));
 
       if (!feeRows.length) {
         setError(area, 'ไม่พบข้อมูลค่าธรรมเนียมที่จับคู่ได้จาก Data For SEC API และ AVP Master Fund ID', 'master-placeholder-4');
@@ -14972,57 +15115,80 @@ const Pages = {
 
       const source = 'AVP Thai Fund for Quality (FundId) + Fund Key Performance AVP (ISIN fallback) + AVP Master Fund ID + Data For SEC API';
       const maxCombined = Math.max(...feeRows.map(item => item.combined || 0), 0);
-      const pageKey = 'master-placeholder-4';
       const isEditing = !!State.reportDataEditModes?.[pageKey];
+      const toggleColumns = [
+        ['masterName','Master Fund'],
+        ['masterTerText','Master Ongoing Charges'],
+        ['fxHedgingText','FX Hedging'],
+        ['depositCurrencyText','Base Currency'],
+      ];
+      if (!Array.isArray(State.feeV2VisibleColumns)) State.feeV2VisibleColumns = toggleColumns.map(([key]) => key);
+      const visibleColumns = new Set(State.feeV2VisibleColumns);
+      const isVisible = key => visibleColumns.has(key);
       const thaiFeeFields = new Set(['thaiTerText','frontText','backText','initialText','subsequentText','fxHedgingText','sourceLink']);
+      const masterGroupCounts = feeRows.reduce((counts, row) => {
+        if (row.masterKey) counts.set(row.masterKey, (counts.get(row.masterKey) || 0) + 1);
+        return counts;
+      }, new Map());
       const editButtons = isEditing
         ? `<button class="btn btn-primary" id="fee-v2-save">บันทึก Override · ${esc(quarter)}</button><button class="btn btn-ghost" id="fee-v2-cancel">ยกเลิก</button>`
         : '<button class="btn btn-ghost" id="fee-v2-edit">แก้ไขข้อมูลกองทุน</button>';
       const feeCell = (row, field, className = '') => {
         if (!isEditing) return `<td class="${className}">${esc(row[field] || '-')}</td>`;
-        const metadata = thaiFeeFields.has(field) ? row.overrideMetadata?.thai : row.overrideMetadata?.master;
-        return `<td class="${className} fee-v2-edit-cell"><input class="fund-input fee-v2-override-input" data-field="${esc(field)}" value="${esc(row[field] || '')}" placeholder="-"><small class="fee-v2-edit-meta">Base: ${esc(String(row.baseValues?.[field] || '-'))}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
+        const isThaiField = thaiFeeFields.has(field);
+        const metadata = isThaiField ? row.overrideMetadata?.thai : row.overrideMetadata?.master;
+        const entityKey = isThaiField ? row.thaiKey : row.masterKey;
+        const linkedCount = isThaiField ? 1 : (masterGroupCounts.get(row.masterKey) || 1);
+        return `<td class="${className} fee-v2-edit-cell"><input class="fund-input fee-v2-override-input" data-field="${esc(field)}" data-owner="${isThaiField ? 'thai' : 'master'}" data-entity-key="${esc(entityKey)}" value="${esc(row[field] || '')}" placeholder="-"><small class="fee-v2-edit-meta">Base: ${esc(String(row.baseValues?.[field] || '-'))}${linkedCount > 1 ? ` · Share Class เดียวกัน ${linkedCount} กอง` : ''}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
       };
+      const sortableHeader = (key, label, attrs = '', className = '') => `<th ${attrs} class="fee-v2-sort ${className} ${sortState.key === key ? 'is-active' : ''}" data-fee-v2-sort="${esc(key)}">${renderSortLabel(label, sortState.key === key, sortState.dir, false)}</th>`;
 
       area.innerHTML = `
         ${pageToolActions(pageKey, source, '', editButtons)}
+        <div class="metric-toggle-group fee-v2-column-controls">
+          <span class="metric-toggle-label">ข้อมูลที่แสดง</span>
+          <div class="view-toggle fee-v2-column-toggle-group" role="group" aria-label="เลือกข้อมูลที่แสดง">
+            ${toggleColumns.map(([key,label]) => `<button class="btn btn-ghost view-toggle-btn fee-v2-column-toggle ${isVisible(key) ? 'is-active' : ''}" data-column="${esc(key)}">${esc(label)}</button>`).join('')}
+          </div>
+          <button class="btn btn-ghost fee-v2-column-all">${visibleColumns.size === toggleColumns.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
+        </div>
         <div id="report-card" class="card report-card">
           <div class="fee-v2-table-wrap">
             <table class="fee-v2-table">
               <colgroup>
-                <col class="fee-v2-col-master">
+                ${isVisible('masterName') ? '<col class="fee-v2-col-master">' : ''}
                 <col class="fee-v2-col-thai">
-                <col class="fee-v2-col-ter-1">
+                ${isVisible('masterTerText') ? '<col class="fee-v2-col-ter-1">' : ''}
                 <col class="fee-v2-col-ter-2">
                 <col class="fee-v2-col-ter-3">
                 <col class="fee-v2-col-spacer">
                 <col class="fee-v2-col-fixed">
                 <col class="fee-v2-col-fixed">
-                <col class="fee-v2-col-fixed">
-                <col class="fee-v2-col-fixed">
+                ${isVisible('fxHedgingText') ? '<col class="fee-v2-col-fixed">' : ''}
+                ${isVisible('depositCurrencyText') ? '<col class="fee-v2-col-fixed">' : ''}
                 <col class="fee-v2-col-fixed">
                 <col class="fee-v2-col-fixed">
                 <col class="fee-v2-col-fixed">
               </colgroup>
               <thead>
                 <tr>
-                  <th rowspan="2">Master Fund</th>
-                  <th rowspan="2" class="fee-v2-main-thai-head">กองไทย</th>
-                  <th colspan="3">ค่าใช้จ่าย (%)</th>
+                  ${isVisible('masterName') ? sortableHeader('masterName', 'Master Fund', 'rowspan="2"') : ''}
+                  ${sortableHeader('thaiCode', 'กองไทย', 'rowspan="2"', 'fee-v2-main-thai-head')}
+                  <th colspan="${2 + (isVisible('masterTerText') ? 1 : 0)}">ค่าใช้จ่าย (%)</th>
                   <th rowspan="2" class="fee-v2-th-spacer"></th>
                   <th colspan="2" class="fee-v2-th-group fee-v2-th-group--trade">การซื้อ-ขาย (%)</th>
-                  <th rowspan="2" class="fee-v2-th-two-line"><span>การซื้อ</span><span>ครั้งแรกขั้นตํ่า</span></th>
-                  <th rowspan="2" class="fee-v2-th-two-line"><span>การซื้อ</span><span>ครั้งถัดไปขั้นตํ่า</span></th>
-                  <th rowspan="2">FX Hedging</th>
-                  <th rowspan="2">Base Currency</th>
-                  <th rowspan="2">FACTSHEET</th>
+                  ${sortableHeader('initialText', '<span>การซื้อ</span><span>ครั้งแรกขั้นตํ่า</span>', 'rowspan="2"', 'fee-v2-th-two-line')}
+                  ${sortableHeader('subsequentText', '<span>การซื้อ</span><span>ครั้งถัดไปขั้นตํ่า</span>', 'rowspan="2"', 'fee-v2-th-two-line')}
+                  ${isVisible('fxHedgingText') ? sortableHeader('fxHedgingText', 'FX Hedging', 'rowspan="2"') : ''}
+                  ${isVisible('depositCurrencyText') ? sortableHeader('depositCurrencyText', 'Base Currency', 'rowspan="2"') : ''}
+                  ${sortableHeader('sourceLink', 'FACTSHEET', 'rowspan="2"')}
                 </tr>
                 <tr>
-                  <th class="fee-v2-ter-head fee-v2-ter-head-1">Master Ongoing Cost</th>
-                  <th class="fee-v2-ter-head fee-v2-ter-head-2">กองไทย TER</th>
-                  <th class="fee-v2-ter-head fee-v2-ter-head-3">รวมโดยประมาณ</th>
-                  <th class="fee-v2-th-group--trade">IN (ซื้อ)</th>
-                  <th class="fee-v2-th-group--trade">OUT (ขาย)</th>
+                  ${isVisible('masterTerText') ? sortableHeader('masterTerText', 'Master Ongoing<br>Charges', '', 'fee-v2-ter-head fee-v2-ter-head-1 fee-v2-th-two-line') : ''}
+                  ${sortableHeader('thaiTerText', 'กองไทย TER', '', 'fee-v2-ter-head fee-v2-ter-head-2')}
+                  ${sortableHeader('combined', 'รวมโดยประมาณ', '', 'fee-v2-ter-head fee-v2-ter-head-3')}
+                  ${sortableHeader('frontText', 'IN (ซื้อ)', '', 'fee-v2-th-group--trade')}
+                  ${sortableHeader('backText', 'OUT (ขาย)', '', 'fee-v2-th-group--trade')}
                 </tr>
               </thead>
               <tbody>
@@ -15030,14 +15196,15 @@ const Pages = {
                   const combinedStyle = feeCombinedStyle(row.combined, maxCombined);
                   return `
                     <tr>
-                      <td class="is-master">
+                      ${isVisible('masterName') ? `<td class="is-master">
                         ${row.masterNameHtml || esc(row.masterName)}
+                        ${masterGroupCounts.get(row.masterKey) > 1 ? `<small class="fee-v2-shared-master">ใช้ Share Class เดียวกัน ${masterGroupCounts.get(row.masterKey)} กองไทย</small>` : ''}
                         ${row.mappingStatus === 'missing-master-id' ? '<small class="fee-v2-mapping-warning">ไม่มี Master FundId ใน AVP Thai Fund for Quality</small>' : ''}
-                        ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-v2-mapping-warning">ระบุ Share Class ไม่ได้ — ไม่คำนวณค่ารวม</small>' : ''}
+                        ${row.mappingStatus === 'share-class-unresolved' ? '<small class="fee-v2-mapping-warning">ระบุ Share Class ไม่ได้ — คำนวณค่ารวมจากข้อมูลที่มี</small>' : ''}
                         ${row.mappingStatus === 'master-not-found' ? '<small class="fee-v2-mapping-warning">ไม่พบ FundId ใน AVP Master Fund ID</small>' : ''}
-                      </td>
+                      </td>` : ''}
                       <td class="is-thai"${row.highlightColor ? ` style="background:${row.highlightColor}"` : ''}>${esc(row.thaiCode)}</td>
-                      ${feeCell(row, 'masterTerText', 'fee-v2-ter-cell fee-v2-ter-cell-1')}
+                      ${isVisible('masterTerText') ? feeCell(row, 'masterTerText', 'fee-v2-ter-cell fee-v2-ter-cell-1') : ''}
                       ${feeCell(row, 'thaiTerText', 'fee-v2-ter-cell fee-v2-ter-cell-2')}
                       <td class="fee-v2-ter-cell fee-v2-ter-cell-3 is-combined"${combinedStyle.bg ? ` style="background:${combinedStyle.bg};color:${combinedStyle.color}"` : ''}>${esc(row.combinedText || '-')}</td>
                       <td class="fee-v2-td-spacer"></td>
@@ -15045,8 +15212,8 @@ const Pages = {
                       ${feeCell(row, 'backText')}
                       ${feeCell(row, 'initialText')}
                       ${feeCell(row, 'subsequentText')}
-                      ${feeCell(row, 'fxHedgingText')}
-                      ${feeCell(row, 'depositCurrencyText')}
+                      ${isVisible('fxHedgingText') ? feeCell(row, 'fxHedgingText') : ''}
+                      ${isVisible('depositCurrencyText') ? feeCell(row, 'depositCurrencyText') : ''}
                       ${isEditing ? feeCell(row, 'sourceLink') : `<td>${row.sourceLink ? `<a class="fee-v2-source-link" href="${esc(buildFactsheetViewerUrl(row.sourceLink))}" target="_blank" rel="noopener noreferrer" aria-label="เปิด factsheet ของ ${esc(row.thaiCode)}">LINK</a>` : '<span class="fee-v2-muted">-</span>'}</td>`}
                     </tr>`;
                 }).join('')}
@@ -15054,7 +15221,23 @@ const Pages = {
             </table>
           </div>
         </div>
-        <style>.fee-v2-table td.fee-v2-edit-cell{padding:4px;background:#fff8df;overflow:visible}.fee-v2-override-input{width:100%;min-width:78px;text-align:center}.fee-v2-edit-meta{display:block;margin-top:3px;color:#6b7280;font-size:.64rem;line-height:1.2;white-space:normal}</style>`;
+        <style>.fee-v2-column-controls{margin:10px 0 4px;align-items:flex-start}.fee-v2-column-toggle-group{display:flex;flex-wrap:wrap;max-width:100%}.fee-v2-column-toggle-group .view-toggle-btn{font-size:.72rem;padding:7px 9px}.fee-v2-column-all{font-size:.74rem;white-space:nowrap}.fee-v2-table th.fee-v2-sort{cursor:pointer}.fee-v2-table th.fee-v2-sort:hover{filter:brightness(1.1)}.fee-v2-table th.fee-v2-sort.is-active{background:#f2c75b;color:#443200}.fee-v2-table th.fee-v2-sort .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.fee-v2-table td.fee-v2-edit-cell{padding:4px;background:#fff8df;overflow:visible}.fee-v2-override-input{width:100%;min-width:78px;text-align:center}.fee-v2-edit-meta{display:block;margin-top:3px;color:#6b7280;font-size:.64rem;line-height:1.2;white-space:normal}.fee-v2-shared-master{display:block;margin-top:4px;color:#9a6700;font-size:.68rem;font-weight:700}</style>`;
+
+      $$('.fee-v2-column-toggle', area).forEach(button => button.addEventListener('click', () => {
+        const key = button.dataset.column;
+        const next = new Set(State.feeV2VisibleColumns || []);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        State.feeV2VisibleColumns = toggleColumns.map(([columnKey]) => columnKey).filter(columnKey => next.has(columnKey));
+        Pages.masterFeesV2(area);
+      }));
+      $('.fee-v2-column-all', area)?.addEventListener('click', () => {
+        State.feeV2VisibleColumns = visibleColumns.size === toggleColumns.length ? [] : toggleColumns.map(([key]) => key);
+        Pages.masterFeesV2(area);
+      });
+      $$('.fee-v2-sort', area).forEach(header => header.addEventListener('click', () => {
+        toggleNamedSort(sortState, header.dataset.feeV2Sort);
+        rerenderPreservingTableScroll(area, () => Pages.masterFeesV2(area));
+      }));
 
       $('#fee-v2-edit', area)?.addEventListener('click', () => {
         State.reportDataEditModes[pageKey] = true;
@@ -15064,20 +15247,46 @@ const Pages = {
         State.reportDataEditModes[pageKey] = false;
         Pages.masterFeesV2(area);
       });
+      $('.fee-v2-table', area)?.addEventListener('input', event => {
+        const input = event.target.closest('.fee-v2-override-input[data-owner="master"]');
+        if (!input?.dataset.entityKey) return;
+        $$('.fee-v2-override-input[data-owner="master"]', area).forEach(peer => {
+          if (peer !== input && peer.dataset.entityKey === input.dataset.entityKey && peer.dataset.field === input.dataset.field) {
+            peer.value = input.value;
+          }
+        });
+      });
       $('#fee-v2-save', area)?.addEventListener('click', async () => {
         const changes = [];
+        const masterChanges = new Map();
         $$('.fee-v2-table tbody tr', area).forEach((tr, index) => {
           const row = feeRows[index];
-          const thaiValues = {};
-          const masterValues = {};
+          const thaiValues = {...(row.overrideMetadata?.thai?.values || {})};
           $$('.fee-v2-override-input', tr).forEach(input => {
             const field = input.dataset.field;
             const value = input.value.trim();
-            if (value === String(row.baseValues?.[field] || '').trim()) return;
-            (thaiFeeFields.has(field) ? thaiValues : masterValues)[field] = value;
+            if (thaiFeeFields.has(field)) {
+              if (value !== String(row.baseValues?.[field] || '').trim()) thaiValues[field] = value;
+              else delete thaiValues[field];
+              return;
+            }
+            if (!row.masterKey || masterChanges.has(row.masterKey)) return;
+            const values = {...(row.overrideMetadata?.master?.values || {})};
+            $$('.fee-v2-override-input[data-owner="master"]', tr).forEach(masterInput => {
+              const masterField = masterInput.dataset.field;
+              const masterValue = masterInput.value.trim();
+              if (masterValue !== String(row.baseValues?.[masterField] || '').trim()) values[masterField] = masterValue;
+              else delete values[masterField];
+            });
+            masterChanges.set(row.masterKey, {
+              values,
+              hadOverride:!!row.overrideMetadata?.master,
+            });
           });
           if (Object.keys(thaiValues).length || row.overrideMetadata?.thai) changes.push({entityType:'thaiFunds', key:row.thaiKey, section:'fees', values:thaiValues});
-          if (row.masterKey && (Object.keys(masterValues).length || row.overrideMetadata?.master)) changes.push({entityType:'masterFunds', key:row.masterKey, section:'fees', values:masterValues});
+        });
+        masterChanges.forEach((change, masterKey) => {
+          if (Object.keys(change.values).length || change.hadOverride) changes.push({entityType:'masterFunds', key:masterKey, section:'fees', values:change.values});
         });
         if (!changes.length) {
           toast('ไม่มีข้อมูลที่ต่างจาก Base และไม่มี Override ที่ต้องคืนค่า', 'info');
@@ -16505,7 +16714,7 @@ const Pages = {
     $$('.of2-sort', area).forEach(el => {
       el.addEventListener('click', () => {
         toggleNamedSort(sortState, el.dataset.of2Sort);
-        Pages.otherFactorsFixedIncomeTable(area);
+        rerenderPreservingTableScroll(area, () => Pages.otherFactorsFixedIncomeTable(area));
       });
     });
 
@@ -16957,7 +17166,10 @@ const Pages = {
         fundSize: findColumnIndex(qh, ['Fund Size']),
         maxDd3y: findColumnIndex(qh, ['Max Drawdown 3Y']),
         sd3y: findColumnIndex(qh, ['Std Dev(Annualized) 3Y']),
+        maxDd5y: findColumnIndex(qh, ['Max Drawdown 5Y']),
         sd5y: findColumnIndex(qh, ['Std Dev(Annualized) 5Y']),
+        maxDd10y: findColumnIndex(qh, ['Max Drawdown 10Y']),
+        sd10y: findColumnIndex(qh, ['Std Dev(Annualized) 10Y']),
       };
       const mh = masterRows[0] || [];
       const mi = {
@@ -16968,7 +17180,10 @@ const Pages = {
         top10: findColumnIndex(mh, ['Latest % Asset in Top 10 Holdings']),
         maxDd3y: findColumnIndex(mh, ['Max Drawdown 3Y']),
         sd3y: findColumnIndex(mh, ['Std Dev(Annualized) 3Y']),
+        maxDd5y: findColumnIndex(mh, ['Max Drawdown 5Y']),
         sd5y: findColumnIndex(mh, ['Std Dev(Annualized) 5Y']),
+        maxDd10y: findColumnIndex(mh, ['Max Drawdown 10Y']),
+        sd10y: findColumnIndex(mh, ['Std Dev(Annualized) 10Y']),
       };
       const get = (row, index) => index >= 0 ? String(row?.[index] ?? '').trim() : '';
       const qualityByCode = new Map(qualityRows.slice(1).map(row => [get(row, qi.code).toUpperCase(), row]));
@@ -17013,7 +17228,10 @@ const Pages = {
           fundSizeValue: Number.isNaN(size) ? NaN : size / 1000000,
           maxDd3y: preferMaster(mi.maxDd3y, qi.maxDd3y),
           sd3y: preferMaster(mi.sd3y, qi.sd3y),
+          maxDd5y: preferMaster(mi.maxDd5y, qi.maxDd5y),
           sd5y: preferMaster(mi.sd5y, qi.sd5y),
+          maxDd10y: preferMaster(mi.maxDd10y, qi.maxDd10y),
+          sd10y: preferMaster(mi.sd10y, qi.sd10y),
           sourceDate: formatSourceDate(sec.statisticsLastUpdated || sec.asOfDate || sec.date),
           initial: formatMinimumPurchaseDisplay(sec.initial),
           subsequent: formatMinimumPurchaseDisplay(sec.subsequent),
@@ -17021,7 +17239,7 @@ const Pages = {
         const thaiSection = reportDataOverrideSection(reportOverrides, 'thaiFunds', code, 'equityOverview');
         const masterSection = reportDataOverrideSection(reportOverrides, 'masterFunds', baseRow.masterKey, 'equityOverview');
         const thaiFields = ['cyclical','defensive','sensitive','fundSize','sourceDate','initial','subsequent'];
-        const masterFields = ['holdings','top10','maxDd3y','sd3y','sd5y'];
+        const masterFields = ['holdings','top10','maxDd3y','sd3y','maxDd5y','sd5y','maxDd10y','sd10y'];
         const next = {...baseRow, baseValues:{}, overrideMetadata:{thai:thaiSection || null, master:masterSection || null}};
         [...thaiFields, ...masterFields].forEach(field => { next.baseValues[field] = baseRow[field] || ''; });
         thaiFields.forEach(field => {
@@ -17038,7 +17256,7 @@ const Pages = {
     }
 
     const sortState = State.reportSorts[pageKey] || (State.reportSorts[pageKey] = { key: '', dir: 'asc' });
-    const numericKeys = new Set(['cyclical', 'defensive', 'sensitive', 'holdings', 'top10', 'fundSize', 'maxDd3y', 'sd3y', 'sd5y', 'initial', 'subsequent']);
+    const numericKeys = new Set(['cyclical', 'defensive', 'sensitive', 'holdings', 'top10', 'fundSize', 'maxDd3y', 'sd3y', 'maxDd5y', 'sd5y', 'maxDd10y', 'sd10y', 'initial', 'subsequent']);
     const sortedRows = sortState.key ? [...rows].sort((a, b) => compareValues(
       numericKeys.has(sortState.key) ? parseNum(a[sortState.key]) : a[sortState.key],
       numericKeys.has(sortState.key) ? parseNum(b[sortState.key]) : b[sortState.key],
@@ -17054,7 +17272,10 @@ const Pages = {
     const riskRanges = {
       dd:numericRange('maxDd3y', value => Math.abs(value)),
       sd3y:numericRange('sd3y'),
+      dd5y:numericRange('maxDd5y', value => Math.abs(value)),
       sd5y:numericRange('sd5y'),
+      dd10y:numericRange('maxDd10y', value => Math.abs(value)),
+      sd10y:numericRange('sd10y'),
     };
     const header = (key, html, attrs = '') => `<th ${attrs} class="of4-sort ${sortState.key === key ? 'is-active' : ''}" data-of4-sort="${key}">${renderSortLabel(html, sortState.key === key, sortState.dir, false)}</th>`;
     const bar = (value, color, maximum = 100) => {
@@ -17072,18 +17293,18 @@ const Pages = {
       const n = parseNum(value);
       if (!Number.isFinite(n)) return 'background:#f1f5f9;color:#94a3b8;';
       const range = riskRanges[kind];
-      const scaleValue = kind === 'dd' ? Math.abs(n) : n;
+      const scaleValue = kind.startsWith('dd') ? Math.abs(n) : n;
       const ratio = Number.isFinite(range?.min) && Number.isFinite(range?.max) && range.max > range.min
         ? Math.max(0, Math.min(1, (scaleValue - range.min) / (range.max - range.min)))
         : 0.5;
-      const color = kind === 'dd'
+      const color = kind.startsWith('dd')
         ? mixHex('#fee2e2', '#f87171', ratio)
-        : mixHex('#dcfce7', '#86d39d', ratio);
+        : mixHex('#72c98d', '#dcfce7', ratio);
       return `background:${color};`;
     };
     const isEditing = !!State.reportDataEditModes?.[pageKey];
     const thaiFields = new Set(['cyclical','defensive','sensitive','fundSize','sourceDate','initial','subsequent']);
-    const editableFields = ['cyclical','defensive','sensitive','holdings','top10','fundSize','maxDd3y','sd3y','sd5y','sourceDate','initial','subsequent'];
+    const editableFields = ['cyclical','defensive','sensitive','holdings','top10','fundSize','maxDd3y','sd3y','maxDd5y','sd5y','maxDd10y','sd10y','sourceDate','initial','subsequent'];
     const editButtons = isEditing
       ? '<button class="btn btn-primary" id="of4-save">บันทึก Override</button><button class="btn btn-ghost" id="of4-cancel">ยกเลิก</button>'
       : '<button class="btn btn-ghost" id="of4-edit">แก้ไขข้อมูลกองทุน</button>';
@@ -17092,50 +17313,81 @@ const Pages = {
       const metadata = thaiFields.has(key) ? row.overrideMetadata?.thai : row.overrideMetadata?.master;
       return `<td class="of4-edit-cell"><input class="fund-input of4-override-input" data-key="${esc(key)}" value="${esc(row[key] || '')}" placeholder="-"><small class="of4-edit-meta">Base: ${esc(String(row.baseValues?.[key] || '-'))}${metadata?.updatedAt ? ` · แก้ ${esc(new Date(metadata.updatedAt).toLocaleString('th-TH'))}` : ''}${metadata?.updatedBy ? ` · ${esc(metadata.updatedBy)}` : ''}</small></td>`;
     };
+    const toggleColumns = [
+      ['masterName','Master Fund'],['cyclical','Cyclical %'],['defensive','Defensive %'],['sensitive','Sensitive %'],
+      ['holdings','Number of Holdings'],['top10','% Asset in Top 10 Holdings'],['fundSize','Fund Size'],
+      ['maxDd3y','Max DD 3Y'],['sd3y','SD 3Y'],['maxDd5y','Max DD 5Y'],['sd5y','SD 5Y'],['maxDd10y','Max DD 10Y'],['sd10y','SD 10Y'],
+    ];
+    if (!Array.isArray(State.equityOverviewVisibleColumns)) State.equityOverviewVisibleColumns = toggleColumns.map(([key]) => key);
+    const visibleColumnKeys = new Set(State.equityOverviewVisibleColumns);
+    const visibleSectorKeys = ['cyclical','defensive','sensitive'].filter(key => visibleColumnKeys.has(key));
+    const visibleRiskKeys = ['maxDd3y','sd3y','maxDd5y','sd5y','maxDd10y','sd10y'].filter(key => visibleColumnKeys.has(key));
+    const sectorLabels = {cyclical:'Cyclical %',defensive:'Defensive %',sensitive:'Sensitive %'};
+    const riskLabels = {maxDd3y:'Max DD 3Y',sd3y:'SD 3Y',maxDd5y:'Max DD 5Y',sd5y:'SD 5Y',maxDd10y:'Max DD 10Y',sd10y:'SD 10Y'};
+    const riskKinds = {maxDd3y:'dd',sd3y:'sd3y',maxDd5y:'dd5y',sd5y:'sd5y',maxDd10y:'dd10y',sd10y:'sd10y'};
+    const simpleVisible = key => visibleColumnKeys.has(key);
 
     area.innerHTML = `
       ${pageToolActions(pageKey, source, '', editButtons)}
+      <div class="metric-toggle-group of4-column-controls">
+        <span class="metric-toggle-label">ข้อมูลที่แสดง</span>
+        <div class="view-toggle of4-column-toggle-group" role="group" aria-label="เลือกข้อมูลที่แสดง">
+          ${toggleColumns.map(([key,label]) => `<button class="btn btn-ghost view-toggle-btn of4-column-toggle ${visibleColumnKeys.has(key) ? 'is-active' : ''}" data-column="${key}">${esc(label)}</button>`).join('')}
+        </div>
+        <button class="btn btn-ghost of4-column-all">${visibleColumnKeys.size === toggleColumns.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
+      </div>
       <div class="card report-card" id="report-card">
         <div class="of4-wrap"><table class="of4-table">
-          <colgroup><col class="master"><col class="thai"><col span="3" class="sector"><col class="holdings"><col class="top10"><col class="size"><col span="3" class="risk"><col class="date"><col span="2" class="minimum"></colgroup>
+          <colgroup>${simpleVisible('masterName') ? '<col class="master">' : ''}<col class="thai">${visibleSectorKeys.map(() => '<col class="sector">').join('')}${simpleVisible('holdings') ? '<col class="holdings">' : ''}${simpleVisible('top10') ? '<col class="top10">' : ''}${simpleVisible('fundSize') ? '<col class="size">' : ''}${visibleRiskKeys.map(() => '<col class="risk">').join('')}<col class="date"><col span="2" class="minimum"></colgroup>
           <thead>
             <tr>
-              ${header('masterName', 'Master Fund', 'rowspan="2"')}
+              ${simpleVisible('masterName') ? header('masterName', 'Master Fund', 'rowspan="2"') : ''}
               ${header('thaiFund', 'กองไทย', 'rowspan="2"')}
-              <th colspan="3">Equity Super Sector</th>
-              ${header('holdings', '<span>Number of</span><span>Holdings</span>', 'rowspan="2"')}
-              ${header('top10', '<span>% Asset in</span><span>Top 10 Holdings</span>', 'rowspan="2"')}
-              ${header('fundSize', '<span>Fund Size</span><span>(ลบ.)</span>', 'rowspan="2"')}
-              <th colspan="3">ข้อมูลทางสถิติ</th>
+              ${visibleSectorKeys.length ? `<th colspan="${visibleSectorKeys.length}">Equity Super Sector</th>` : ''}
+              ${simpleVisible('holdings') ? header('holdings', '<span>Number of</span><span>Holdings</span>', 'rowspan="2"') : ''}
+              ${simpleVisible('top10') ? header('top10', '<span>% Asset in</span><span>Top 10 Holdings</span>', 'rowspan="2"') : ''}
+              ${simpleVisible('fundSize') ? header('fundSize', '<span>Fund Size</span><span>(ลบ.)</span>', 'rowspan="2"') : ''}
+              ${visibleRiskKeys.length ? `<th colspan="${visibleRiskKeys.length}">ข้อมูลทางสถิติ</th>` : ''}
               ${header('sourceDate', 'วันที่ / ที่มา', 'rowspan="2"')}
               <th colspan="2">ขั้นต่ำ</th>
             </tr>
             <tr>
-              ${header('cyclical', 'Cyclical %')}${header('defensive', 'Defensive %')}${header('sensitive', 'Sensitive %')}
-              ${header('maxDd3y', 'Max DD 3Y')}${header('sd3y', 'SD 3Y')}${header('sd5y', 'SD 5Y')}
+              ${visibleSectorKeys.map(key => header(key, sectorLabels[key])).join('')}
+              ${visibleRiskKeys.map(key => header(key, riskLabels[key])).join('')}
               ${header('initial', 'ครั้งแรก')}${header('subsequent', 'ครั้งต่อไป')}
             </tr>
           </thead>
           <tbody>${sortedRows.map((row, index) => {
             return `<tr>
-              <td class="of4-name">${esc(row.masterName)}</td>
+              ${simpleVisible('masterName') ? `<td class="of4-name">${esc(row.masterName)}</td>` : ''}
               <td class="of4-thai"${row.highlightColor ? ` style="background-color:${esc(row.highlightColor)}"` : ''}>${esc(row.thaiFund)}</td>
-              ${cell(row, 'cyclical', bar(row.cyclical, 'rgba(255,183,47,.72)'))}
-              ${cell(row, 'defensive', bar(row.defensive, 'rgba(255,183,47,.72)'))}
-              ${cell(row, 'sensitive', bar(row.sensitive, 'rgba(255,183,47,.72)'))}
-              ${cell(row, 'holdings', bar(row.holdings, 'rgba(91,197,125,.58)', holdingsMax))}
-              ${cell(row, 'top10', bar(row.top10, 'rgba(91,197,125,.58)'))}
-              ${cell(row, 'fundSize', bar(row.fundSize, 'rgba(106,158,214,.48)', fundSizeMax))}
-              ${cell(row, 'maxDd3y', risk(row.maxDd3y, 'dd'))}${cell(row, 'sd3y', risk(row.sd3y, 'sd3y'))}${cell(row, 'sd5y', risk(row.sd5y, 'sd5y'))}
+              ${visibleSectorKeys.map(key => cell(row, key, bar(row[key], 'rgba(255,183,47,.72)'))).join('')}
+              ${simpleVisible('holdings') ? cell(row, 'holdings', bar(row.holdings, 'rgba(91,197,125,.58)', holdingsMax)) : ''}
+              ${simpleVisible('top10') ? cell(row, 'top10', bar(row.top10, 'rgba(91,197,125,.58)')) : ''}
+              ${simpleVisible('fundSize') ? cell(row, 'fundSize', bar(row.fundSize, 'rgba(106,158,214,.48)', fundSizeMax)) : ''}
+              ${visibleRiskKeys.map(key => cell(row, key, risk(row[key], riskKinds[key]))).join('')}
               ${cell(row, 'sourceDate')}${cell(row, 'initial')}${cell(row, 'subsequent')}
             </tr>`;
           }).join('')}</tbody>
         </table></div>
       </div>
       <style>
-        .of4-wrap{overflow:auto;background:#fff;padding:12px}.of4-table{width:100%;min-width:1780px;border-collapse:collapse;table-layout:fixed;font-family:inherit;color:#334155;font-size:.98rem}.of4-table col.master{width:290px}.of4-table col.thai{width:170px}.of4-table col.sector{width:96px}.of4-table col.holdings{width:110px}.of4-table col.top10{width:110px}.of4-table col.size{width:92px}.of4-table col.risk{width:92px}.of4-table col.date{width:115px}.of4-table col.minimum{width:92px}.of4-table th{padding:10px 9px;background:#1f3f74;color:#fff;border:1px solid #e4e9f2;font-size:.99rem;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.of4-table th span{display:block}.of4-table th.of4-sort{cursor:pointer}.of4-table th.of4-sort:hover{background:#294d82}.of4-table th.of4-sort.is-active{background:#f2c75b;color:#443200}.of4-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.of4-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;font-size:.98rem;font-weight:400;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.of4-table tbody tr:nth-child(even) td{background-color:#f6f8fb}.of4-table td.of4-name,.of4-table td.of4-thai{text-align:left}.of4-table td.of4-name{font-weight:400}.of4-table td.of4-thai{font-weight:700}.of4-table td.of4-empty{color:#94a3b8}@media(max-width:760px){.of4-table{min-width:1650px}.of4-table th,.of4-table td{font-size:.9rem}}
+        .of4-column-controls{margin:10px 0 4px;align-items:flex-start}.of4-column-toggle-group{display:flex;flex-wrap:wrap;max-width:100%}.of4-column-toggle-group .view-toggle-btn{font-size:.72rem;padding:7px 9px}.of4-column-all{font-size:.74rem;white-space:nowrap}
+        .of4-wrap{overflow:auto;background:#fff;padding:12px}.of4-table{width:100%;min-width:${Math.max(720, 550 + visibleColumnKeys.size * 105)}px;border-collapse:collapse;table-layout:fixed;font-family:inherit;color:#334155;font-size:.98rem}.of4-table col.master{width:290px}.of4-table col.thai{width:170px}.of4-table col.sector{width:96px}.of4-table col.holdings{width:110px}.of4-table col.top10{width:110px}.of4-table col.size{width:92px}.of4-table col.risk{width:92px}.of4-table col.date{width:115px}.of4-table col.minimum{width:92px}.of4-table th{padding:10px 9px;background:#1f3f74;color:#fff;border:1px solid #e4e9f2;font-size:.99rem;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.of4-table th span{display:block}.of4-table th.of4-sort{cursor:pointer}.of4-table th.of4-sort:hover{background:#294d82}.of4-table th.of4-sort.is-active{background:#f2c75b;color:#443200}.of4-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.of4-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;font-size:.98rem;font-weight:400;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.of4-table tbody tr:nth-child(even) td{background-color:#f6f8fb}.of4-table td.of4-name,.of4-table td.of4-thai{text-align:left}.of4-table td.of4-name{font-weight:400}.of4-table td.of4-thai{font-weight:700}.of4-table td.of4-empty{color:#94a3b8}@media(max-width:760px){.of4-table th,.of4-table td{font-size:.9rem}}
         .of4-table td.of4-edit-cell{padding:4px;background:#fff8df;overflow:visible}.of4-override-input{width:100%;min-width:72px;text-align:center}.of4-edit-meta{display:block;margin-top:3px;color:#6b7280;font-size:.68rem;line-height:1.2;white-space:normal}
       </style>`;
+
+    $$('.of4-column-toggle', area).forEach(button => button.addEventListener('click', () => {
+      const key = button.dataset.column;
+      const next = new Set(State.equityOverviewVisibleColumns || []);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      State.equityOverviewVisibleColumns = toggleColumns.map(([columnKey]) => columnKey).filter(columnKey => next.has(columnKey));
+      Pages.otherFactorsEquityOverviewTable(area);
+    }));
+    $('.of4-column-all', area)?.addEventListener('click', () => {
+      State.equityOverviewVisibleColumns = visibleColumnKeys.size === toggleColumns.length ? [] : toggleColumns.map(([key]) => key);
+      Pages.otherFactorsEquityOverviewTable(area);
+    });
 
     $('#of4-edit', area)?.addEventListener('click', () => {
       State.reportDataEditModes[pageKey] = true;
@@ -17149,13 +17401,14 @@ const Pages = {
       const changes = [];
       $$('.of4-table tbody tr', area).forEach((tr, index) => {
         const row = sortedRows[index];
-        const thaiValues = {};
-        const masterValues = {};
+        const thaiValues = { ...(row.overrideMetadata?.thai?.values || {}) };
+        const masterValues = { ...(row.overrideMetadata?.master?.values || {}) };
         $$('.of4-override-input', tr).forEach(input => {
           const field = input.dataset.key;
           const value = input.value.trim();
-          if (value === String(row.baseValues?.[field] || '').trim()) return;
-          (thaiFields.has(field) ? thaiValues : masterValues)[field] = value;
+          const ownerValues = thaiFields.has(field) ? thaiValues : masterValues;
+          if (value === String(row.baseValues?.[field] || '').trim()) delete ownerValues[field];
+          else ownerValues[field] = value;
         });
         if (Object.keys(thaiValues).length || row.overrideMetadata?.thai) changes.push({entityType:'thaiFunds', key:row.code, section:'equityOverview', values:thaiValues});
         if (row.masterKey && (Object.keys(masterValues).length || row.overrideMetadata?.master)) changes.push({entityType:'masterFunds', key:row.masterKey, section:'equityOverview', values:masterValues});
@@ -17178,11 +17431,11 @@ const Pages = {
 
     $$('.of4-sort', area).forEach(el => el.addEventListener('click', () => {
       toggleNamedSort(sortState, el.dataset.of4Sort);
-      Pages.otherFactorsEquityOverviewTable(area);
+      rerenderPreservingTableScroll(area, () => Pages.otherFactorsEquityOverviewTable(area));
     }));
-    const columns = ['Master Fund', 'กองไทย', 'Cyclical %', 'Defensive %', 'Sensitive %', 'Number of Holdings', '% Asset in Top 10 Holdings', 'Fund Size (ลบ.)', 'Max DD 3Y', 'SD 3Y', 'SD 5Y', 'วันที่ / ที่มา', 'ขั้นต่ำครั้งแรก', 'ขั้นต่ำครั้งต่อไป'];
+    const columns = ['Master Fund', 'กองไทย', 'Cyclical %', 'Defensive %', 'Sensitive %', 'Number of Holdings', '% Asset in Top 10 Holdings', 'Fund Size (ลบ.)', 'Max DD 3Y', 'SD 3Y', 'Max DD 5Y', 'SD 5Y', 'Max DD 10Y', 'SD 10Y', 'วันที่ / ที่มา', 'ขั้นต่ำครั้งแรก', 'ขั้นต่ำครั้งต่อไป'];
     App._currentExport = null;
-    App._currentTableExport = () => buildSimpleTablePayload(CONFIG.PAGES[pageKey]?.title || 'ปัจจัยประกอบอื่นๆ 4', source, columns, sortedRows.map(row => columns.map((_, i) => [row.masterName, row.thaiFund, row.cyclical, row.defensive, row.sensitive, row.holdings, row.top10, row.fundSize, row.maxDd3y, row.sd3y, row.sd5y, row.sourceDate, row.initial, row.subsequent][i] || '-')));
+    App._currentTableExport = () => buildSimpleTablePayload(CONFIG.PAGES[pageKey]?.title || 'ปัจจัยประกอบอื่นๆ 4', source, columns, sortedRows.map(row => columns.map((_, i) => [row.masterName, row.thaiFund, row.cyclical, row.defensive, row.sensitive, row.holdings, row.top10, row.fundSize, row.maxDd3y, row.sd3y, row.maxDd5y, row.sd5y, row.maxDd10y, row.sd10y, row.sourceDate, row.initial, row.subsequent][i] || '-')));
     App._currentClipboardExport = null;
     bindPageImageActions(area, 'report-card', 'other-factors-equity-overview-table');
   },
@@ -17333,7 +17586,7 @@ const Pages = {
 
     $$('.of5-sort', area).forEach(el => el.addEventListener('click', () => {
       toggleNamedSort(sortState, el.dataset.of5Sort);
-      Pages.equitySectorAllocationTable(area);
+      rerenderPreservingTableScroll(area, () => Pages.equitySectorAllocationTable(area));
     }));
     const columns = ['ชื่อกอง', ...sectors.map(sector => sector.label)];
     App._currentExport = null;
@@ -17501,7 +17754,7 @@ const Pages = {
 
     $$('.of6-sort', area).forEach(el => el.addEventListener('click', () => {
       toggleNamedSort(sortState, el.dataset.of6Sort);
-      Pages.masterFundCalendarMaxDrawdownTable(area);
+      rerenderPreservingTableScroll(area, () => Pages.masterFundCalendarMaxDrawdownTable(area));
     }));
     const columns = ['Master Fund', 'ชื่อกอง', ...years.map(String)];
     App._currentExport = null;
@@ -17513,6 +17766,212 @@ const Pages = {
     );
     App._currentClipboardExport = null;
     bindPageImageActions(area, 'report-card', 'master-fund-calendar-max-drawdown-table');
+  },
+
+  async equityStyleBoxTable(area) {
+    const pageKey = 'master-placeholder-15';
+    const source = 'AVP Thai Fund for Quality';
+    const metrics = [
+      { key: 'growth', label: 'Growth', source: 'Equity Style Growth % (Net)', numeric: true, group: 'style' },
+      { key: 'core', label: 'Core', source: 'Equity Style Core % (Net)', numeric: true, group: 'style' },
+      { key: 'value', label: 'Value', source: 'Equity Style Value % (Net)', numeric: true, group: 'style' },
+      { key: 'styleBox', label: 'Equity Style Box', source: 'Equity Style Box (Long)', numeric: false, group: 'box' },
+      { key: 'largeCap', label: 'Large', source: 'Equity Style Large Cap % (Net)', numeric: true, group: 'cap' },
+      { key: 'midCap', label: 'Mid', source: 'Equity Style Mid Cap % (Net)', numeric: true, group: 'cap' },
+      { key: 'smallCap', label: 'Small', source: 'Equity Style Small Cap % (Net)', numeric: true, group: 'cap' },
+    ];
+    setLoading(area, 'กำลังโหลด Equity Style Box...');
+
+    let rows = [];
+    try {
+      const [selectRows, qualityRows, reportOverrides] = await Promise.all([
+        fetchCached('select-fund'),
+        fetchCached('thai-annualized-v2'),
+        loadReportDataOverrides(State.currentQuarter),
+      ]);
+      const catalog = applyFundOverrides(buildSelectedFundsCatalog(selectRows));
+      const catalogByKey = Object.fromEntries(catalog.map(fund => [fund.key, fund]));
+      const previousSelectedFunds = State.selectedFunds || {};
+      State.selectedFunds = Object.keys(previousSelectedFunds).length
+        ? { ...previousSelectedFunds, ...Object.fromEntries(Object.keys(previousSelectedFunds).map(key => [key, catalogByKey[key] || previousSelectedFunds[key]])) }
+        : catalogByKey;
+
+      const headers = qualityRows[0] || [];
+      const codeIndex = findColumnIndex(headers, ['Fund Code']);
+      const metricIndexes = Object.fromEntries(metrics.map(metric => [metric.key, findColumnIndex(headers, [metric.source])]));
+      const get = (row, index) => index >= 0 ? String(row?.[index] ?? '').trim() : '';
+      const qualityByCode = new Map(qualityRows.slice(1).map(row => [get(row, codeIndex).toUpperCase(), row]));
+      const formatNumber = value => {
+        const n = parseNum(value);
+        return Number.isNaN(n) ? '' : n.toFixed(2);
+      };
+
+      rows = Object.values(State.selectedFunds || {})
+        .filter(fund => State.selectedKeys?.has(fund.key))
+        .map(fund => {
+          const code = String(fund.code || '').trim().toUpperCase();
+          const raw = qualityByCode.get(code) || [];
+          const values = Object.fromEntries(metrics.map(metric => [
+            metric.key,
+            metric.numeric ? formatNumber(get(raw, metricIndexes[metric.key])) : get(raw, metricIndexes[metric.key]),
+          ]));
+          const section = reportDataOverrideSection(reportOverrides, 'thaiFunds', code, 'equityStyleBox');
+          return {
+            key: fund.key,
+            code,
+            fundName: fund.code || fund.name || '-',
+            highlightColor: HL_COLORS?.[State.highlights?.[fund.key]]?.bg || '',
+            ...values,
+            ...(section?.values || {}),
+            baseValues: values,
+            overrideValues: { ...(section?.values || {}) },
+            overrideMetadata: section?.metadata || null,
+          };
+        });
+    } catch (error) {
+      setError(area, error.message, pageKey);
+      return;
+    }
+
+    const sortState = State.reportSorts[pageKey] || (State.reportSorts[pageKey] = { key: '', dir: 'asc' });
+    const metricByKey = Object.fromEntries(metrics.map(metric => [metric.key, metric]));
+    const sortedRows = sortState.key ? [...rows].sort((a, b) => {
+      const metric = metricByKey[sortState.key];
+      const numeric = Boolean(metric?.numeric);
+      const left = sortState.key === 'fundName' ? a.fundName : numeric ? parseNum(a[sortState.key]) : a[sortState.key];
+      const right = sortState.key === 'fundName' ? b.fundName : numeric ? parseNum(b[sortState.key]) : b[sortState.key];
+      return compareValues(left, right, sortState.dir);
+    }) : rows;
+
+    if (!Array.isArray(State.equityStyleBoxVisibleColumns)) State.equityStyleBoxVisibleColumns = metrics.map(metric => metric.key);
+    else State.equityStyleBoxVisibleColumns = State.equityStyleBoxVisibleColumns.filter(key => metricByKey[key]);
+    const visibleKeys = new Set(State.equityStyleBoxVisibleColumns);
+    const visibleMetrics = metrics.filter(metric => visibleKeys.has(metric.key));
+    const styleMetrics = visibleMetrics.filter(metric => metric.group === 'style');
+    const boxMetrics = visibleMetrics.filter(metric => metric.group === 'box');
+    const capMetrics = visibleMetrics.filter(metric => metric.group === 'cap');
+    const showStyleBoxGap = styleMetrics.length > 0 && boxMetrics.length > 0;
+    const showBoxCapGap = boxMetrics.length > 0 && capMetrics.length > 0;
+    const editing = Boolean(State.reportDataEditModes[pageKey]);
+    const header = (key, label) => `<th class="esb-sort ${sortState.key === key ? 'is-active' : ''}" data-esb-sort="${key}">${renderSortLabel(label, sortState.key === key, sortState.dir, false)}</th>`;
+    const barStyle = value => {
+      const n = parseNum(value);
+      if (Number.isNaN(n)) return '';
+      const pct = Math.max(0, Math.min(100, n));
+      return `background-image:linear-gradient(90deg,rgba(91,139,201,.78) 0,rgba(91,139,201,.78) ${pct}%,transparent ${pct}%,transparent 100%);`;
+    };
+    const metadata = row => row.overrideMetadata?.updatedAt
+      ? ` · แก้ ${esc(new Date(row.overrideMetadata.updatedAt).toLocaleString('th-TH'))}${row.overrideMetadata?.updatedBy ? ` · ${esc(row.overrideMetadata.updatedBy)}` : ''}`
+      : '';
+    const renderCell = (row, metric, rowIndex) => {
+      const value = row[metric.key] ?? '';
+      if (editing) {
+        return `<td class="report-override-cell"><input class="fund-input esb-override-input" data-row="${rowIndex}" data-field="${metric.key}" ${metric.numeric ? 'type="number" step="0.01"' : 'type="text"'} value="${esc(String(value))}"><small>Base: ${esc(String(row.baseValues?.[metric.key] || '-'))}${metadata(row)}</small></td>`;
+      }
+      if (!metric.numeric) return `<td class="esb-style-box ${value ? '' : 'esb-empty'}">${esc(String(value || '-'))}</td>`;
+      return `<td class="${value !== '' ? '' : 'esb-empty'}" style="${barStyle(value)}">${esc(String(value !== '' ? value : '-'))}</td>`;
+    };
+    const editActions = editing
+      ? '<button class="btn btn-primary" id="esb-save">บันทึก Override</button><button class="btn btn-ghost" id="esb-cancel">ยกเลิก</button>'
+      : '<button class="btn btn-ghost" id="esb-edit">แก้ไขข้อมูลกองทุน</button>';
+    const groupedHeader = [
+      styleMetrics.length ? `<th colspan="${styleMetrics.length}">Investment Style (%)</th>` : '',
+      showStyleBoxGap ? '<th class="esb-spacer" rowspan="2" aria-hidden="true"></th>' : '',
+      boxMetrics.length ? '<th rowspan="2">Equity Style Box</th>' : '',
+      showBoxCapGap ? '<th class="esb-spacer" rowspan="2" aria-hidden="true"></th>' : '',
+      capMetrics.length ? `<th colspan="${capMetrics.length}">Market Capitalization (%)</th>` : '',
+    ].join('');
+    const secondHeader = [
+      ...styleMetrics.map(metric => header(metric.key, metric.label)),
+      ...capMetrics.map(metric => header(metric.key, metric.label)),
+    ].join('');
+
+    area.innerHTML = `
+      ${pageToolActions(pageKey, source)}
+      <div class="metric-toggle-group esb-column-controls">
+        <span class="metric-toggle-label">หัวตารางที่แสดง</span>
+        <div class="view-toggle esb-column-toggle-group" role="group" aria-label="เลือกหัวตาราง Equity Style Box ที่แสดง">
+          ${metrics.map(metric => `<button class="btn btn-ghost view-toggle-btn esb-column-toggle ${visibleKeys.has(metric.key) ? 'is-active' : ''}" data-column="${metric.key}">${esc(metric.label)}</button>`).join('')}
+        </div>
+        <button class="btn btn-ghost esb-column-all">${visibleMetrics.length === metrics.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
+      </div>
+      <div class="report-edit-actions">${editActions}</div>
+      <div class="card report-card" id="report-card">
+        <div class="esb-wrap"><table class="esb-table">
+          <colgroup><col class="fund"><col span="${styleMetrics.length}" class="metric">${showStyleBoxGap ? '<col class="spacer">' : ''}<col span="${boxMetrics.length}" class="metric">${showBoxCapGap ? '<col class="spacer">' : ''}<col span="${capMetrics.length}" class="metric"></colgroup>
+          <thead>
+            <tr><th rowspan="2" class="esb-sort ${sortState.key === 'fundName' ? 'is-active' : ''}" data-esb-sort="fundName">${renderSortLabel('ชื่อกอง', sortState.key === 'fundName', sortState.dir, false)}</th>${groupedHeader}</tr>
+            <tr>${secondHeader}</tr>
+          </thead>
+          <tbody>${sortedRows.map((row, rowIndex) => `<tr>
+            <td class="esb-fund"${row.highlightColor ? ` style="background-color:${esc(row.highlightColor)}"` : ''}>${esc(row.fundName)}</td>
+            ${styleMetrics.map(metric => renderCell(row, metric, rowIndex)).join('')}
+            ${showStyleBoxGap ? '<td class="esb-spacer" aria-hidden="true"></td>' : ''}
+            ${boxMetrics.map(metric => renderCell(row, metric, rowIndex)).join('')}
+            ${showBoxCapGap ? '<td class="esb-spacer" aria-hidden="true"></td>' : ''}
+            ${capMetrics.map(metric => renderCell(row, metric, rowIndex)).join('')}
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </div>
+      <style>
+        .esb-column-controls{margin:10px 0 4px;align-items:flex-start}.esb-column-toggle-group{display:flex;flex-wrap:wrap;max-width:100%}.esb-column-toggle-group .view-toggle-btn{font-size:.74rem;padding:7px 10px}.esb-column-all{font-size:.74rem;white-space:nowrap}.esb-wrap{overflow:auto;background:#fff;padding:12px}.esb-table{width:100%;min-width:${Math.max(520,200+(visibleMetrics.length*122)+(showStyleBoxGap ? 18 : 0)+(showBoxCapGap ? 18 : 0))}px;border-collapse:collapse;table-layout:fixed;color:#334155;font-size:.94rem}.esb-table col.fund{width:200px}.esb-table col.metric{width:122px}.esb-table col.spacer{width:18px}.esb-table th{padding:11px 8px;background:#2c80bf;color:#fff;border:1px solid #e4e9f2;font-weight:700;text-align:center;vertical-align:middle;line-height:1.35}.esb-table th.esb-sort{cursor:pointer}.esb-table th.esb-sort:hover{background:#256fa8}.esb-table th.esb-sort.is-active{background:#f2c75b;color:#443200}.esb-table th.esb-spacer,.esb-table td.esb-spacer{width:18px;min-width:18px;padding:0;background:#fff!important;border-top:0;border-bottom:0}.esb-table .sort-label{display:inline-flex;align-items:center;justify-content:center;gap:4px;width:100%}.esb-table td{padding:11px 10px;border:1px solid #e4e9f2;background-color:#fff;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.esb-table tbody tr:nth-child(even) td{background-color:#f3f6fa}.esb-table td.esb-fund{text-align:left;font-weight:700}.esb-table td.esb-style-box{font-weight:600}.esb-table td.esb-empty{color:#94a3b8}.esb-table .report-override-cell{white-space:normal}.esb-table .report-override-cell small{display:block;margin-top:4px;color:#64748b;font-size:.66rem;line-height:1.25}@media(max-width:760px){.esb-table{font-size:.86rem}}
+      </style>`;
+
+    $$('.esb-column-toggle', area).forEach(button => button.addEventListener('click', () => {
+      const key = button.dataset.column;
+      const next = new Set(State.equityStyleBoxVisibleColumns || []);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      State.equityStyleBoxVisibleColumns = metrics.map(metric => metric.key).filter(metricKey => next.has(metricKey));
+      Pages.equityStyleBoxTable(area);
+    }));
+    $('.esb-column-all', area)?.addEventListener('click', () => {
+      State.equityStyleBoxVisibleColumns = visibleMetrics.length === metrics.length ? [] : metrics.map(metric => metric.key);
+      Pages.equityStyleBoxTable(area);
+    });
+    $('#esb-edit', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = true; Pages.equityStyleBoxTable(area); });
+    $('#esb-cancel', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = false; Pages.equityStyleBoxTable(area); });
+    $('#esb-save', area)?.addEventListener('click', async () => {
+      const changesByRow = new Map();
+      $$('.esb-override-input', area).forEach(input => {
+        const rowIndex = Number(input.dataset.row);
+        const row = sortedRows[rowIndex];
+        if (!row) return;
+        const values = changesByRow.get(rowIndex) || { ...(row.overrideValues || {}) };
+        const value = String(input.value ?? '').trim();
+        const baseValue = String(row.baseValues?.[input.dataset.field] ?? '').trim();
+        if (value !== baseValue) values[input.dataset.field] = value;
+        else delete values[input.dataset.field];
+        changesByRow.set(rowIndex, values);
+      });
+      const changes = sortedRows.map((row, rowIndex) => {
+        const values = changesByRow.get(rowIndex) || { ...(row.overrideValues || {}) };
+        return row.code && (Object.keys(values).length || row.overrideMetadata)
+          ? { entityType: 'thaiFunds', key: row.code, section: 'equityStyleBox', values }
+          : null;
+      }).filter(Boolean);
+      try {
+        await saveReportDataOverrideChanges(State.currentQuarter, changes);
+        State.reportDataEditModes[pageKey] = false;
+        toast('บันทึก Equity Style Box Override ลง R2 แล้ว', 'success');
+        Pages.equityStyleBoxTable(area);
+      } catch (error) {
+        toast(error.message || 'บันทึกไม่สำเร็จ', 'error');
+      }
+    });
+    $$('.esb-sort', area).forEach(element => element.addEventListener('click', () => {
+      toggleNamedSort(sortState, element.dataset.esbSort);
+      rerenderPreservingTableScroll(area, () => Pages.equityStyleBoxTable(area));
+    }));
+
+    App._currentExport = null;
+    App._currentTableExport = () => buildSimpleTablePayload(
+      CONFIG.PAGES[pageKey]?.title || 'Equity Style Box',
+      source,
+      ['ชื่อกอง', ...metrics.map(metric => metric.label)],
+      sortedRows.map(row => [row.fundName, ...metrics.map(metric => row[metric.key] || '-')])
+    );
+    App._currentClipboardExport = null;
+    bindPageImageActions(area, 'report-card', 'equity-style-box-table');
   },
 
   /* ── Variants of masterOtherFactors with different default metrics ── */
@@ -20138,9 +20597,8 @@ const Pages = {
       }
       body.innerHTML = '<div class="state-box compact">กำลังโหลด Available Symbols...</div>';
       try {
-        if (force) State.ftHistoricalDatabase = null;
         const [payload, avpLookup] = await Promise.all([
-          loadFtHistoricalPayloadForPage(5000),
+          loadFtAvailableSymbolsPayload(force),
           buildFtSymbolAvpLookup(),
         ]);
         const symbols = (payload.symbols || []).filter(item => item.symbol);
@@ -22370,7 +22828,7 @@ const Pages = {
 
     let ftSymbolItems = [];
     try {
-      const payload = await loadFtHistoricalPayloadForPage(1);
+      const payload = await loadFtAvailableSymbolsPayload();
       ftSymbolItems = (payload.symbols || [])
         .filter(item => {
           if (!item.symbol) return false;
@@ -22945,6 +23403,13 @@ const Pages = {
       const cleanSymbol = String(symbol || '').trim();
       if (!cleanSymbol) return null;
       try {
+        if (r2DataApiUrl()) {
+          try {
+            return await loadFtR2Qualitative(cleanSymbol);
+          } catch (r2Error) {
+            console.warn(`FT qualitative R2 fallback for ${cleanSymbol}`, r2Error);
+          }
+        }
         if (ftHistoricalApiUrl()) {
           const payload = await loadFtHistoricalDatabase();
           return getFtQualitativeFromPayload(payload, cleanSymbol);
@@ -23595,6 +24060,7 @@ const App = {
       'master-placeholder-11': { title: 'ปัจจัยประกอบอื่นๆ 4', subtitle: 'Equity Super Sector, Holdings, Fund Size, Risk และขั้นต่ำลงทุน' },
       'master-placeholder-13': { title: 'สัดส่วนลงทุนแยกตามอุตสาหกรรม', subtitle: 'ปัจจัยประกอบอื่นๆ 5 · เปรียบเทียบสัดส่วน Equity Sector ของกองทุนที่เลือก' },
       'master-placeholder-14': { title: 'Max DD Master Fund', subtitle: 'Max Drawdown รายปีตามข้อมูลที่มี' },
+      'master-placeholder-15': { title: 'Equity Style Box', subtitle: 'เปรียบเทียบ Investment Style และ Market Capitalization ของกองทุนที่เลือก' },
       'notes': { title: 'บันทึกข้อมูล', subtitle: 'ดราฟงานค้างและโหลดกลับมาทำต่อ' },
       'guide':             { title: 'คู่มือการใช้งาน', subtitle: '' },
       'fund-list-update':  { title: 'Fund List Update', subtitle: 'ติดตามการเพิ่ม นำออก และสลับตำแหน่ง Fund List ราย Quarter' },
@@ -23647,6 +24113,7 @@ const App = {
       case 'master-placeholder-11': Pages.otherFactorsEquityOverviewTable(area); break;
       case 'master-placeholder-13': Pages.equitySectorAllocationTable(area); break;
       case 'master-placeholder-14': Pages.masterFundCalendarMaxDrawdownTable(area); break;
+      case 'master-placeholder-15': Pages.equityStyleBoxTable(area); break;
       case 'notes':             Pages.notesPage(area);                      break;
       case 'guide':             Pages.guide(area);                          break;
       case 'fund-list-update':  Pages.fundListUpdate(area);                 break;
