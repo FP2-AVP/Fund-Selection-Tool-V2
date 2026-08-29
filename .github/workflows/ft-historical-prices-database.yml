@@ -178,7 +178,7 @@ jobs:
         if: ${{ env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_R2_ACCESS_KEY_ID != '' && env.CLOUDFLARE_R2_SECRET_ACCESS_KEY != '' && env.CLOUDFLARE_R2_BUCKET != '' }}
         run: |
           upload_mode="full"
-          if [ "${{ inputs.job_kind }}" = "qualitative-all" ]; then upload_mode="qualitative"; fi
+          if [ "${{ inputs.job_kind }}" = "qualitative-all" ] || [ "${{ inputs.job_kind }}" = "qualitative" ]; then upload_mode="qualitative"; fi
           if [ "${{ inputs.job_kind }}" = "ytd-all" ]; then upload_mode="ytd"; fi
           if [ "${{ inputs.job_kind }}" = "historical" ]; then upload_mode="historical"; fi
           python scripts/sync_ft_r2.py --upload \
