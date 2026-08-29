@@ -1381,21 +1381,37 @@ def sync_historical_symbols(
     db_path: Path = DEFAULT_DB_PATH,
     continue_on_error: bool = False,
     sleep_seconds: float = 0,
+    workers: int = 1,
 ) -> dict[str, Any]:
-    import time
-
     results: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
-    for idx, symbol in enumerate(symbols):
-        try:
-            result = sync_historical_prices(symbol, start_date, end_date, output_root, db_path)
-            results.append(result)
-        except Exception as exc:
-            errors.append({"symbol": symbol, "error": str(exc)})
-            if not continue_on_error:
-                raise
-        if sleep_seconds > 0 and idx < len(symbols) - 1:
-            time.sleep(sleep_seconds)
+    init_db(db_path)
+    if workers > 1 and len(symbols) > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(workers, len(symbols), 5)) as pool:
+            futures = {
+                pool.submit(sync_historical_prices, symbol, start_date, end_date, output_root, db_path): symbol
+                for symbol in symbols
+            }
+            for future in as_completed(futures):
+                symbol = futures[future]
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    errors.append({"symbol": symbol, "error": str(exc)})
+                    if not continue_on_error:
+                        raise
+    else:
+        import time
+        for idx, symbol in enumerate(symbols):
+            try:
+                results.append(sync_historical_prices(symbol, start_date, end_date, output_root, db_path))
+            except Exception as exc:
+                errors.append({"symbol": symbol, "error": str(exc)})
+                if not continue_on_error:
+                    raise
+            if sleep_seconds > 0 and idx < len(symbols) - 1:
+                time.sleep(sleep_seconds)
     return {
         "requested": len(symbols),
         "succeeded": len(results),
@@ -1417,6 +1433,7 @@ def main() -> int:
     parser.add_argument("--qualitative-only", action="store_true", help="Fetch summary/profile and risk data without historical prices")
     parser.add_argument("--continue-on-error", action="store_true", help="Continue syncing remaining symbols if one symbol fails")
     parser.add_argument("--sleep-seconds", type=float, default=0, help="Delay between symbols for batch sync")
+    parser.add_argument("--workers", type=int, default=1, help="Concurrent historical symbol fetches (maximum 5)")
     parser.add_argument("--export-json", action="store_true", help="Export the SQLite database to a Drive-friendly JSON file")
     parser.add_argument(
         "--output",
@@ -1461,6 +1478,7 @@ def main() -> int:
         args.db_path,
         args.continue_on_error,
         args.sleep_seconds,
+        max(1, min(args.workers, 5)),
     )
     for result in batch["results"]:
         print(f"{result['symbol']}: resolved_issue_id={result['ftIssueId']} csv={result['csvPath']} total_rows={result['totalRows']}")

@@ -43,9 +43,8 @@ def write_json(path: Path, payload: Any) -> None:
 
 def write_gzip_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with gzip.open(path, "wt", encoding="utf-8", compresslevel=6) as handle:
-        json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
-        handle.write("\n")
+    raw = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    path.write_bytes(gzip.compress(raw, compresslevel=6, mtime=0))
 
 
 def rows_for_symbol(conn: sqlite3.Connection, table: str, symbol: str) -> list[dict[str, Any]]:
@@ -181,7 +180,56 @@ def export_objects(db_path: Path, build_root: Path) -> dict[str, Any]:
     return index_payload
 
 
-def upload_objects(build_root: Path, prefix: str, db_path: Path | None = None) -> dict[str, Any]:
+def selected_object(path: Path, build_root: Path, mode: str, symbols: set[str], years: set[str]) -> bool:
+    relative = path.relative_to(build_root).as_posix()
+    if relative == "index.json":
+        return True
+    parts = relative.split("/")
+    if len(parts) < 3 or parts[0] != "symbols":
+        return mode == "full"
+    slug = parts[1].upper()
+    if symbols and slug not in symbols:
+        return False
+    if parts[2] == "metadata.json":
+        return True
+    if mode == "qualitative":
+        return parts[2] == "qualitative"
+    if mode in {"ytd", "historical"} and parts[2] == "prices" and len(parts) == 4:
+        return not years or Path(parts[3]).name.split(".")[0] in years
+    return mode == "full"
+
+
+def stable_payload(value: Any) -> Any:
+    """Remove refresh timestamps so unchanged FT values keep the same object hash."""
+    if isinstance(value, dict):
+        return {
+            key: stable_payload(item)
+            for key, item in value.items()
+            if key not in {"generatedAt", "fetchedAt", "fetched_at"}
+        }
+    if isinstance(value, list):
+        return [stable_payload(item) for item in value]
+    return value
+
+
+def object_digest(path: Path, body: bytes) -> str:
+    try:
+        raw = gzip.decompress(body) if path.suffix == ".gz" else body
+        payload = json.loads(raw.decode("utf-8"))
+        canonical = json.dumps(stable_payload(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(canonical).hexdigest()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return hashlib.sha256(body).hexdigest()
+
+
+def upload_objects(
+    build_root: Path,
+    prefix: str,
+    db_path: Path | None = None,
+    mode: str = "full",
+    symbols: set[str] | None = None,
+    years: set[str] | None = None,
+) -> dict[str, Any]:
     account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"].strip()
     bucket = os.environ["CLOUDFLARE_R2_BUCKET"].strip()
     import boto3
@@ -194,7 +242,12 @@ def upload_objects(build_root: Path, prefix: str, db_path: Path | None = None) -
         aws_secret_access_key=os.environ["CLOUDFLARE_R2_SECRET_ACCESS_KEY"].strip(),
     )
     uploaded = []
+    skipped = []
+    selected_symbols = symbols or set()
+    selected_years = years or set()
     for path in sorted(item for item in build_root.rglob("*") if item.is_file()):
+        if not selected_object(path, build_root, mode, selected_symbols, selected_years):
+            continue
         relative = path.relative_to(build_root).as_posix()
         key = f"{prefix.strip('/')}/{relative}"
         body = path.read_bytes()
@@ -203,12 +256,22 @@ def upload_objects(build_root: Path, prefix: str, db_path: Path | None = None) -
             "Key": key,
             "Body": body,
             "ContentType": "application/json; charset=utf-8",
-            "Metadata": {"sha256": hashlib.sha256(body).hexdigest()},
+            "Metadata": {"sha256": object_digest(path, body)},
         }
         if path.suffix == ".gz":
             args["ContentEncoding"] = "gzip"
         if relative == "index.json":
             args["CacheControl"] = "no-cache"
+        digest = args["Metadata"]["sha256"]
+        try:
+            current = client.head_object(Bucket=bucket, Key=key)
+            if str((current.get("Metadata") or {}).get("sha256") or "") == digest:
+                skipped.append(key)
+                print(f"Unchanged s3://{bucket}/{key}")
+                continue
+        except client.exceptions.ClientError as exc:
+            if int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)) != 404:
+                raise
         client.put_object(**args)
         uploaded.append({"key": key, "bytes": len(body)})
         print(f"Uploaded s3://{bucket}/{key} ({len(body):,} bytes)")
@@ -221,7 +284,7 @@ def upload_objects(build_root: Path, prefix: str, db_path: Path | None = None) -
         )
         uploaded.append({"key": key, "bytes": len(body)})
         print(f"Uploaded s3://{bucket}/{key} ({len(body):,} bytes)")
-    return {"bucket": bucket, "prefix": prefix, "uploaded": len(uploaded), "objects": uploaded}
+    return {"bucket": bucket, "prefix": prefix, "mode": mode, "uploaded": len(uploaded), "skipped": len(skipped), "objects": uploaded}
 
 
 def main() -> int:
@@ -230,6 +293,10 @@ def main() -> int:
     parser.add_argument("--build-root", type=Path, default=DEFAULT_BUILD_ROOT)
     parser.add_argument("--prefix", default=DEFAULT_R2_PREFIX)
     parser.add_argument("--upload", action="store_true")
+    parser.add_argument("--mode", choices=("full", "historical", "ytd", "qualitative"), default="full")
+    parser.add_argument("--symbols", default="", help="Comma/newline separated symbols whose shards may be uploaded")
+    parser.add_argument("--start-date", default="")
+    parser.add_argument("--end-date", default="")
     args = parser.parse_args()
     result = export_objects(args.db_path, args.build_root)
     summary: dict[str, Any] = {
@@ -238,7 +305,15 @@ def main() -> int:
         "priceRows": result["counts"]["priceRows"],
     }
     if args.upload:
-        summary["upload"] = upload_objects(args.build_root, args.prefix, args.db_path)
+        selected_symbols = {symbol_slug(value) for value in args.symbols.replace("\n", ",").split(",") if value.strip()}
+        selected_years: set[str] = set()
+        if args.mode == "ytd":
+            selected_years = {(args.end_date or utc_now()[:10])[:4]}
+        elif args.mode == "historical" and args.start_date and args.end_date:
+            selected_years = {str(year) for year in range(int(args.start_date[:4]), int(args.end_date[:4]) + 1)}
+        summary["upload"] = upload_objects(
+            args.build_root, args.prefix, args.db_path, args.mode, selected_symbols, selected_years
+        )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 
