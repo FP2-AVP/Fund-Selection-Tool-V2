@@ -3078,6 +3078,58 @@ async function fetchR2Json(path) {
   return payload;
 }
 
+async function createFtR2Job(kind, payload = {}) {
+  const baseUrl = r2DataApiUrl();
+  const session = readAuthSession();
+  if (!baseUrl) throw new Error('R2 data API is not configured');
+  if (!session?.sessionToken) throw new Error('ไม่พบ session สำหรับสั่งงาน FT');
+  const response = await fetch(`${baseUrl}/ft/jobs/${encodeURIComponent(kind)}`, {
+    method:'POST',
+    headers:{Authorization:`Bearer ${session.sessionToken}`,'Content-Type':'application/json'},
+    body:JSON.stringify({...payload, quarter:State.currentQuarter || ''}),
+    cache:'no-store',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.error || `สร้าง FT job ไม่สำเร็จ (${response.status})`);
+  return data;
+}
+
+async function loadFtR2Job(jobId) {
+  return fetchR2Json(`/ft/jobs/${encodeURIComponent(jobId)}`);
+}
+
+async function watchFtR2Job(job, {resultSummary, resultDetail, onReady} = {}) {
+  const maxAttempts = 60;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const status = await loadFtR2Job(job.jobId);
+    const label = status.status === 'completed'
+      ? `งาน FT จบแล้ว: ${status.conclusion || '-'}`
+      : `งาน FT ${status.status || 'queued'} (${attempt}/${maxAttempts})`;
+    if (resultSummary) resultSummary.textContent = label;
+    if (resultDetail) {
+      resultDetail.innerHTML = `
+        <div><span>Job ID</span><strong>${esc(status.jobId || job.jobId)}</strong></div>
+        <div><span>ประเภท</span><strong>${esc(status.kind || job.kind || '-')}</strong></div>
+        <div><span>สถานะ</span><strong>${esc(status.status || 'queued')}${status.conclusion ? ` · ${esc(status.conclusion)}` : ''}</strong></div>
+        ${status.runUrl ? `<div><span>GitHub Actions</span><strong><a href="${esc(status.runUrl)}" target="_blank" rel="noopener noreferrer">เปิด Run #${esc(status.runNumber || '')}</a></strong></div>` : ''}
+        <div><span>ช่วงวันที่</span><strong>${esc(status.startDate || '-')} ถึง ${esc(status.endDate || '-')}</strong></div>
+      `;
+    }
+    if (status.status === 'completed') {
+      if (status.conclusion === 'success') {
+        State.ftR2Index = null;
+        State.ftR2Qualitative.clear();
+        const payload = await loadFtR2Index(true);
+        if (typeof onReady === 'function') onReady(payload);
+      }
+      return status;
+    }
+    await new Promise(resolve => setTimeout(resolve, 10000));
+  }
+  if (resultSummary) resultSummary.textContent = 'งานยังทำอยู่ คุณสามารถกดรีเฟรชฐานข้อมูลภายหลังได้';
+  return null;
+}
+
 async function fetchR2JsonRows(cfg) {
   const quarter = String(cfg.tabName || '').trim().toUpperCase();
   const year = driveJsonYearFromQuarter(quarter);
@@ -20603,9 +20655,12 @@ const Pages = {
         ]);
         const symbols = (payload.symbols || []).filter(item => item.symbol);
         const health = ftDatabaseHealthSummary(payload);
+        const sourceLabel = String(payload.source || '').includes('Cloudflare R2')
+          ? 'Cloudflare R2 · Data For FT.com/index.json'
+          : (payload.source || 'ฐานข้อมูล FT เดิม');
         if (summary) {
           summary.textContent = symbols.length
-            ? `พบ ${symbols.length.toLocaleString()} symbols ในฐานข้อมูล · ${health.updatedAt ? `JSON ${health.updatedAt}` : health.text}`
+            ? `พบ ${symbols.length.toLocaleString()} symbols ในฐานข้อมูล · ${sourceLabel} · ${health.updatedAt ? `อัปเดต ${health.updatedAt}` : health.text}`
             : 'ยังไม่มี symbol ในฐานข้อมูล';
         }
         if (!symbols.length) {
@@ -20778,7 +20833,6 @@ const Pages = {
           </div>
           <div class="toolbar">
             <button class="btn btn-primary" id="ft-run-prices" type="button">ดึงราคา Historical Prices</button>
-            <button class="btn btn-secondary" id="ft-run-qualitative" type="button">ดึงข้อมูลเชิงคุณภาพ</button>
             <button class="btn btn-ghost" id="ft-reset-3y" type="button">ย้อนหลัง 3 ปี</button>
           </div>
         </section>
@@ -20852,6 +20906,13 @@ const Pages = {
       if (resultDetail) resultDetail.innerHTML = '';
       try {
         let result = {};
+        if (r2DataApiUrl()) {
+          const job = await createFtR2Job('ytd-all');
+          if (resultSummary) resultSummary.textContent = `สร้างงาน YTD ทั้งหมดแล้ว: ${job.jobId}`;
+          toast('สั่งดึงราคา YTD ทุก Symbol แล้ว', 'success', 4000);
+          await watchFtR2Job(job, {resultSummary, resultDetail, onReady:() => renderAvailableSymbols(true)});
+          return;
+        }
         if (ftHistoricalApiUrl()) {
           const data = await triggerFtHistoricalSync({
             allSymbolsFromDb: true,
@@ -20930,6 +20991,13 @@ const Pages = {
       if (resultDetail) resultDetail.innerHTML = '';
       try {
         let result = {};
+        if (r2DataApiUrl()) {
+          const job = await createFtR2Job('qualitative-all');
+          if (resultSummary) resultSummary.textContent = `สร้างงาน Qualitative ทั้งหมดแล้ว: ${job.jobId}`;
+          toast('สั่งดึงข้อมูลเชิงคุณภาพทุก Symbol แล้ว', 'success', 4000);
+          await watchFtR2Job(job, {resultSummary, resultDetail, onReady:() => renderAvailableSymbols(true)});
+          return;
+        }
         if (ftHistoricalApiUrl()) {
           const data = await triggerFtHistoricalSync({
             allSymbolsFromDb: true,
@@ -21011,6 +21079,13 @@ const Pages = {
       }
       try {
         let result = {};
+        if (r2DataApiUrl()) {
+          const job = await createFtR2Job('historical', payload);
+          if (resultSummary) resultSummary.textContent = `สร้างงาน Historical Prices แล้ว: ${job.jobId}`;
+          toast(`สั่งดึง Historical Prices ${payload.symbol} แล้ว`, 'success', 4000);
+          await watchFtR2Job(job, {resultSummary, resultDetail, onReady:() => renderAvailableSymbols(true)});
+          return;
+        }
         if (ftHistoricalApiUrl()) {
           const data = await triggerFtHistoricalSync({
             ...payload,
