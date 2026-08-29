@@ -3715,6 +3715,10 @@ body.flu-row-dragging * {
 .fee-compare-master small.fee-compare-warning {
   color: #b45309;
 }
+.fee-compare-master small.fee-compare-shared-master {
+  color: #9a6700;
+  font-weight: 700;
+}
 .fee-quarter-change {
   display: inline-flex;
   width: fit-content;
