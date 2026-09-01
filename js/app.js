@@ -4626,6 +4626,27 @@ function rankCellStyle(rank, total) {
   return `background:${bg};color:#24364f;`;
 }
 
+function calendarPeriodLabel(period) {
+  return period === 'YTD' ? 'YTD' : String(period);
+}
+
+function buildAverageRankPeriods(periods) {
+  return Array.from({ length: Math.max(0, periods.length - 2) }, (_, index) => index + 3);
+}
+
+function calculateTrailingAverageRank(rankByPeriod, periods, periodCount) {
+  const trailingPeriods = periods.slice(-periodCount);
+  if (trailingPeriods.length !== periodCount) return '';
+  const values = trailingPeriods.map(period => parseNum(rankByPeriod?.[period]));
+  if (values.some(Number.isNaN)) return '';
+  return values.reduce((sum, value) => sum + value, 0) / periodCount;
+}
+
+function formatAverageRank(value) {
+  const number = parseNum(value);
+  return Number.isNaN(number) ? '-' : number.toFixed(1);
+}
+
 function extractInlineColors(styleText = '') {
   const bg = /background:\s*([^;]+)/i.exec(styleText)?.[1]?.trim() || '';
   const color = /color:\s*([^;]+)/i.exec(styleText)?.[1]?.trim() || '';
@@ -4981,6 +5002,9 @@ function buildMasterAnnualizedV2ExportPayload(sorted, metricKeys, linksByRowKey,
 function buildMasterCalendarExportPayload(sorted, yearKeys, linksByRowKey, rankMap, rankTotals, CI, get, sortState) {
   const returnTheme = { bg: '#4ba3dc', color: '#ffffff' };
   const rankTheme = { bg: '#2f537f', color: '#ffffff' };
+  const averageTheme = { bg: '#123c73', color: '#ffffff' };
+  const averagePeriods = buildAverageRankPeriods(yearKeys);
+  const averageRankTotal = Math.max(0, ...yearKeys.map(year => rankTotals[year] || 0));
   const preset = getPresentationTablePreset('masterCalendar');
   const rows = sorted.map((item, rowIndex) => {
     const baseRowBg = rowIndex % 2 === 0 ? '#f8fbff' : '#eef4fb';
@@ -5026,6 +5050,17 @@ function buildMasterCalendarExportPayload(sorted, yearKeys, linksByRowKey, rankM
             strong: true,
           };
         }),
+        ...averagePeriods.map(periodCount => {
+          const value = calculateTrailingAverageRank(rankMap[item.key], yearKeys, periodCount);
+          const colors = extractInlineColors(rankCellStyle(value, averageRankTotal));
+          return {
+            text: formatAverageRank(value),
+            bg: colors.bg || baseRowBg,
+            color: colors.color || '#334155',
+            weight: 0.82,
+            strong: true,
+          };
+        }),
       ],
     };
   });
@@ -5034,12 +5069,16 @@ function buildMasterCalendarExportPayload(sorted, yearKeys, linksByRowKey, rankM
     buildPresentationSortColumn(sortState, 'name', 'Master Fund', 2.4, { align: 'left', widthPx: preset.columnWidthsPx?.name }),
     buildPresentationSortColumn(sortState, 'currency', 'Base Currency', 1.15, { widthPx: preset.columnWidthsPx?.currency }),
     buildPresentationSortColumn(sortState, 'thai', 'กองทุนในไทย', 1.9, { align: 'left', widthPx: preset.columnWidthsPx?.thai }),
-    ...yearKeys.map(year => buildPresentationSortColumn(sortState, `ret-${year}`, year, 0.82, {
+    ...yearKeys.map(year => buildPresentationSortColumn(sortState, `ret-${year}`, calendarPeriodLabel(year), 0.82, {
       ...returnTheme,
       widthPx: preset.columnWidthsPx?.metric,
     })),
-    ...yearKeys.map(year => buildPresentationSortColumn(sortState, `rank-${year}`, year, 0.82, {
+    ...yearKeys.map(year => buildPresentationSortColumn(sortState, `rank-${year}`, calendarPeriodLabel(year), 0.82, {
       ...rankTheme,
+      widthPx: preset.columnWidthsPx?.metric,
+    })),
+    ...averagePeriods.map(periodCount => buildPresentationSortColumn(sortState, `avg-${periodCount}`, `${periodCount}Y`, 0.82, {
+      ...averageTheme,
       widthPx: preset.columnWidthsPx?.metric,
     })),
   ];
@@ -5052,6 +5091,7 @@ function buildMasterCalendarExportPayload(sorted, yearKeys, linksByRowKey, rankM
       { label: '', span: 3, bg: '#dbe4f0', color: '#334155' },
       { label: 'Calendar Year Return (%)', span: yearKeys.length, ...returnTheme },
       { label: 'อันดับในกลุ่มที่แสดง', span: yearKeys.length, ...rankTheme },
+      ...(averagePeriods.length ? [{ label: 'Average Rank', span: averagePeriods.length, ...averageTheme }] : []),
     ],
     columns,
     rows,
@@ -5796,6 +5836,8 @@ function getThaiCalendarMetricConfig(mode) {
 function buildThaiCalendarExportPayload(sorted, visibleYears, leftCfg, rightCfg, helpers, sortState) {
   const leftTheme = annualizedGroupTheme(leftCfg);
   const rightTheme = annualizedGroupTheme(rightCfg);
+  const averagePeriods = buildAverageRankPeriods(visibleYears);
+  const averageTheme = { bg: '#123c73', color: '#ffffff' };
   const rows = sorted.map((fund, rowIndex) => {
     const baseRowBg = rowIndex % 2 === 0 ? '#f8fbff' : '#eef4fb';
     const highlightIdx = State.highlights[fund.key];
@@ -5823,6 +5865,17 @@ function buildThaiCalendarExportPayload(sorted, visibleYears, leftCfg, rightCfg,
             strong: rightCfg.mode !== 'return',
           };
         }),
+        ...averagePeriods.map(periodCount => {
+          const value = calculateTrailingAverageRank(helpers.calendarRankMap?.[fund.code], visibleYears, periodCount);
+          const colors = extractInlineColors(rankCellStyle(value, helpers.averageRankTotal));
+          return {
+            text: formatAverageRank(value),
+            bg: colors.bg || baseRowBg,
+            color: colors.color || '#475569',
+            weight: 0.82,
+            strong: true,
+          };
+        }),
       ],
     };
   });
@@ -5831,7 +5884,7 @@ function buildThaiCalendarExportPayload(sorted, visibleYears, leftCfg, rightCfg,
     ...visibleYears.map(year => buildPresentationSortColumn(
       sortState,
       leftCfg.sortKeyForYear(year),
-      year,
+      calendarPeriodLabel(year),
       0.82,
       leftTheme
     )),
@@ -5839,9 +5892,12 @@ function buildThaiCalendarExportPayload(sorted, visibleYears, leftCfg, rightCfg,
     ...visibleYears.map(year => buildPresentationSortColumn(
       sortState,
       rightCfg.sortKeyForYear(year),
-      year,
+      calendarPeriodLabel(year),
       0.82,
       rightTheme
+    )),
+    ...averagePeriods.map(periodCount => buildPresentationSortColumn(
+      sortState, `avg-${periodCount}`, `${periodCount}Y`, 0.82, averageTheme
     )),
   ];
 
@@ -5853,6 +5909,7 @@ function buildThaiCalendarExportPayload(sorted, visibleYears, leftCfg, rightCfg,
       { label: leftCfg.groupTitle, span: visibleYears.length, ...leftTheme },
       { label: '', span: 1, bg: '#dbe4f0', color: '#334155' },
       { label: rightCfg.groupTitle, span: visibleYears.length, ...rightTheme },
+      ...(averagePeriods.length ? [{ label: 'Average Rank', span: averagePeriods.length, ...averageTheme }] : []),
     ],
     columns,
     rows,
@@ -14533,18 +14590,21 @@ const Pages = {
       ? funds.filter(f => State.selectedKeys.has(f.key))
       : funds;
 
-    const allYears = [...new Set(headers.flatMap(header => {
+    const calendarYears = [...new Set(headers.flatMap(header => {
       const text = String(header || '').trim();
       const match = /^(?:Calendar Year Return|Percent Rank % Calendar Year|Rank % Calendar Year)\s+(\d{4})$/i.exec(text);
       return match ? [match[1]] : [];
     }))].sort((a, b) => Number(a) - Number(b));
-    const returnCols = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, [
-      `Calendar Year Return ${y}`,
-    ])]));
-    const rankPct = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, [
-      `Percent Rank % Calendar Year ${y}`,
-      `Rank % Calendar Year ${y}`,
-    ])]));
+    const hasYtd = findColumnIndex(headers, ['YTD Return %']) >= 0;
+    const allYears = [...calendarYears, ...(hasYtd ? ['YTD'] : [])];
+    const returnCols = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, y === 'YTD'
+      ? ['YTD Return %']
+      : [`Calendar Year Return ${y}`]
+    )]));
+    const rankPct = Object.fromEntries(allYears.map(y => [y, findColumnIndex(headers, y === 'YTD'
+      ? ['YTD']
+      : [`Percent Rank % Calendar Year ${y}`, `Rank % Calendar Year ${y}`]
+    )]));
     const get = (row, i) => i >= 0 ? String(row[i] ?? '').trim() : '';
     const sortState = State.reportSorts['thai-calendar'];
     const storedThaiYears = State.reportOptions['thai-calendar-years'];
@@ -14556,12 +14616,15 @@ const Pages = {
     const rightMode = State.reportOptions['thai-calendar-right'] || 'rank';
     const leftCfg = getThaiCalendarMetricConfig(leftMode);
     const rightCfg = getThaiCalendarMetricConfig(rightMode);
-    const helpers = { get, getRankNo, rankPct, returnCols, calendarRankTotals };
+    const averagePeriods = buildAverageRankPeriods(visibleYears);
+    const averageRankTotal = Math.max(0, ...visibleYears.map(year => calendarRankTotals[year] || 0));
+    const helpers = { get, getRankNo, rankPct, returnCols, calendarRankTotals, calendarRankMap, averageRankTotal };
     const sortableCalendar = (fund, key) => {
       if (key === 'code') return fund.code;
       if (key.startsWith('pct-')) return get(fund.row, rankPct[key.slice(4)]);
       if (key.startsWith('no-')) return getRankNo(fund, key.slice(3));
       if (key.startsWith('ret-')) return get(fund.row, returnCols[key.slice(4)]);
+      if (key.startsWith('avg-')) return calculateTrailingAverageRank(calendarRankMap[fund.code], visibleYears, Number(key.slice(4)));
       return '';
     };
     const sorted = sortState.key
@@ -14570,7 +14633,8 @@ const Pages = {
 
     const yearChips = allYears.map(y => {
       const active = visibleYears.includes(y);
-      return `<button class="btn btn-ghost year-chip ${active ? 'is-active' : ''}" data-calendar-year="${y}" title="แสดงหรือซ่อนปี ${y}">${y}</button>`;
+      const label = calendarPeriodLabel(y);
+      return `<button class="btn btn-ghost year-chip ${active ? 'is-active' : ''}" data-calendar-year="${y}" title="แสดงหรือซ่อนช่วง ${label}">${label}</button>`;
     }).join('');
 
     const toggleActions = `
@@ -14605,6 +14669,10 @@ const Pages = {
           ${visibleYears.map(year => leftCfg.renderCell(f, year, helpers)).join('')}
           <td class="calendar-code"${style}>${esc(f.code)}</td>
           ${visibleYears.map(year => rightCfg.renderCell(f, year, helpers)).join('')}
+          ${averagePeriods.map(periodCount => {
+            const value = calculateTrailingAverageRank(calendarRankMap[f.code], visibleYears, periodCount);
+            return `<td class="report-num report-rank-cell" style="${rankCellStyle(value, averageRankTotal)}">${esc(formatAverageRank(value))}</td>`;
+          }).join('')}
         </tr>`;
     }).join('');
 
@@ -14621,11 +14689,13 @@ const Pages = {
               <th colspan="${visibleYears.length}" class="${leftCfg.groupClass}">${leftCfg.groupTitle}</th>
               <th colspan="1" class="group-blank"></th>
               <th colspan="${visibleYears.length}" class="${rightCfg.groupClass}">${rightCfg.groupTitle}</th>
+              ${averagePeriods.length ? `<th colspan="${averagePeriods.length}" class="group-navy">Average Rank</th>` : ''}
             </tr>
             <tr>
-              ${visibleYears.map(y => `<th class="report-sort ${sortState.key === leftCfg.sortKeyForYear(y) ? 'is-active' : ''}" data-report-sort="${leftCfg.sortKeyForYear(y)}">${renderSortLabel(y, sortState.key === leftCfg.sortKeyForYear(y), sortState.dir)}</th>`).join('')}
+              ${visibleYears.map(y => `<th class="report-sort ${sortState.key === leftCfg.sortKeyForYear(y) ? 'is-active' : ''}" data-report-sort="${leftCfg.sortKeyForYear(y)}">${renderSortLabel(calendarPeriodLabel(y), sortState.key === leftCfg.sortKeyForYear(y), sortState.dir)}</th>`).join('')}
               <th class="report-sort ${sortState.key === 'code' ? 'is-active' : ''}" data-report-sort="code">${renderSortLabel('Fund Code', sortState.key === 'code', sortState.dir)}</th>
-              ${visibleYears.map(y => `<th class="report-sort ${sortState.key === rightCfg.sortKeyForYear(y) ? 'is-active' : ''}" data-report-sort="${rightCfg.sortKeyForYear(y)}">${renderSortLabel(y, sortState.key === rightCfg.sortKeyForYear(y), sortState.dir)}</th>`).join('')}
+              ${visibleYears.map(y => `<th class="report-sort ${sortState.key === rightCfg.sortKeyForYear(y) ? 'is-active' : ''}" data-report-sort="${rightCfg.sortKeyForYear(y)}">${renderSortLabel(calendarPeriodLabel(y), sortState.key === rightCfg.sortKeyForYear(y), sortState.dir)}</th>`).join('')}
+              ${averagePeriods.map(periodCount => `<th class="report-sort ${sortState.key === `avg-${periodCount}` ? 'is-active' : ''}" data-report-sort="avg-${periodCount}">${renderSortLabel(`${periodCount}Y`, sortState.key === `avg-${periodCount}`, sortState.dir)}</th>`).join('')}
             </tr>
           </thead>
           <tbody>${body}</tbody>
@@ -15026,10 +15096,12 @@ const Pages = {
     }
 
     const headers = rawRows[0] || [];
-    const allYears = [...new Set(headers.flatMap(header => {
+    const calendarYears = [...new Set(headers.flatMap(header => {
       const match = /^Return\(Cumulative\)\s+(\d{4})$/i.exec(String(header || '').trim());
       return match ? [match[1]] : [];
     }))].sort((a, b) => Number(a) - Number(b));
+    const hasYtd = findColumnIndex(headers, ['Return(Cumulative) YTD']) >= 0;
+    const allYears = [...calendarYears, ...(hasYtd ? ['YTD'] : [])];
     const CI = {
       name: findColumnIndex(headers, ['Group/Investment']),
       fundId: findColumnIndex(headers, ['FundId', 'Fund ID']),
@@ -15084,6 +15156,8 @@ const Pages = {
       return;
     }
     const { ranks: rankMap, totals: rankTotals } = buildMetricRanks(displayRows, visibleYears, (item, year) => get(item.row, CI[`ret${year}`]));
+    const averagePeriods = buildAverageRankPeriods(visibleYears);
+    const averageRankTotal = Math.max(0, ...visibleYears.map(year => rankTotals[year] || 0));
     const sortState = State.reportSorts['master-calendar'];
     const sortableMasterCalendar = (item, key) => {
       const mapping = {
@@ -15092,6 +15166,7 @@ const Pages = {
         thai: (linksByRowKey[item.key] || []).map(f => f.code).join(', '),
         ...Object.fromEntries(visibleYears.map(year => [`ret-${year}`, get(item.row, CI[`ret${year}`])])),
         ...Object.fromEntries(visibleYears.map(year => [`rank-${year}`, rankMap[item.key]?.[year] ?? ''])),
+        ...Object.fromEntries(averagePeriods.map(periodCount => [`avg-${periodCount}`, calculateTrailingAverageRank(rankMap[item.key], visibleYears, periodCount)])),
       };
       return mapping[key];
     };
@@ -15101,7 +15176,8 @@ const Pages = {
 
     const yearChips = allYears.map(year => {
       const active = visibleYears.includes(year);
-      return `<button class="btn btn-ghost year-chip ${active ? 'is-active' : ''}" data-master-calendar-year="${year}" title="แสดงหรือซ่อนปี ${year}">${year}</button>`;
+      const label = calendarPeriodLabel(year);
+      return `<button class="btn btn-ghost year-chip ${active ? 'is-active' : ''}" data-master-calendar-year="${year}" title="แสดงหรือซ่อนช่วง ${label}">${label}</button>`;
     }).join('');
     const toggleActions = `
       <div class="metric-toggle-stack master-calendar-toggle-stack master-calendar-toolbar-secondary">
@@ -15141,6 +15217,10 @@ const Pages = {
             const value = rankMap[item.key]?.[year] ?? '';
             return `<td class="report-num report-rank-cell" style="${rankCellStyle(value, rankTotals[year])}">${esc(value || '-')}</td>`;
           }).join('')}
+          ${averagePeriods.map(periodCount => {
+            const value = calculateTrailingAverageRank(rankMap[item.key], visibleYears, periodCount);
+            return `<td class="report-num report-rank-cell" style="${rankCellStyle(value, averageRankTotal)}">${esc(formatAverageRank(value))}</td>`;
+          }).join('')}
         </tr>`;
     }).join('');
 
@@ -15153,13 +15233,15 @@ const Pages = {
               <th colspan="3" class="group-blank"></th>
               <th colspan="${visibleYears.length}" class="group-blue">Calendar Year Return (%)</th>
               <th colspan="${visibleYears.length}" class="group-navy">อันดับในกลุ่มที่แสดง</th>
+              ${averagePeriods.length ? `<th colspan="${averagePeriods.length}" class="group-navy">Average Rank</th>` : ''}
             </tr>
             <tr>
               <th class="report-sort ${sortState.key === 'name' ? 'is-active' : ''}" data-report-sort="name">${renderSortLabel('Master Fund', sortState.key === 'name', sortState.dir)}</th>
               <th class="report-sort ${sortState.key === 'currency' ? 'is-active' : ''}" data-report-sort="currency">${renderSortLabel('Base Currency', sortState.key === 'currency', sortState.dir)}</th>
               <th class="report-sort ${sortState.key === 'thai' ? 'is-active' : ''}" data-report-sort="thai">${renderSortLabel('กองทุนในไทย', sortState.key === 'thai', sortState.dir)}</th>
-              ${visibleYears.map(year => `<th class="report-sort ${sortState.key === `ret-${year}` ? 'is-active' : ''}" data-report-sort="ret-${year}">${renderSortLabel(year, sortState.key === `ret-${year}`, sortState.dir)}</th>`).join('')}
-              ${visibleYears.map(year => `<th class="report-sort ${sortState.key === `rank-${year}` ? 'is-active' : ''}" data-report-sort="rank-${year}">${renderSortLabel(year, sortState.key === `rank-${year}`, sortState.dir)}</th>`).join('')}
+              ${visibleYears.map(year => `<th class="report-sort ${sortState.key === `ret-${year}` ? 'is-active' : ''}" data-report-sort="ret-${year}">${renderSortLabel(calendarPeriodLabel(year), sortState.key === `ret-${year}`, sortState.dir)}</th>`).join('')}
+              ${visibleYears.map(year => `<th class="report-sort ${sortState.key === `rank-${year}` ? 'is-active' : ''}" data-report-sort="rank-${year}">${renderSortLabel(calendarPeriodLabel(year), sortState.key === `rank-${year}`, sortState.dir)}</th>`).join('')}
+              ${averagePeriods.map(periodCount => `<th class="report-sort ${sortState.key === `avg-${periodCount}` ? 'is-active' : ''}" data-report-sort="avg-${periodCount}">${renderSortLabel(`${periodCount}Y`, sortState.key === `avg-${periodCount}`, sortState.dir)}</th>`).join('')}
             </tr>
           </thead>
           <tbody>${body}</tbody>
