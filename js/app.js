@@ -13957,7 +13957,7 @@ const Pages = {
           <div class="card-header"><div><h3>รายการ Master Fund Override</h3><p>ข้อมูลใน ${esc(overrideQuarter)} · แก้ไขหรือลบเฉพาะกองได้โดยไม่กระทบรายการอื่น</p></div><span class="badge badge-primary">${overrideEntries.length.toLocaleString()} กอง</span></div>
           ${overrideEntries.length ? `<div class="table-wrapper master-override-list-wrap"><table class="master-override-list"><thead><tr><th>Key</th><th>Master FundId</th><th>ISIN</th><th>ชื่อ Master Fund</th><th>แก้ไขล่าสุด</th><th>จัดการ</th></tr></thead><tbody>${overrideEntries.map(([key,item]) => `<tr><td class="mono-small">${esc(key)}</td><td>${esc(item.masterFundId || '-')}</td><td>${esc(item.isin || '-')}</td><td>${esc(item.masterFundName || item.shareClassName || '-')}</td><td>${esc(formatOverrideTime(item.updatedAt))}</td><td><div class="master-override-row-actions"><button class="btn btn-primary btn-sm" type="button" data-master-override-edit="${esc(key)}">แก้ไข</button><button class="btn btn-danger btn-sm" type="button" data-master-override-remove="${esc(key)}">ลบจาก R2</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="state-box compact">ยังไม่มี Master Fund Override ใน Quarter นี้</div>'}
         </section>
-        <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">อ่านข้อมูล FT ล่าสุดจาก R2</button><small id="mfd-ft-status">เติมเฉพาะช่องว่าง · ไม่เขียนทับค่าเดิม</small></div>
+        <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมช่องว่าง</button><small id="mfd-ft-status">มีข้อมูลบน R2 จะอ่านทันที · ถ้ายังไม่มีจะดึงจาก FT ให้อัตโนมัติ</small></div>
         <form id="mfd-form">
           <div class="master-data-notice"><strong>หลักการ:</strong> ต้องมี Master FundId หรือ ISIN อย่างใดอย่างหนึ่ง · ช่องที่มี <span class="master-required">*</span> เป็นข้อมูลบังคับอื่น</div>
           ${sections.map((section, idx) => `<details class="card master-data-section" ${idx < 3 ? 'open' : ''}><summary><span>${esc(section.title)}</span><small>${esc(section.hint)}</small></summary><div class="master-fields">${section.fields.map(fieldHtml).join('')}</div></details>`).join('')}
@@ -14043,11 +14043,19 @@ const Pages = {
             status.textContent = 'กำลังดึงข้อมูล FT รายกอง...';
             data = await fetchFtMasterProfileInstant(url, symbol);
           } else if (r2DataApiUrl()) {
-            status.textContent = 'กำลังอ่าน FT qualitative ล่าสุดจาก Cloudflare R2...';
+            status.textContent = 'กำลังตรวจข้อมูล FT ล่าสุดบน Cloudflare R2...';
             try {
               data = await loadFtR2Qualitative(symbol, true);
             } catch (error) {
-              throw new Error(`ยังไม่มีข้อมูล ${symbol} บน R2 · ไปที่เมนูเตรียมข้อมูลจาก FT.com แล้วดึงเชิงคุณภาพจากลิงก์ก่อน (${error.message || error})`);
+              if (!/Object not found|HTTP 404/i.test(String(error?.message || error))) throw error;
+              status.textContent = `ยังไม่มี ${symbol} บน R2 · กำลังสร้างงานดึงจาก FT...`;
+              const job = await createFtR2Job('qualitative', {url, symbol, symbols:[symbol]});
+              const completed = await watchFtR2Job(job, {resultSummary:status});
+              if (!completed || completed.status !== 'completed' || completed.conclusion !== 'success') {
+                throw new Error(`ดึงข้อมูล FT ${symbol} ไม่สำเร็จ${completed?.conclusion ? ` (${completed.conclusion})` : ''}`);
+              }
+              status.textContent = 'ดึงจาก FT สำเร็จ · กำลังอ่านไฟล์ใหม่จาก R2...';
+              data = await loadFtR2Qualitative(symbol, true);
             }
           } else {
             throw new Error('ยังไม่ได้ตั้งค่า Cloudflare R2 Data Worker · ระบบไม่รองรับ Local FT API แล้ว');
