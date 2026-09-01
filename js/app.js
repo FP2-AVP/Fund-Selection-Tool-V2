@@ -253,9 +253,11 @@ const PAGE_DATASET_KEYS = {
   'master-placeholder-13': 'thaiQuality',
   'master-placeholder-14': 'masterFund',
   'master-placeholder-15': 'thaiQuality',
+  'master-placeholder-16': 'thaiQuality',
   'master-placeholder-12': 'secApi',
   'robustness-ft-import': 'masterFund',
   'ft-top10-holding': 'masterFund',
+  'ft-top10-holding-2': 'masterFund',
   'upside-downside-capture': 'masterFund',
 };
 
@@ -2251,6 +2253,14 @@ function ensureExtendedPageConfigs() {
       localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
       datasetKey: 'thaiQuality',
     },
+    'master-placeholder-16': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'Equity Style Box 2',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
+    },
     'master-placeholder-12': {
       sheetId: CONFIG.SHEETS?.RAW_FOR_SEC || '',
       tabName: '2026-Q1',
@@ -2282,6 +2292,11 @@ function ensureExtendedPageConfigs() {
     'robustness-notes': {
       title: 'บันทึกข้อมูล Robustness',
       source: 'Upside Downside Capture snapshot',
+    },
+    'ft-top10-holding-2': {
+      title: 'Top 10 Holding 2',
+      source: 'FT Markets qualitative local snapshot',
+      datasetKey: 'masterFund',
     },
     'upside-downside-capture': {
       title: 'Upside Downside Capture',
@@ -18196,6 +18211,135 @@ const Pages = {
   },
 
   /* ── บันทึกข้อมูล (Drafts / Notes) ── */
+  async equityStyleBoxChart(area) {
+    const pageKey = 'master-placeholder-16';
+    const source = 'AVP Thai Fund for Quality';
+    setLoading(area, 'กำลังโหลด Equity Style Box 2...');
+
+    const panels = [
+      {
+        key: 'region',
+        title: 'ภูมิภาค (%)',
+        metrics: [
+          { key:'americas', label:'Americas', source:'Equity Region Americas % (Net)', color:'#1f5792' },
+          { key:'europe', label:'Europe', source:'Equity Region Greater Europe % (Net)', color:'#2ea2d4' },
+          { key:'asiaDev', label:'Asia dev', source:'Equity Region Asia dev % (Net)', color:'#79bfdf' },
+          { key:'asiaEmerging', label:'Asia emrg', source:'Equity Region Asia emrg % (Net)', color:'#c6e3f2' },
+        ],
+      },
+      {
+        key: 'size',
+        title: 'ขนาดหุ้น (%)',
+        metrics: [
+          { key:'large', label:'Large', source:'Equity Style Large Cap % (Net)', color:'#1f5792' },
+          { key:'mid', label:'Mid', source:'Equity Style Mid Cap % (Net)', color:'#67add3' },
+          { key:'small', label:'Small', source:'Equity Style Small Cap % (Net)', color:'#c6e3f2' },
+        ],
+      },
+      {
+        key: 'style',
+        title: 'สไตล์ (%)',
+        metrics: [
+          { key:'growth', label:'Growth', source:'Equity Style Growth % (Net)', color:'#2ea2d4' },
+          { key:'core', label:'Core', source:'Equity Style Core % (Net)', color:'#9eafc0' },
+          { key:'value', label:'Value', source:'Equity Style Value % (Net)', color:'#1f5792' },
+        ],
+      },
+    ];
+
+    let rows = [];
+    try {
+      const [selectRows, qualityRows] = await Promise.all([
+        fetchCached('select-fund'),
+        fetchCached('thai-annualized-v2'),
+      ]);
+      const catalog = applyFundOverrides(buildSelectedFundsCatalog(selectRows));
+      const catalogByKey = Object.fromEntries(catalog.map(fund => [fund.key, fund]));
+      const previousSelectedFunds = State.selectedFunds || {};
+      State.selectedFunds = Object.keys(previousSelectedFunds).length
+        ? { ...previousSelectedFunds, ...Object.fromEntries(Object.keys(previousSelectedFunds).map(key => [key, catalogByKey[key] || previousSelectedFunds[key]])) }
+        : catalogByKey;
+
+      const headers = qualityRows[0] || [];
+      const codeIndex = findColumnIndex(headers, ['Fund Code']);
+      const allMetrics = panels.flatMap(panel => panel.metrics);
+      const indexes = Object.fromEntries(allMetrics.map(metric => [metric.key, findColumnIndex(headers, [metric.source])]));
+      const get = (row, index) => index >= 0 ? String(row?.[index] ?? '').trim() : '';
+      const qualityByCode = new Map(qualityRows.slice(1).map(row => [get(row, codeIndex).toUpperCase(), row]));
+      rows = Object.values(State.selectedFunds || {})
+        .filter(fund => State.selectedKeys?.has(fund.key))
+        .map(fund => {
+          const code = String(fund.code || '').trim().toUpperCase();
+          const raw = qualityByCode.get(code) || [];
+          return {
+            code: fund.code || fund.name || '-',
+            values: Object.fromEntries(allMetrics.map(metric => {
+              const value = parseNum(get(raw, indexes[metric.key]));
+              return [metric.key, Number.isNaN(value) ? 0 : Math.max(0, value)];
+            })),
+          };
+        });
+    } catch (error) {
+      setError(area, error.message, pageKey);
+      return;
+    }
+
+    if (!rows.length) {
+      area.innerHTML = `${pageToolActions(pageKey, source)}<div class="card"><div class="state-box"><span>กรุณาเลือกกองทุนจากเมนู “เลือกกองทุน” ก่อน</span></div></div>`;
+      App._currentTableExport = null;
+      return;
+    }
+
+    const formatValue = value => Number(value).toLocaleString('en-US', { maximumFractionDigits: 1 });
+    const renderPanel = panel => `
+      <section class="esb2-panel">
+        <h3>${panel.title}</h3>
+        <div class="esb2-chart">
+          ${rows.map(row => {
+            const values = panel.metrics.map(metric => row.values[metric.key] || 0);
+            const total = values.reduce((sum, value) => sum + value, 0);
+            const scale = Math.max(100, total);
+            return `<div class="esb2-row">
+              <div class="esb2-name" title="${esc(row.code)}">${esc(row.code)}</div>
+              <div class="esb2-track">
+                ${panel.metrics.map((metric, index) => {
+                  const value = values[index];
+                  if (value <= 0) return '';
+                  const width = Math.max(0, value / scale * 100);
+                  const darkText = ['#67add3','#79bfdf','#9eafc0','#c6e3f2','#2ea2d4'].includes(metric.color);
+                  return `<div class="esb2-segment" title="${esc(metric.label)}: ${formatValue(value)}%" style="width:${width}%;background:${metric.color};color:${darkText ? '#17324f' : '#fff'}">${value >= 4 ? formatValue(value) : ''}</div>`;
+                }).join('')}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div class="esb2-axis"><span>0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>100</span></div>
+        <div class="esb2-legend">${panel.metrics.map(metric => `<span><i style="background:${metric.color}"></i>${esc(metric.label)}</span>`).join('')}</div>
+      </section>`;
+
+    area.innerHTML = `
+      ${pageToolActions(pageKey, source)}
+      <div class="card report-card esb2-card" id="report-card">
+        <div class="table-wrapper esb2-grid-wrap">
+          <div class="esb2-grid">${panels.map(renderPanel).join('')}</div>
+        </div>
+      </div>
+      <style>
+        .esb2-card{padding:22px;background:#fff}.esb2-grid-wrap{overflow-x:auto}.esb2-grid{display:grid;grid-template-columns:repeat(3,minmax(420px,1fr));gap:38px;min-width:1384px;padding-right:48px;box-sizing:border-box}.esb2-panel h3{margin:0 0 20px;text-align:center;color:#1a477a;font-size:1.05rem}.esb2-chart{display:grid;gap:14px}.esb2-row{display:grid;grid-template-columns:125px minmax(260px,1fr);gap:10px;align-items:center}.esb2-name{text-align:right;color:#334155;font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.esb2-track{height:36px;display:flex;align-items:stretch;background-color:#f8fafc;background-image:repeating-linear-gradient(90deg,transparent 0,transparent calc(20% - 1px),#94a3b8 calc(20% - 1px),#94a3b8 20%);border-left:1px solid #64748b;border-right:1px solid #64748b;overflow:visible}.esb2-segment{display:flex;align-items:center;justify-content:center;min-width:1px;font-size:.76rem;font-weight:700;white-space:nowrap}.esb2-axis{display:grid;grid-template-columns:repeat(6,1fr);margin:7px 0 0 135px;color:#64748b;font-size:.7rem}.esb2-axis span{text-align:center}.esb2-axis span:first-child{text-align:left}.esb2-axis span:last-child{text-align:right}.esb2-legend{display:flex;justify-content:center;flex-wrap:wrap;gap:12px;margin:16px 0 0 125px;color:#475569;font-size:.73rem}.esb2-legend span{display:inline-flex;align-items:center;gap:5px}.esb2-legend i{width:12px;height:12px;display:inline-block}@media(max-width:760px){.esb2-card{padding:14px}.esb2-grid{gap:24px;padding-right:36px}.esb2-row{grid-template-columns:110px minmax(250px,1fr)}}
+      </style>`;
+
+    const exportColumns = ['กองทุน', ...panels.flatMap(panel => panel.metrics.map(metric => `${panel.title} - ${metric.label}`))];
+    App._currentExport = null;
+    App._currentTableExport = () => buildSimpleTablePayload(
+      'Equity Style Box 2',
+      source,
+      exportColumns,
+      rows.map(row => [row.code, ...panels.flatMap(panel => panel.metrics.map(metric => formatValue(row.values[metric.key] || 0)))])
+    );
+    App._currentClipboardExport = null;
+    bindPageImageActions(area, 'report-card', 'equity-style-box-2');
+  },
+
   async notesPage(area) {
     const DRAFTS_KEY = 'avp-fund-drafts';
     let currentDrafts = [];
@@ -20932,7 +21076,7 @@ const Pages = {
                     <td class="td-code ft-symbol-code-cell">${row.fundCodes.length ? row.fundCodes.map(code => `<div>${esc(code)}</div>`).join('') : '-'}</td>
                     <td class="ft-symbol-category-cell">${esc(row.category || '-')}</td>
                     <td>${esc(row.symbol || '')}</td>
-                    <td>${esc(row.name || '-')}</td>
+                    <td class="ft-symbol-name-cell" title="${esc(row.name || '-')}">${esc(row.name || '-')}</td>
                     <td class="td-num">${int(row.rows || 0)}</td>
                     <td>${esc(row.start || '')}</td>
                     <td>${esc(row.end || '')}</td>
@@ -20943,17 +21087,15 @@ const Pages = {
             </table>
           </div>
           <style>
-            .ft-symbol-table{min-width:1420px;table-layout:fixed}
-            .ft-symbol-table-wrap{max-height:min(70vh, 720px)}
-            .ft-symbol-col-code{width:180px}
-            .ft-symbol-col-category{width:130px}
-            .ft-symbol-col-symbol{width:180px}
-            .ft-symbol-col-name{width:430px}
-            .ft-symbol-col-rows{width:90px}
-            .ft-symbol-col-date{width:120px}
-            .ft-symbol-col-qualitative-date{width:150px}
-            .ft-symbol-table th:nth-child(1),.ft-symbol-table td:nth-child(1){width:180px;min-width:180px;max-width:180px}
-            .ft-symbol-table th:nth-child(4),.ft-symbol-table td:nth-child(4){width:430px;min-width:430px;max-width:430px}
+            .ft-symbol-table{width:100%;min-width:0;table-layout:fixed}
+            .ft-symbol-table-wrap{max-height:min(70vh,720px);overflow-x:hidden}
+            .ft-symbol-col-code{width:11%}
+            .ft-symbol-col-category{width:9%}
+            .ft-symbol-col-symbol{width:16%}
+            .ft-symbol-col-name{width:24%}
+            .ft-symbol-col-rows{width:8%}
+            .ft-symbol-col-date{width:10%}
+            .ft-symbol-col-qualitative-date{width:12%}
             .ft-symbol-sort{cursor:pointer;user-select:none}
             .ft-symbol-sort:hover{background:#315d96}
             .ft-symbol-sort.is-active{background:#f7d774;color:#4e3500;border-color:#d79a12}
@@ -20962,6 +21104,8 @@ const Pages = {
             .ft-symbol-code-cell{white-space:normal;line-height:1.45}
             .ft-symbol-code-cell div{margin:2px 0}
             .ft-symbol-category-cell{white-space:normal;line-height:1.3}
+            .ft-symbol-name-cell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+            @media(max-width:1100px){.ft-symbol-col-code{width:10%}.ft-symbol-col-category{width:8%}.ft-symbol-col-symbol{width:15%}.ft-symbol-col-name{width:22%}.ft-symbol-col-rows{width:7%}.ft-symbol-col-date{width:11%}.ft-symbol-col-qualitative-date{width:16%}.ft-symbol-table th,.ft-symbol-table td{padding-left:6px;padding-right:6px;font-size:.78rem}}
           </style>
         `;
         $$('.ft-symbol-sort', body).forEach(el => {
@@ -23121,7 +23265,8 @@ const Pages = {
      TOP 10 HOLDING V3  –  Multi-Fund Comparison Dashboard
      ───────────────────────────────────────────────────────── */
   async masterMenu02V3(area, pageKey = 'master-placeholder-8') {
-    const isLocalFtPage = pageKey === 'ft-top10-holding';
+    const isHoldingsMatrixPage = pageKey === 'ft-top10-holding-2';
+    const isLocalFtPage = pageKey === 'ft-top10-holding' || isHoldingsMatrixPage;
     const MAX_COMPARE_ASSETS = 15;
     const INITIAL_VISIBLE_ASSETS = 4;
     const fundColors  = ['#1a3c6e','#e8a317','#2d9e6b','#d63b3b','#4a90d9','#8b5cf6','#f59e0b','#10b981','#0ea5e9','#ec4899','#84cc16','#f97316','#6366f1','#14b8a6','#a855f7'];
@@ -23380,6 +23525,21 @@ const Pages = {
           </section>
 
           <div id="v3-presentation-card" style="display:flex;flex-direction:column;gap:18px;">
+            <section class="thv2-panel" id="v3-holdings-matrix-section" style="display:none;">
+              <div class="thv2-panel-head">
+                <div>
+                  <h3>Top 10 Holdings Matrix</h3>
+                  <p>เปรียบเทียบน้ำหนักรายบริษัทของกองทุนที่เลือก (%)</p>
+                </div>
+              </div>
+              <div class="table-wrapper" style="overflow-x:auto;">
+                <table id="v3-holdings-matrix-table" style="width:max-content;min-width:100%;border-collapse:collapse;table-layout:fixed;">
+                  <colgroup id="v3-holdings-matrix-colgroup"></colgroup>
+                  <thead id="v3-holdings-matrix-thead"></thead>
+                  <tbody id="v3-holdings-matrix-tbody"></tbody>
+                </table>
+              </div>
+            </section>
             <!-- 1. Top 10 Holdings Comparison -->
             <section class="thv2-panel" id="v3-holdings-section" style="display:none;">
               <div class="thv2-panel-head">
@@ -23521,10 +23681,12 @@ const Pages = {
       // ── Render dashboard ──
       const render = (data) => {
       // Show all sections
-      const allSectionIds = ['v3-master-info-section','v3-holdings-section','v3-holdings-structure-section','v3-ft-risk-section'];
-      const visibleSectionIds = isLocalFtPage
+      const allSectionIds = ['v3-holdings-matrix-section','v3-master-info-section','v3-holdings-section','v3-holdings-structure-section','v3-ft-risk-section'];
+      const visibleSectionIds = isHoldingsMatrixPage
+        ? ['v3-holdings-matrix-section']
+        : isLocalFtPage
         ? ['v3-master-info-section','v3-holdings-section','v3-holdings-structure-section','v3-ft-risk-section']
-        : allSectionIds;
+        : allSectionIds.filter(id => id !== 'v3-holdings-matrix-section');
       allSectionIds.forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = visibleSectionIds.includes(id) ? '' : 'none';
@@ -23665,6 +23827,29 @@ const Pages = {
         total: normalizedFunds.reduce((sum, fund) => sum + (fund.byName.get(name) || 0), 0),
       })).sort((a, b) => b.total - a.total);
 
+      const matrixTable = document.getElementById('v3-holdings-matrix-table');
+      const matrixColgroup = document.getElementById('v3-holdings-matrix-colgroup');
+      const matrixThead = document.getElementById('v3-holdings-matrix-thead');
+      const matrixTbody = document.getElementById('v3-holdings-matrix-tbody');
+      const matrixFundWidth = 190;
+      const matrixCompanyWidth = 340;
+      const maxMatrixWeight = Math.max(1, ...normalizedFunds.flatMap(fund => fund.holdings.map(item => item.weight || 0)));
+      if (matrixTable) matrixTable.style.minWidth = `${matrixCompanyWidth + (normalizedFunds.length * matrixFundWidth)}px`;
+      if (matrixColgroup) matrixColgroup.innerHTML = `<col style="width:${matrixCompanyWidth}px;min-width:${matrixCompanyWidth}px;">${normalizedFunds.map(() => `<col style="width:${matrixFundWidth}px;min-width:${matrixFundWidth}px;">`).join('')}`;
+      if (matrixThead) matrixThead.innerHTML = `<tr>
+        <th style="padding:10px 14px;background:#194a80;color:#fff;text-align:left;border:1px solid #dbe4f0;font-size:.92rem;">Company (Weight %)</th>
+        ${normalizedFunds.map(fund => `<th style="padding:10px;background:#194a80;color:#fff;text-align:center;border:1px solid #dbe4f0;font-size:.9rem;line-height:1.25;white-space:normal;overflow-wrap:anywhere;">${esc(fund.label)}</th>`).join('')}
+      </tr>`;
+      if (matrixTbody) matrixTbody.innerHTML = rankedAssets.map((asset, rowIndex) => `<tr>
+        <td style="padding:9px 14px;border:1px solid #e5eaf2;background:${rowIndex % 2 ? '#f4f5f7' : '#fff'};color:#245181;font-weight:600;white-space:normal;">${esc(asset.name)}</td>
+        ${normalizedFunds.map(fund => {
+          const value = fund.byName.get(asset.name);
+          if (!(value > 0)) return `<td style="padding:9px;border:1px solid #fff;background:${rowIndex % 2 ? '#f1f2f4' : '#fff'};"></td>`;
+          const intensity = .20 + ((value / maxMatrixWeight) * .52);
+          return `<td style="padding:9px;border:1px solid #fff;background:rgba(65,160,211,${intensity.toFixed(3)});color:#17324f;text-align:center;font-weight:700;">${value.toFixed(2)}</td>`;
+        }).join('')}
+      </tr>`).join('');
+
       const assetNames = rankedAssets.map(item => item.name);
       const xMaxRaw = Math.max(1, ...normalizedFunds.map(fund => fund.top10Sum));
       const xMax = Math.ceil(xMaxRaw / 2) * 2;
@@ -23777,11 +23962,21 @@ const Pages = {
           </tr>`).join('')
         : `<tr><td colspan="${data.length + 1}" style="padding:14px;text-align:center;color:var(--text-muted);">ยังไม่มี FT risk measures ใน SQLite สำหรับกองที่เลือก</td></tr>`;
 
-      latestExportPayload = buildTop10V3ExportPayload(
-        CONFIG.PAGES[pageKey]?.title || 'Top 10 Holding',
-        CONFIG.PAGES[pageKey]?.source || 'Multi-Fund Compare API',
-        data,
-      );
+      latestExportPayload = isHoldingsMatrixPage
+        ? buildSimpleTablePayload(
+            CONFIG.PAGES[pageKey]?.title || 'Top 10 Holding 2',
+            CONFIG.PAGES[pageKey]?.source || 'FT Markets qualitative local snapshot',
+            ['Company (Weight %)', ...normalizedFunds.map(fund => fund.label)],
+            rankedAssets.map(asset => [asset.name, ...normalizedFunds.map(fund => {
+              const value = fund.byName.get(asset.name);
+              return value > 0 ? value.toFixed(2) : '';
+            })]),
+          )
+        : buildTop10V3ExportPayload(
+            CONFIG.PAGES[pageKey]?.title || 'Top 10 Holding',
+            CONFIG.PAGES[pageKey]?.source || 'Multi-Fund Compare API',
+            data,
+          );
     };
 
     const normalizeTopHoldings = (holdings) => {
@@ -24451,6 +24646,7 @@ const App = {
       'robustness-ft-import': { title: 'เตรียมข้อมูลจาก FT.com', subtitle: 'เตรียม Historical Prices สำหรับ Robustness Fund จาก FT Markets' },
       'robustness-notes': { title: 'บันทึกข้อมูล Robustness', subtitle: 'บันทึกชุดวันที่และสินทรัพย์จาก Upside Downside Capture เพื่อโหลดกลับมาทำต่อ' },
       'ft-top10-holding': { title: 'Top 10 Holding', subtitle: 'อ่านข้อมูล FT qualitative จาก Cloudflare R2' },
+      'ft-top10-holding-2': { title: 'Top 10 Holding 2', subtitle: 'เปรียบเทียบน้ำหนักรายบริษัทของ Top 10 Holdings ระหว่างกองทุน' },
       'upside-downside-capture': { title: 'Upside Downside Capture', subtitle: 'เตรียมหน้าวิเคราะห์การจับ upside/downside ของกองทุนเทียบ benchmark' },
       'master-placeholder-9': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'Fund Size, Duration, Turnover และ Yield to Maturity' },
       'master-placeholder-10': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'ใช้สำหรับแก้ไขข้อมูลกองทุนรวมตราสารหนี้ โดยสามารถกด "แก้ไขข้อมูลกองทุน" เพื่อปรับปรุงข้อมูลให้ถูกต้อง เช่น ข้อมูลอันดับความน่าเชื่อถือ (Rating) ที่ปัจจุบันปรากฏอยู่ใน Fund Factsheet แต่ยังไม่สามารถดึงข้อมูลผ่าน API ของ SEC ได้' },
@@ -24458,6 +24654,7 @@ const App = {
       'master-placeholder-13': { title: 'สัดส่วนลงทุนแยกตามอุตสาหกรรม', subtitle: 'ปัจจัยประกอบอื่นๆ 5 · เปรียบเทียบสัดส่วน Equity Sector ของกองทุนที่เลือก' },
       'master-placeholder-14': { title: 'Max DD Master Fund', subtitle: 'Max Drawdown รายปีตามข้อมูลที่มี' },
       'master-placeholder-15': { title: 'Equity Style Box', subtitle: 'เปรียบเทียบ Investment Style และ Market Capitalization ของกองทุนที่เลือก' },
+      'master-placeholder-16': { title: 'Equity Style Box 2', subtitle: 'เปรียบเทียบสัดส่วนภูมิภาค ขนาดหุ้น และสไตล์ของกองทุนที่เลือก' },
       'notes': { title: 'บันทึกข้อมูล', subtitle: 'ดราฟงานค้างและโหลดกลับมาทำต่อ' },
       'guide':             { title: 'คู่มือการใช้งาน', subtitle: '' },
       'fund-list-update':  { title: 'Fund List Update', subtitle: 'ติดตามการเพิ่ม นำออก และสลับตำแหน่ง Fund List ราย Quarter' },
@@ -24504,6 +24701,7 @@ const App = {
       case 'robustness-ft-import': Pages.robustnessFtImport(area);          break;
       case 'robustness-notes': Pages.robustnessNotes(area);                 break;
       case 'ft-top10-holding': Pages.masterMenu02V3(area, 'ft-top10-holding'); break;
+      case 'ft-top10-holding-2': Pages.masterMenu02V3(area, 'ft-top10-holding-2'); break;
       case 'upside-downside-capture': Pages.upsideDownsideCapture(area);    break;
       case 'master-placeholder-9': Pages.otherFactorsFixedIncomeTable(area); break;
       case 'master-placeholder-10': Pages.otherFactorsFixedIncomeAllocationTable(area); break;
@@ -24511,6 +24709,7 @@ const App = {
       case 'master-placeholder-13': Pages.equitySectorAllocationTable(area); break;
       case 'master-placeholder-14': Pages.masterFundCalendarMaxDrawdownTable(area); break;
       case 'master-placeholder-15': Pages.equityStyleBoxTable(area); break;
+      case 'master-placeholder-16': Pages.equityStyleBoxChart(area); break;
       case 'notes':             Pages.notesPage(area);                      break;
       case 'guide':             Pages.guide(area);                          break;
       case 'fund-list-update':  Pages.fundListUpdate(area);                 break;
