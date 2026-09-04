@@ -112,6 +112,7 @@ const State = {
   feeComparisonEditSlot: '',
   feeV2VisibleColumns: null,
   equitySectorVisibleColumns: null,
+  equityCountryVisibleColumns: null,
   maxDrawdownVisibleYears: null,
   equityStyleBoxVisibleColumns: null,
   equityOverviewVisibleColumns: null,
@@ -2237,6 +2238,14 @@ function ensureExtendedPageConfigs() {
       localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
       datasetKey: 'thaiQuality',
     },
+    'master-placeholder-17': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'สัดส่วนลงทุนแยกตามรายประเทศ',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
+    },
     'master-placeholder-14': {
       sheetId: CONFIG.SHEETS?.MASTER_FUND_ID || '',
       tabName: '2026-Q1',
@@ -3580,6 +3589,23 @@ function applyMasterFundOverridesToRows(baseRows, overrideItems, qualityRows = [
   if (!Array.isArray(baseRows) || !baseRows.length || !Object.keys(overrideItems || {}).length) return baseRows;
   const rows = baseRows.map(row => Array.isArray(row) ? [...row] : row);
   const headers = rows[0] || [];
+  const overrideCalendarYears = [...new Set(Object.values(overrideItems || {}).flatMap(profile =>
+    [...String(profile?.calendarReturns || '').matchAll(/^\s*(\d{4})\s*:/gm)].map(match => match[1])
+  ))].sort();
+  overrideCalendarYears.forEach(year => {
+    if (findColumnIndex(headers,[`Return(Cumulative) ${year}`]) >= 0) return;
+    headers.push(`Return(Cumulative) ${year}`);
+    rows.slice(1).forEach(row => row.push(''));
+  });
+  [
+    ['return15y','Return(Annualized) 15Y'],
+    ['returnSinceInception','Return(Annualized) Earliest Available'],
+  ].forEach(([field, header]) => {
+    if (!Object.values(overrideItems || {}).some(profile => String(profile?.[field] || '').trim())) return;
+    if (findColumnIndex(headers,[header]) >= 0) return;
+    headers.push(header);
+    rows.slice(1).forEach(row => row.push(''));
+  });
   const ci = {
     name:findColumnIndex(headers,['Group/Investment']), fundId:findColumnIndex(headers,['FundId','Fund ID']),
     isin:findColumnIndex(headers,['ISIN']), currency:findColumnIndex(headers,['Base Currency']),
@@ -3605,7 +3631,8 @@ function applyMasterFundOverridesToRows(baseRows, overrideItems, qualityRows = [
     top10Concentration:['Latest % Asset in Top 10 Holdings'], portfolioDate:['Latest % Asset in Top 10 Holdings Date'],
     return1m:['Return(Cumulative) 1M'], return3m:['Return(Cumulative) 3M'], return6m:['Return(Cumulative) 6M'],
     returnYtd:['Return(Cumulative) YTD'], return1y:['Return(Cumulative) 1Y'], return3y:['Return(Annualized) 3Y'],
-    return5y:['Return(Annualized) 5Y'], return10y:['Return(Annualized) 10Y'],
+    return5y:['Return(Annualized) 5Y'], return10y:['Return(Annualized) 10Y'], return15y:['Return(Annualized) 15Y'],
+    returnSinceInception:['Return(Annualized) Since Inception','Return(Annualized) Earliest Available'],
     sd1y:['Std Dev(Annualized) 1Y'], sd3y:['Std Dev(Annualized) 3Y'], sd5y:['Std Dev(Annualized) 5Y'],
     sharpe1y:['Sharpe Ratio(Annualized) 1Y'], sharpe3y:['Sharpe Ratio(Annualized) 3Y'], sharpe5y:['Sharpe Ratio(Annualized) 5Y'],
     information1y:['Information Ratio (arith)(Annualized) 1Y'], information3y:['Information Ratio (arith)(Annualized) 3Y'], information5y:['Information Ratio (arith)(Annualized) 5Y'],
@@ -13878,7 +13905,9 @@ const Pages = {
       { id: 'returns', title: '5. ผลตอบแทน', hint: 'ช่องที่ดึงจากฐานหลักได้ไม่จำเป็นต้องกรอกซ้ำ', fields: [
         ['return1m','1M (%)','number'], ['return3m','3M (%)','number'], ['return6m','6M (%)','number'], ['returnYtd','YTD (%)','number'], ['return1y','1Y (%)','number'],
         ['return3y','3Y Annualized (%)','number'], ['return5y','5Y Annualized (%)','number'], ['return10y','10Y Annualized (%)','number'],
-        ['returnDate','Return As of Date','date'], ['calendarReturns','Calendar Year Return','yearly'],
+        ['return15y','15Y Annualized (%)','number'], ['returnSinceInception','Since Inception (%)','number'], ['returnDate','Return As of Date','date'],
+        ['calendarReturns','Calendar Year Return — Investment','yearly'], ['calendarCategoryReturns','Calendar Year Return — Category','yearly'],
+        ['calendarIndexReturns','Calendar Year Return — Index','yearly'], ['calendarPercentileRanks','Calendar Year Percentile Rank','yearly'],
       ]},
       { id: 'risk', title: '6. ความเสี่ยง', hint: 'ใช้ใน Other Factors, Cost Efficiency และ Maximum Drawdown', fields: [
         ['alpha1y','Alpha 1Y','number'], ['alpha3y','Alpha 3Y','number'], ['alpha5y','Alpha 5Y','number'],
@@ -13899,6 +13928,7 @@ const Pages = {
       { id: 'external', title: '8. External IDs / แหล่งข้อมูล', hint: 'ใช้ดึง Historical Price และตรวจสอบย้อนหลัง', fields: [
         ['ftSymbol','Financial Times Symbol','text'], ['morningstarId','Morningstar ID','text'], ['externalSymbol','External Symbol','text'],
         ['priceCurrency','Price Currency','text'], ['priceSource','Price Source','text'], ['sourceUrl','Primary Source URL','url'],
+        ['ftSourceUrl','FT Source URL','url'], ['morningstarSourceUrl','Morningstar Source URL','url'], ['dataProvenance','Data Provenance','textarea'],
         ['verifiedBy','Verified By','text'], ['verifiedAt','Verified At','date'], ['notes','หมายเหตุ','textarea'],
       ]},
     ];
@@ -13918,6 +13948,106 @@ const Pages = {
       const raw = String(value || '').trim();
       if (!raw) return '';
       try { return new URL(raw).searchParams.get('s') || ''; } catch (_) { return raw.includes(':') ? raw : ''; }
+    };
+    const morningstarIdFromUrl = value => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      const match = raw.match(/\/investments\/funds\/([^/?#]+)/i);
+      return match ? decodeURIComponent(match[1]) : (/^0P[A-Z0-9]+$/i.test(raw) ? raw : '');
+    };
+    const morningstarTextToProfile = (rawText, sourceUrl = '') => {
+      const text = String(rawText || '').replace(/\r/g, '');
+      const lines = text.split('\n').map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+      if (!lines.length) throw new Error('กรุณาวางข้อความ Morningstar หรือเลือกไฟล์ .txt/.md');
+      const next = {};
+      const findIndex = label => lines.findIndex(line => norm(line) === norm(label));
+      const after = (...labels) => {
+        for (const label of labels) {
+          const index = findIndex(label);
+          if (index >= 0 && lines[index + 1]) return lines[index + 1];
+        }
+        return '';
+      };
+      const numberText = value => {
+        const match = String(value || '').replace(/,/g, '').match(/[+-]?\d+(?:\.\d+)?/);
+        return match ? match[0] : '';
+      };
+      const parseDate = value => {
+        const match = String(value || '').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (!match) return '';
+        return `${match[3]}-${match[1].padStart(2,'0')}-${match[2].padStart(2,'0')}`;
+      };
+      const parseSeries = (startLabel, endLabel, seriesLabels) => {
+        const start = findIndex(startLabel);
+        const end = endLabel ? lines.findIndex((line, index) => index > start && norm(line) === norm(endLabel)) : lines.length;
+        if (start < 0) return {};
+        const block = lines.slice(start + 1, end > start ? end : lines.length);
+        const result = {};
+        seriesLabels.forEach((label, labelIndex) => {
+          const at = block.findIndex(line => norm(line) === norm(label));
+          if (at < 0) return;
+          const nextLabels = seriesLabels.slice(labelIndex + 1).map(norm);
+          const values = [];
+          for (let index = at + 1; index < block.length && !nextLabels.includes(norm(block[index])); index += 1) {
+            if (/^[+−-]?\d+(?:\.\d+)?$/.test(block[index].replace('−','-'))) values.push(block[index].replace('−','-'));
+          }
+          result[label] = values;
+        });
+        return {block, series:result};
+      };
+      next.morningstarId = morningstarIdFromUrl(sourceUrl);
+      next.morningstarSourceUrl = sourceUrl;
+      next.sourceUrl = sourceUrl;
+      const isinMatch = text.match(/\b[A-Z]{2}[A-Z0-9]{9}\d\b/);
+      if (isinMatch) next.isin = isinMatch[0];
+      const titleLine = lines.find(line => next.isin && line.includes(next.isin) && line.length > next.isin.length);
+      if (titleLine) {
+        next.shareClassName = titleLine.replace(next.isin, '').trim();
+        next.masterFundName = next.shareClassName;
+        next.displayName = next.shareClassName;
+      }
+      const fundCurrencyLine = lines.find(line => /^Fund\s+[A-Z]{3}$/.test(line));
+      next.baseCurrency = fundCurrencyLine ? fundCurrencyLine.split(/\s+/).pop() : '';
+      next.priceCurrency = next.baseCurrency;
+      next.ongoingCost = stripPercent(after('Ongoing Costs', 'Ongoing Cost'));
+      next.investmentCategory = after('Category');
+      const distribution = norm(after('Distribution Status'));
+      if (distribution.startsWith('ACC')) next.accDist = 'Acc';
+      else if (distribution.startsWith('DIST')) next.accDist = 'Dist';
+      const fundSizePair = after('Fund Size / Share Class Size');
+      if (fundSizePair) next.fundSize = numberText(fundSizePair.split('/')[0]);
+
+      const annual = parseSeries('Annual Returns', 'Trailing Returns', ['Investment','Category','Index','Quartile Rank','Percentile Rank','# of Invest. in Cat.','Category Name']);
+      if (annual.block) {
+        const investmentAt = annual.block.findIndex(line => norm(line) === 'INVESTMENT');
+        const years = annual.block.slice(0, investmentAt < 0 ? annual.block.length : investmentAt).filter(line => /^(?:19|20)\d{2}$/.test(line));
+        const asYearly = values => years.slice(0, values.length).map((year, index) => `${year}: ${Number(values[index]) >= 0 ? '+' : ''}${values[index]}%`).join('\n');
+        if (annual.series.Investment?.length) next.calendarReturns = asYearly(annual.series.Investment);
+        if (annual.series.Category?.length) next.calendarCategoryReturns = asYearly(annual.series.Category);
+        if (annual.series.Index?.length) next.calendarIndexReturns = asYearly(annual.series.Index);
+        if (annual.series['Percentile Rank']?.length) next.calendarPercentileRanks = asYearly(annual.series['Percentile Rank']);
+        if (!next.calendarReturns) {
+          const simpleRows = annual.block.map(line => line.match(/^((?:19|20)\d{2})\s*:\s*([+−-]?\d+(?:\.\d+)?)%?$/)).filter(Boolean);
+          if (simpleRows.length) next.calendarReturns = simpleRows.map(match => `${match[1]}: ${match[2].replace('−','-')}%`).join('\n');
+        }
+      }
+
+      const trailing = parseSeries('Trailing Returns', '', ['Investment','Category','Index','Quartile Rank','Percentile Rank','# of Invest. in Cat.']);
+      if (trailing.block) {
+        const periodLabels = ['1-Month','3-Month','YTD','1-Year','3-Year','5-Year','10-Year','15-Year','Earliest Available'];
+        const periods = trailing.block.filter(line => periodLabels.includes(line));
+        const values = trailing.series.Investment || [];
+        const keyByPeriod = {'1-Month':'return1m','3-Month':'return3m','YTD':'returnYtd','1-Year':'return1y','3-Year':'return3y','5-Year':'return5y','10-Year':'return10y','15-Year':'return15y','Earliest Available':'returnSinceInception'};
+        periods.slice(0, values.length).forEach((period, index) => { if (keyByPeriod[period]) next[keyByPeriod[period]] = values[index]; });
+        const asOfMatch = text.match(/(?:as of|As of)\s+(\d{1,2}\/\d{1,2}\/\d{4})/);
+        if (asOfMatch) next.returnDate = parseDate(asOfMatch[1]);
+      }
+      next.feeSource = 'Morningstar';
+      next.feeSourceUrl = sourceUrl;
+      next.priceSource = 'Morningstar';
+      next.dataProvenance = JSON.stringify({morningstar:{source:'Morningstar',sourceUrl,capturedAt:new Date().toISOString(),returnAsOfDate:next.returnDate || ''}}, null, 2);
+      if (!next.isin && !next.morningstarId) throw new Error('ไม่พบ ISIN หรือ Morningstar ID ในข้อมูลที่วาง');
+      return next;
     };
     const ftPayloadToProfile = payload => {
       const next = {};
@@ -14029,7 +14159,16 @@ const Pages = {
           <div class="card-header"><div><h3>รายการ Master Fund Override</h3><p>ข้อมูลใน ${esc(overrideQuarter)} · แก้ไขหรือลบเฉพาะกองได้โดยไม่กระทบรายการอื่น</p></div><span class="badge badge-primary">${overrideEntries.length.toLocaleString()} กอง</span></div>
           ${overrideEntries.length ? `<div class="table-wrapper master-override-list-wrap"><table class="master-override-list"><thead><tr><th>Key</th><th>Master FundId</th><th>ISIN</th><th>ชื่อ Master Fund</th><th>แก้ไขล่าสุด</th><th>จัดการ</th></tr></thead><tbody>${overrideEntries.map(([key,item]) => `<tr><td class="mono-small">${esc(key)}</td><td>${esc(item.masterFundId || '-')}</td><td>${esc(item.isin || '-')}</td><td>${esc(item.masterFundName || item.shareClassName || '-')}</td><td>${esc(formatOverrideTime(item.updatedAt))}</td><td><div class="master-override-row-actions"><button class="btn btn-primary btn-sm" type="button" data-master-override-edit="${esc(key)}">แก้ไข</button><button class="btn btn-danger btn-sm" type="button" data-master-override-remove="${esc(key)}">ลบจาก R2</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="state-box compact">ยังไม่มี Master Fund Override ใน Quarter นี้</div>'}
         </section>
-        <div class="card master-ft-import"><label><span>FT.com URL</span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.sourceUrl || '')}" placeholder="https://markets.ft.com/data/etfs/tearsheet/summary?s=XLV:PCQ:USD"></label><button class="btn btn-warning" id="mfd-ft-import" type="button">ดึงจาก FT และเติมช่องว่าง</button><small id="mfd-ft-status">มีข้อมูลบน R2 จะอ่านทันที · ถ้ายังไม่มีจะดึงจาก FT ให้อัตโนมัติ</small></div>
+        <div class="card master-source-import">
+          <div class="master-source-import-head"><div><strong>ดึงและรวมข้อมูลจากแหล่งภายนอก</strong><small>กรอกอย่างน้อยหนึ่งแหล่ง · Morningstar ใช้วิธีวางข้อความหรือเลือกไฟล์ เพราะหน้าเว็บป้องกันการดึงอัตโนมัติ</small></div><button class="btn btn-warning" id="mfd-source-import" type="button">ดึงและเปรียบเทียบข้อมูล</button></div>
+          <div class="master-source-import-grid">
+            <label><span>FT.com URL <em>ไม่บังคับ</em></span><input id="mfd-ft-url" class="fund-input" type="url" value="${esc(profile.ftSourceUrl || (String(profile.sourceUrl || '').includes('ft.com') ? profile.sourceUrl : ''))}" placeholder="https://markets.ft.com/data/funds/tearsheet/summary?s=IE00BFRSYJ83:USD"></label>
+            <label><span>Morningstar URL <em>ไม่บังคับ</em></span><input id="mfd-morningstar-url" class="fund-input" type="url" value="${esc(profile.morningstarSourceUrl || (String(profile.sourceUrl || '').includes('morningstar.com') ? profile.sourceUrl : ''))}" placeholder="https://global.morningstar.com/en-ea/investments/funds/0P0000ZTNF/quote"></label>
+          </div>
+          <label class="master-morningstar-paste"><span>ข้อความจากหน้า Morningstar <em>วางทั้งหมดจากหน้า Summary หรือเลือกไฟล์ .txt/.md</em></span><textarea id="mfd-morningstar-text" class="fund-input" rows="7" placeholder="วางข้อความที่มีชื่อกองทุน, ISIN, Annual Returns และ Trailing Returns"></textarea><input id="mfd-morningstar-file" type="file" accept=".txt,.md,text/plain,text/markdown"></label>
+          <small id="mfd-source-status">FT จะดึงอัตโนมัติ · Morningstar จะอ่านจากข้อความที่วาง · ระบบไม่เขียนทับค่าที่ขัดแย้งโดยไม่ถาม</small>
+          <div id="mfd-import-conflicts"></div>
+        </div>
         <form id="mfd-form">
           <div class="master-data-notice"><strong>หลักการ:</strong> ต้องมี Master FundId หรือ ISIN อย่างใดอย่างหนึ่ง · ช่องที่มี <span class="master-required">*</span> เป็นข้อมูลบังคับอื่น</div>
           ${sections.map((section, idx) => `<details class="card master-data-section" ${idx < 3 ? 'open' : ''}><summary><span>${esc(section.title)}</span><small>${esc(section.hint)}</small></summary><div class="master-fields">${section.fields.map(fieldHtml).join('')}</div></details>`).join('')}
@@ -14103,39 +14242,93 @@ const Pages = {
       $$('.mfd-field', area).forEach(input => input.addEventListener('input', () => input.classList.toggle('is-missing', !input.value.trim())));
       $('[data-key="masterFundId"]', area)?.addEventListener('input', refreshIdentifierState);
       $('[data-key="isin"]', area)?.addEventListener('input', refreshIdentifierState);
-      $('#mfd-ft-import', area)?.addEventListener('click', async () => {
-        const url = $('#mfd-ft-url', area)?.value || '';
-        const symbol = ftSymbolFromUrl(url);
-        if (!symbol) return toast('กรุณาวาง FT URL ที่มี ?s=SYMBOL', 'error');
-        const button = $('#mfd-ft-import', area); const status = $('#mfd-ft-status', area);
-        button.disabled = true; status.textContent = 'กำลังดึง Summary, Performance, Risk และ Holdings...';
+      $('#mfd-morningstar-file', area)?.addEventListener('change', async event => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        try { $('#mfd-morningstar-text', area).value = await file.text(); }
+        catch (err) { toast(`อ่านไฟล์ไม่สำเร็จ: ${err.message}`, 'error'); }
+      });
+      const normalizeComparable = value => String(value ?? '').trim().replace(/\s+/g, ' ').replace(/^\+/, '').replace(/%$/, '').toUpperCase();
+      const showImportConflicts = conflicts => {
+        const host = $('#mfd-import-conflicts', area);
+        if (!host) return;
+        if (!conflicts.length) { host.innerHTML = ''; return; }
+        host.innerHTML = `<div class="master-import-conflict-box"><strong>พบข้อมูลที่ต้องเลือก (${conflicts.length} ช่อง)</strong><p>ระบบยังไม่เขียนทับช่องเหล่านี้ กรุณาเลือกค่าที่ต้องการ</p>${conflicts.map((item,index) => `<div class="master-import-conflict-row"><div><b>${esc(item.label)}</b><small>ค่าปัจจุบัน: ${esc(item.current || '—')}</small></div><div class="master-import-conflict-options">${item.options.map((option,optionIndex) => `<button class="btn btn-sm ${option.source === 'Morningstar' ? 'btn-warning' : 'btn-ghost'}" type="button" data-import-conflict="${index}" data-import-option="${optionIndex}">${esc(option.source)}: ${esc(option.value)}</button>`).join('')}</div></div>`).join('')}</div>`;
+        $$('[data-import-conflict]', host).forEach(choice => choice.addEventListener('click', () => {
+          const item = conflicts[Number(choice.dataset.importConflict)], option = item?.options?.[Number(choice.dataset.importOption)];
+          const input = item ? $(`[data-key="${item.key}"]`, area) : null;
+          if (input && option) { input.value = option.value; input.dispatchEvent(new Event('change')); input.classList.remove('is-missing'); }
+          choice.closest('.master-import-conflict-row')?.remove();
+          if (!$('.master-import-conflict-row', host)) host.innerHTML = '<div class="alert alert-success">เลือกค่าที่ขัดแย้งครบแล้ว</div>';
+        }));
+      };
+      $('#mfd-source-import', area)?.addEventListener('click', async () => {
+        const ftUrl = $('#mfd-ft-url', area)?.value.trim() || '';
+        const morningstarUrl = $('#mfd-morningstar-url', area)?.value.trim() || '';
+        const morningstarText = $('#mfd-morningstar-text', area)?.value.trim() || '';
+        if (!ftUrl && !morningstarText) return toast('กรุณากรอก FT URL หรือวางข้อความ Morningstar อย่างน้อยหนึ่งแหล่ง', 'error');
+        const button = $('#mfd-source-import', area); const status = $('#mfd-source-status', area);
+        button.disabled = true; status.textContent = 'กำลังอ่านและเปรียบเทียบข้อมูล...';
         try {
-          let data;
-          if (ftMasterImportApiUrl()) {
-            status.textContent = 'กำลังดึงข้อมูล FT รายกอง...';
-            data = await fetchFtMasterProfileInstant(url, symbol);
-          } else if (r2DataApiUrl()) {
-            status.textContent = 'กำลังตรวจข้อมูล FT ล่าสุดบน Cloudflare R2...';
-            try {
-              data = await loadFtR2Qualitative(symbol, true);
-            } catch (error) {
-              if (!/Object not found|HTTP 404/i.test(String(error?.message || error))) throw error;
-              status.textContent = `ยังไม่มี ${symbol} บน R2 · กำลังสร้างงานดึงจาก FT...`;
-              const job = await createFtR2Job('qualitative', {url, symbol, symbols:[symbol]});
-              const completed = await watchFtR2Job(job, {resultSummary:status});
-              if (!completed || completed.status !== 'completed' || completed.conclusion !== 'success') {
-                throw new Error(`ดึงข้อมูล FT ${symbol} ไม่สำเร็จ${completed?.conclusion ? ` (${completed.conclusion})` : ''}`);
+          const importedSources = [];
+          if (ftUrl) {
+            const symbol = ftSymbolFromUrl(ftUrl);
+            if (!symbol) throw new Error('FT URL ต้องมี ?s=SYMBOL');
+            let data;
+            if (ftMasterImportApiUrl()) data = await fetchFtMasterProfileInstant(ftUrl, symbol);
+            else if (r2DataApiUrl()) {
+              try { data = await loadFtR2Qualitative(symbol, true); }
+              catch (error) {
+                if (!/Object not found|HTTP 404/i.test(String(error?.message || error))) throw error;
+                status.textContent = `ยังไม่มี ${symbol} บน R2 · กำลังดึงจาก FT...`;
+                const job = await createFtR2Job('qualitative', {url:ftUrl, symbol, symbols:[symbol]});
+                const completed = await watchFtR2Job(job, {resultSummary:status});
+                if (!completed || completed.status !== 'completed' || completed.conclusion !== 'success') throw new Error(`ดึงข้อมูล FT ${symbol} ไม่สำเร็จ`);
+                data = await loadFtR2Qualitative(symbol, true);
               }
-              status.textContent = 'ดึงจาก FT สำเร็จ · กำลังอ่านไฟล์ใหม่จาก R2...';
-              data = await loadFtR2Qualitative(symbol, true);
-            }
-          } else {
-            throw new Error('ยังไม่ได้ตั้งค่า Cloudflare R2 Data Worker · ระบบไม่รองรับ Local FT API แล้ว');
+            } else throw new Error('ยังไม่ได้ตั้งค่า FT Import API หรือ Cloudflare R2 Data Worker');
+            importedSources.push({source:'FT', profile:{...ftPayloadToProfile(data), ftSourceUrl:ftUrl, sourceUrl:ftUrl}});
           }
-          const imported = ftPayloadToProfile(data); let filledCount = 0;
-          $$('.mfd-field', area).forEach(input => { const value = imported[input.dataset.key]; if (!input.value.trim() && String(value || '').trim()) { input.value = value; input.dispatchEvent(new Event('change')); input.classList.remove('is-missing'); filledCount += 1; } });
-          const urlInput = $('[data-key="sourceUrl"]', area); if (urlInput && !urlInput.value) urlInput.value = url;
-          status.textContent = `เติมแล้ว ${filledCount} ช่อง · ไม่เขียนทับค่าเดิม`; toast(`เติมข้อมูลจาก FT ${filledCount} ช่อง`, 'success');
+          if (morningstarText) importedSources.push({source:'Morningstar', profile:morningstarTextToProfile(morningstarText, morningstarUrl)});
+          const sourceIsins = [...new Set(importedSources.map(item => norm(item.profile.isin)).filter(Boolean))];
+          const currentIsin = norm($('[data-key="isin"]', area)?.value);
+          if (sourceIsins.length > 1) throw new Error(`ISIN ของ FT และ Morningstar ไม่ตรงกัน: ${sourceIsins.join(' / ')}`);
+          if (currentIsin && sourceIsins[0] && currentIsin !== sourceIsins[0]) throw new Error(`ISIN ที่นำเข้า ${sourceIsins[0]} ไม่ตรงกับกองที่กำลังแก้ไข ${currentIsin}`);
+          const fieldLabels = Object.fromEntries(sections.flatMap(section => section.fields.map(field => [field[0],field[1]])));
+          const keys = [...new Set(importedSources.flatMap(item => Object.keys(item.profile)))].filter(key => key !== 'dataProvenance');
+          const conflicts = []; let filledCount = 0;
+          keys.forEach(key => {
+            const input = $(`[data-key="${key}"]`, area);
+            if (!input) return;
+            const options = importedSources.map(item => ({source:item.source,value:String(item.profile[key] ?? '').trim()})).filter(item => item.value);
+            const unique = options.filter((item,index,list) => list.findIndex(other => normalizeComparable(other.value) === normalizeComparable(item.value)) === index);
+            const current = input.value.trim();
+            if (!unique.length) return;
+            if (unique.length === 1 && (!current || normalizeComparable(current) === normalizeComparable(unique[0].value))) {
+              if (!current) { input.value = unique[0].value; input.dispatchEvent(new Event('change')); input.classList.remove('is-missing'); filledCount += 1; }
+              return;
+            }
+            const differing = unique.filter(item => normalizeComparable(item.value) !== normalizeComparable(current));
+            if (differing.length) conflicts.push({key,label:fieldLabels[key] || key,current,options:unique});
+          });
+          const provenanceInput = $('[data-key="dataProvenance"]', area);
+          if (provenanceInput) {
+            let existing = {};
+            try { existing = JSON.parse(provenanceInput.value || '{}'); } catch (_) { existing = {}; }
+            importedSources.forEach(item => {
+              const sourceKey = item.source.toLowerCase();
+              existing[sourceKey] = {
+                source:item.source,
+                sourceUrl:item.profile[`${sourceKey}SourceUrl`] || item.profile.sourceUrl || '',
+                asOfDate:item.profile.returnDate || item.profile.portfolioDate || item.profile.ongoingCostDate || '',
+                capturedAt:new Date().toISOString(),
+              };
+            });
+            provenanceInput.value = JSON.stringify(existing, null, 2);
+          }
+          showImportConflicts(conflicts);
+          status.textContent = `เติมช่องว่างแล้ว ${filledCount} ช่อง${conflicts.length ? ` · รอเลือกค่าที่ขัดแย้ง ${conflicts.length} ช่อง` : ' · ไม่พบค่าขัดแย้ง'}`;
+          toast(`นำเข้าข้อมูลแล้ว ${filledCount} ช่อง`, conflicts.length ? 'warning' : 'success');
         } catch (err) { status.textContent = err.message; toast(err.message, 'error'); } finally { button.disabled = false; }
       });
       $('#mfd-form', area)?.addEventListener('submit', e => {
@@ -17739,12 +17932,30 @@ const Pages = {
     bindPageImageActions(area, 'report-card', 'other-factors-equity-overview-table');
   },
 
-  async equitySectorAllocationTable(area) {
-    const pageKey = 'master-placeholder-13';
+  async equityAllocationBreakdownTable(area, mode = 'sector') {
+    const isCountry = mode === 'country';
+    const pageKey = isCountry ? 'master-placeholder-17' : 'master-placeholder-13';
     const source = 'AVP Thai Fund for Quality';
-    setLoading(area, 'กำลังโหลดสัดส่วนลงทุนแยกตามอุตสาหกรรม...');
+    const dimensionLabel = isCountry ? 'ประเทศ' : 'อุตสาหกรรม';
+    const visibilityStateKey = isCountry ? 'equityCountryVisibleColumns' : 'equitySectorVisibleColumns';
+    const overrideSectionKey = isCountry ? 'equityCountries' : 'equitySectors';
+    const rerender = () => Pages.equityAllocationBreakdownTable(area, mode);
+    setLoading(area, isCountry
+      ? 'กำลังโหลดสัดส่วนลงทุนแยกตามรายประเทศ...'
+      : 'กำลังโหลดสัดส่วนลงทุนแยกตามอุตสาหกรรม...');
 
-    const sectors = [
+    const sectors = isCountry ? [
+      { key: 'china', label: 'China', source: 'Equity Country China % (Net)' },
+      { key: 'hongKong', label: 'Hong Kong', source: 'Equity Country Hong Kong % (Net)' },
+      { key: 'india', label: 'India', source: 'Equity Country India % (Net)' },
+      { key: 'japan', label: 'Japan', source: 'Equity Country Japan % (Net)' },
+      { key: 'singapore', label: 'Singapore', source: 'Equity Country Singapore % (Net)' },
+      { key: 'southKorea', label: 'South Korea', source: 'Equity Country South Korea % (Net)' },
+      { key: 'taiwan', label: 'Taiwan', source: 'Equity Country Taiwan % (Net)' },
+      { key: 'thailand', label: 'Thailand', source: 'Equity Country Thailand % (Net)' },
+      { key: 'unitedStates', label: 'United States', source: 'Equity Country United States % (Net)' },
+      { key: 'vietnam', label: 'Vietnam', source: 'Equity Country Vietnam % (Net)' },
+    ] : [
       { key: 'basicMaterials', label: 'Basic Material', source: 'Equity Econ Sector Basic Materials % (Net)' },
       { key: 'communication', label: 'Communication Services', source: 'Equity Econ Sector Communication Services % (Net)' },
       { key: 'consumerCyclical', label: 'Consumer Cyclical', source: 'Equity Econ Sector Consumer Cyclical % (Net)' },
@@ -17795,7 +18006,7 @@ const Pages = {
         });
       rows = rows.map(row => {
         const baseValues = Object.fromEntries(sectors.map(sector => [sector.key, row[sector.key] || '']));
-        const section = reportDataOverrideSection(reportOverrides, 'thaiFunds', row.code, 'equitySectors');
+        const section = reportDataOverrideSection(reportOverrides, 'thaiFunds', row.code, overrideSectionKey);
         return { ...row, ...(section?.values || {}), baseValues, overrideValues: { ...(section?.values || {}) }, overrideMetadata: section?.metadata || null };
       });
     } catch (e) {
@@ -17817,8 +18028,8 @@ const Pages = {
       return `background-image:linear-gradient(90deg,rgba(255,183,47,.82) 0,rgba(255,183,47,.82) ${pct}%,transparent ${pct}%);`;
     };
 
-    if (!Array.isArray(State.equitySectorVisibleColumns)) State.equitySectorVisibleColumns = sectors.map(sector => sector.key);
-    const visibleKeys = new Set(State.equitySectorVisibleColumns);
+    if (!Array.isArray(State[visibilityStateKey])) State[visibilityStateKey] = sectors.map(sector => sector.key);
+    const visibleKeys = new Set(State[visibilityStateKey]);
     const visibleSectors = sectors.filter(sector => visibleKeys.has(sector.key));
 
     const editing = Boolean(State.reportDataEditModes[pageKey]);
@@ -17826,8 +18037,8 @@ const Pages = {
     area.innerHTML = `
       ${pageToolActions(pageKey, source, '', editActions)}
       <div class="metric-toggle-group of5-column-controls">
-        <span class="metric-toggle-label">อุตสาหกรรมที่แสดง</span>
-        <div class="view-toggle of5-column-toggle-group" role="group" aria-label="เลือกอุตสาหกรรมที่แสดง">
+        <span class="metric-toggle-label">${dimensionLabel}ที่แสดง</span>
+        <div class="view-toggle of5-column-toggle-group" role="group" aria-label="เลือก${dimensionLabel}ที่แสดง">
           ${sectors.map(sector => `<button class="btn btn-ghost view-toggle-btn of5-column-toggle ${visibleKeys.has(sector.key) ? 'is-active' : ''}" data-sector="${sector.key}">${esc(sector.label)}</button>`).join('')}
         </div>
         <button class="btn btn-ghost of5-column-all">${visibleSectors.length === sectors.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
@@ -17855,18 +18066,18 @@ const Pages = {
 
     $$('.of5-column-toggle[data-sector]', area).forEach(button => button.addEventListener('click', () => {
       const key = button.dataset.sector;
-      const next = new Set(State.equitySectorVisibleColumns || []);
+      const next = new Set(State[visibilityStateKey] || []);
       if (next.has(key)) next.delete(key); else next.add(key);
-      State.equitySectorVisibleColumns = sectors.map(sector => sector.key).filter(sectorKey => next.has(sectorKey));
-      Pages.equitySectorAllocationTable(area);
+      State[visibilityStateKey] = sectors.map(sector => sector.key).filter(sectorKey => next.has(sectorKey));
+      rerender();
     }));
     $('.of5-column-all', area)?.addEventListener('click', () => {
-      State.equitySectorVisibleColumns = visibleSectors.length === sectors.length ? [] : sectors.map(sector => sector.key);
-      Pages.equitySectorAllocationTable(area);
+      State[visibilityStateKey] = visibleSectors.length === sectors.length ? [] : sectors.map(sector => sector.key);
+      rerender();
     });
 
-    $('#of5-edit', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = true; Pages.equitySectorAllocationTable(area); });
-    $('#of5-cancel', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = false; Pages.equitySectorAllocationTable(area); });
+    $('#of5-edit', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = true; rerender(); });
+    $('#of5-cancel', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = false; rerender(); });
     $('#of5-save', area)?.addEventListener('click', async () => {
       const inputs = $$('.of5-override-input', area);
       const changes = sortedRows.map((row, index) => {
@@ -17876,26 +18087,34 @@ const Pages = {
           if (value !== String(row.baseValues?.[input.dataset.field] || '').trim()) values[input.dataset.field] = value;
           else delete values[input.dataset.field];
         });
-        return (Object.keys(values).length || row.overrideMetadata) ? {entityType:'thaiFunds',key:row.code,section:'equitySectors',values} : null;
+        return (Object.keys(values).length || row.overrideMetadata) ? {entityType:'thaiFunds',key:row.code,section:overrideSectionKey,values} : null;
       }).filter(Boolean);
-      try { await saveReportDataOverrideChanges(State.currentQuarter, changes); State.reportDataEditModes[pageKey] = false; toast('บันทึก Report Data Override แล้ว','success'); Pages.equitySectorAllocationTable(area); }
+      try { await saveReportDataOverrideChanges(State.currentQuarter, changes); State.reportDataEditModes[pageKey] = false; toast('บันทึก Report Data Override แล้ว','success'); rerender(); }
       catch (error) { toast(error.message || 'บันทึกไม่สำเร็จ','error'); }
     });
 
     $$('.of5-sort', area).forEach(el => el.addEventListener('click', () => {
       toggleNamedSort(sortState, el.dataset.of5Sort);
-      rerenderPreservingTableScroll(area, () => Pages.equitySectorAllocationTable(area));
+      rerenderPreservingTableScroll(area, rerender);
     }));
     const columns = ['ชื่อกอง', ...sectors.map(sector => sector.label)];
     App._currentExport = null;
     App._currentTableExport = () => buildSimpleTablePayload(
-      CONFIG.PAGES[pageKey]?.title || 'สัดส่วนลงทุนแยกตามอุตสาหกรรม',
+      CONFIG.PAGES[pageKey]?.title || (isCountry ? 'สัดส่วนลงทุนแยกตามรายประเทศ' : 'สัดส่วนลงทุนแยกตามอุตสาหกรรม'),
       source,
       columns,
       sortedRows.map(row => [row.fundName, ...sectors.map(sector => row[sector.key] || '-')])
     );
     App._currentClipboardExport = null;
-    bindPageImageActions(area, 'report-card', 'equity-sector-allocation-table');
+    bindPageImageActions(area, 'report-card', isCountry ? 'equity-country-allocation-table' : 'equity-sector-allocation-table');
+  },
+
+  async equitySectorAllocationTable(area) {
+    return Pages.equityAllocationBreakdownTable(area, 'sector');
+  },
+
+  async equityCountryAllocationTable(area) {
+    return Pages.equityAllocationBreakdownTable(area, 'country');
   },
 
   async masterFundCalendarMaxDrawdownTable(area) {
@@ -24734,6 +24953,7 @@ const App = {
       'master-placeholder-10': { title: 'ปัจจัยประกอบ กองทุนตราสารหนี้', subtitle: 'ใช้สำหรับแก้ไขข้อมูลกองทุนรวมตราสารหนี้ โดยสามารถกด "แก้ไขข้อมูลกองทุน" เพื่อปรับปรุงข้อมูลให้ถูกต้อง เช่น ข้อมูลอันดับความน่าเชื่อถือ (Rating) ที่ปัจจุบันปรากฏอยู่ใน Fund Factsheet แต่ยังไม่สามารถดึงข้อมูลผ่าน API ของ SEC ได้' },
       'master-placeholder-11': { title: 'ปัจจัยประกอบอื่นๆ 4', subtitle: 'Equity Super Sector, Holdings, Fund Size, Risk และขั้นต่ำลงทุน' },
       'master-placeholder-13': { title: 'สัดส่วนลงทุนแยกตามอุตสาหกรรม', subtitle: 'ปัจจัยประกอบอื่นๆ 5 · เปรียบเทียบสัดส่วน Equity Sector ของกองทุนที่เลือก' },
+      'master-placeholder-17': { title: 'สัดส่วนลงทุนแยกตามรายประเทศ', subtitle: 'เปรียบเทียบสัดส่วน Equity Country ของกองทุนที่เลือก' },
       'master-placeholder-14': { title: 'Max DD Master Fund', subtitle: 'Max Drawdown รายปีตามข้อมูลที่มี' },
       'master-placeholder-15': { title: 'Equity Style Box', subtitle: 'เปรียบเทียบ Investment Style และ Market Capitalization ของกองทุนที่เลือก' },
       'master-placeholder-16': { title: 'Equity Style Box 2', subtitle: 'เปรียบเทียบสัดส่วนภูมิภาค ขนาดหุ้น และสไตล์ของกองทุนที่เลือก' },
@@ -24789,6 +25009,7 @@ const App = {
       case 'master-placeholder-10': Pages.otherFactorsFixedIncomeAllocationTable(area); break;
       case 'master-placeholder-11': Pages.otherFactorsEquityOverviewTable(area); break;
       case 'master-placeholder-13': Pages.equitySectorAllocationTable(area); break;
+      case 'master-placeholder-17': Pages.equityCountryAllocationTable(area); break;
       case 'master-placeholder-14': Pages.masterFundCalendarMaxDrawdownTable(area); break;
       case 'master-placeholder-15': Pages.equityStyleBoxTable(area); break;
       case 'master-placeholder-16': Pages.equityStyleBoxChart(area); break;
