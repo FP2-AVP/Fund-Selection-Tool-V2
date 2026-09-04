@@ -113,6 +113,7 @@ const State = {
   feeV2VisibleColumns: null,
   equitySectorVisibleColumns: null,
   equityCountryVisibleColumns: null,
+  equityRegionVisibleColumns: null,
   maxDrawdownVisibleYears: null,
   equityStyleBoxVisibleColumns: null,
   equityOverviewVisibleColumns: null,
@@ -2242,6 +2243,14 @@ function ensureExtendedPageConfigs() {
       sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
       tabName: '2026-Q1',
       title: 'สัดส่วนลงทุนแยกตามรายประเทศ',
+      source: 'AVP Thai Fund for Quality',
+      localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
+      datasetKey: 'thaiQuality',
+    },
+    'master-placeholder-18': {
+      sheetId: CONFIG.SHEETS?.THAI_FUND_QUALITY || '',
+      tabName: '2026-Q1',
+      title: 'สัดส่วนลงทุนแยกตาม Region',
       source: 'AVP Thai Fund for Quality',
       localFile: 'Data/AVP Thai Fund for Quality - 2026-Q1.json',
       datasetKey: 'thaiQuality',
@@ -4600,6 +4609,8 @@ function toggleNamedSort(target, key) {
 
 function rerenderPreservingTableScroll(area, renderPage) {
   const pageScrollTop = area?.scrollTop || 0;
+  const windowScrollX = window.scrollX || 0;
+  const windowScrollY = window.scrollY || 0;
   const horizontalPositions = area
     ? Array.from(area.querySelectorAll('*'))
       .filter(element => element.scrollWidth > element.clientWidth + 1)
@@ -4609,6 +4620,7 @@ function rerenderPreservingTableScroll(area, renderPage) {
   Promise.resolve(rendered).then(() => requestAnimationFrame(() => {
     if (!area?.isConnected) return;
     area.scrollTop = pageScrollTop;
+    window.scrollTo(windowScrollX, windowScrollY);
     Array.from(area.querySelectorAll('*'))
       .filter(element => element.scrollWidth > element.clientWidth + 1)
       .forEach((element, index) => {
@@ -17932,19 +17944,46 @@ const Pages = {
     bindPageImageActions(area, 'report-card', 'other-factors-equity-overview-table');
   },
 
-  async equityAllocationBreakdownTable(area, mode = 'sector') {
+  async equityAllocationBreakdownTable(area, mode = 'sector', preserveView = false) {
     const isCountry = mode === 'country';
-    const pageKey = isCountry ? 'master-placeholder-17' : 'master-placeholder-13';
+    const isRegion = mode === 'region';
+    const pageKey = isRegion ? 'master-placeholder-18' : (isCountry ? 'master-placeholder-17' : 'master-placeholder-13');
     const source = 'AVP Thai Fund for Quality';
-    const dimensionLabel = isCountry ? 'ประเทศ' : 'อุตสาหกรรม';
-    const visibilityStateKey = isCountry ? 'equityCountryVisibleColumns' : 'equitySectorVisibleColumns';
-    const overrideSectionKey = isCountry ? 'equityCountries' : 'equitySectors';
-    const rerender = () => Pages.equityAllocationBreakdownTable(area, mode);
-    setLoading(area, isCountry
-      ? 'กำลังโหลดสัดส่วนลงทุนแยกตามรายประเทศ...'
-      : 'กำลังโหลดสัดส่วนลงทุนแยกตามอุตสาหกรรม...');
+    const dimensionLabel = isRegion ? 'Region' : (isCountry ? 'ประเทศ' : 'อุตสาหกรรม');
+    const dimensionControlLabel = isRegion ? 'Region ที่แสดง' : `${dimensionLabel}ที่แสดง`;
+    const visibilityStateKey = isRegion ? 'equityRegionVisibleColumns' : (isCountry ? 'equityCountryVisibleColumns' : 'equitySectorVisibleColumns');
+    const overrideSectionKey = isRegion ? 'equityRegions' : (isCountry ? 'equityCountries' : 'equitySectors');
+    const rerender = () => Pages.equityAllocationBreakdownTable(area, mode, true);
+    if (!preserveView) {
+      setLoading(area, isRegion
+        ? 'กำลังโหลดสัดส่วนลงทุนแยกตาม Region...'
+        : (isCountry ? 'กำลังโหลดสัดส่วนลงทุนแยกตามรายประเทศ...' : 'กำลังโหลดสัดส่วนลงทุนแยกตามอุตสาหกรรม...'));
+    }
 
-    const sectors = isCountry ? [
+    const sectors = isRegion ? [
+      { key: 'developed', label: 'Developed', source: 'Equity Region Developed % (Net)' },
+      { key: 'emerging', label: 'Emerging', source: 'Equity Region Emerging % (Net)' },
+      { key: 'notClassified', label: 'Not Classified', source: 'Equity Region Not Classified % (Net)' },
+      { key: 'africaMiddleEast', label: 'Africa/Middle East', source: 'Equity Region Africa/Middle East % (Net)' },
+      { key: 'americas', label: 'Americas', source: 'Equity Region Americas % (Net)' },
+      { key: 'australasia', label: 'Australasia', source: 'Equity Region Australasia % (Net)' },
+      { key: 'greaterAsia', label: 'Greater Asia', source: 'Equity Region Greater Asia % (Net)' },
+      { key: 'asiaDev', label: 'Asia dev', source: 'Equity Region Asia dev % (Net)' },
+      { key: 'asiaEmrg', label: 'Asia emrg', source: 'Equity Region Asia emrg % (Net)' },
+      { key: 'greaterEurope', label: 'Greater Europe', source: 'Equity Region Greater Europe % (Net)' },
+      { key: 'europeDev', label: 'Europe dev', source: 'Equity Region Europe dev % (Net)' },
+      { key: 'europeEmrg', label: 'Europe emrg', source: 'Equity Region Europe emrg % (Net)' },
+      { key: 'eurozone', label: 'Eurozone', source: 'Equity Region Eurozone % (Net)' },
+      { key: 'europeExEuro', label: 'Europe ex-euro', source: 'Equity Region Europe ex-euro % (Net)' },
+      { key: 'regionJapan', label: 'Japan', source: 'Equity Region Japan % (Net)' },
+      { key: 'latinAmerica', label: 'Latin America', source: 'Equity Region Latin America % (Net)' },
+      { key: 'northAmerica', label: 'North America', source: 'Equity Region North America % (Net)' },
+      { key: 'africa', label: 'Africa', source: 'Equity Region Africa % (Net)' },
+      { key: 'middleEast', label: 'Middle East', source: 'Equity Region Middle East % (Net)' },
+      { key: 'canada', label: 'Canada', source: 'Equity Region Canada % (Net)' },
+      { key: 'unitedKingdom', label: 'United Kingdom', source: 'Equity Region United Kingdom % (Net)' },
+      { key: 'regionUnitedStates', label: 'United States', source: 'Equity Region United States % (Net)' },
+    ] : isCountry ? [
       { key: 'china', label: 'China', source: 'Equity Country China % (Net)' },
       { key: 'hongKong', label: 'Hong Kong', source: 'Equity Country Hong Kong % (Net)' },
       { key: 'india', label: 'India', source: 'Equity Country India % (Net)' },
@@ -18037,8 +18076,8 @@ const Pages = {
     area.innerHTML = `
       ${pageToolActions(pageKey, source, '', editActions)}
       <div class="metric-toggle-group of5-column-controls">
-        <span class="metric-toggle-label">${dimensionLabel}ที่แสดง</span>
-        <div class="view-toggle of5-column-toggle-group" role="group" aria-label="เลือก${dimensionLabel}ที่แสดง">
+        <span class="metric-toggle-label">${dimensionControlLabel}</span>
+        <div class="view-toggle of5-column-toggle-group" role="group" aria-label="เลือก${dimensionControlLabel}">
           ${sectors.map(sector => `<button class="btn btn-ghost view-toggle-btn of5-column-toggle ${visibleKeys.has(sector.key) ? 'is-active' : ''}" data-sector="${sector.key}">${esc(sector.label)}</button>`).join('')}
         </div>
         <button class="btn btn-ghost of5-column-all">${visibleSectors.length === sectors.length ? 'ซ่อนทั้งหมด' : 'แสดงทั้งหมด'}</button>
@@ -18069,11 +18108,11 @@ const Pages = {
       const next = new Set(State[visibilityStateKey] || []);
       if (next.has(key)) next.delete(key); else next.add(key);
       State[visibilityStateKey] = sectors.map(sector => sector.key).filter(sectorKey => next.has(sectorKey));
-      rerender();
+      rerenderPreservingTableScroll(area, rerender);
     }));
     $('.of5-column-all', area)?.addEventListener('click', () => {
       State[visibilityStateKey] = visibleSectors.length === sectors.length ? [] : sectors.map(sector => sector.key);
-      rerender();
+      rerenderPreservingTableScroll(area, rerender);
     });
 
     $('#of5-edit', area)?.addEventListener('click', () => { State.reportDataEditModes[pageKey] = true; rerender(); });
@@ -18100,13 +18139,13 @@ const Pages = {
     const columns = ['ชื่อกอง', ...sectors.map(sector => sector.label)];
     App._currentExport = null;
     App._currentTableExport = () => buildSimpleTablePayload(
-      CONFIG.PAGES[pageKey]?.title || (isCountry ? 'สัดส่วนลงทุนแยกตามรายประเทศ' : 'สัดส่วนลงทุนแยกตามอุตสาหกรรม'),
+      CONFIG.PAGES[pageKey]?.title || (isRegion ? 'สัดส่วนลงทุนแยกตาม Region' : (isCountry ? 'สัดส่วนลงทุนแยกตามรายประเทศ' : 'สัดส่วนลงทุนแยกตามอุตสาหกรรม')),
       source,
       columns,
       sortedRows.map(row => [row.fundName, ...sectors.map(sector => row[sector.key] || '-')])
     );
     App._currentClipboardExport = null;
-    bindPageImageActions(area, 'report-card', isCountry ? 'equity-country-allocation-table' : 'equity-sector-allocation-table');
+    bindPageImageActions(area, 'report-card', isRegion ? 'equity-region-allocation-table' : (isCountry ? 'equity-country-allocation-table' : 'equity-sector-allocation-table'));
   },
 
   async equitySectorAllocationTable(area) {
@@ -18115,6 +18154,10 @@ const Pages = {
 
   async equityCountryAllocationTable(area) {
     return Pages.equityAllocationBreakdownTable(area, 'country');
+  },
+
+  async equityRegionAllocationTable(area) {
+    return Pages.equityAllocationBreakdownTable(area, 'region');
   },
 
   async masterFundCalendarMaxDrawdownTable(area) {
@@ -24954,6 +24997,7 @@ const App = {
       'master-placeholder-11': { title: 'ปัจจัยประกอบอื่นๆ 4', subtitle: 'Equity Super Sector, Holdings, Fund Size, Risk และขั้นต่ำลงทุน' },
       'master-placeholder-13': { title: 'สัดส่วนลงทุนแยกตามอุตสาหกรรม', subtitle: 'ปัจจัยประกอบอื่นๆ 5 · เปรียบเทียบสัดส่วน Equity Sector ของกองทุนที่เลือก' },
       'master-placeholder-17': { title: 'สัดส่วนลงทุนแยกตามรายประเทศ', subtitle: 'เปรียบเทียบสัดส่วน Equity Country ของกองทุนที่เลือก' },
+      'master-placeholder-18': { title: 'สัดส่วนลงทุนแยกตาม Region', subtitle: 'เปรียบเทียบสัดส่วน Equity Region ของกองทุนที่เลือก' },
       'master-placeholder-14': { title: 'Max DD Master Fund', subtitle: 'Max Drawdown รายปีตามข้อมูลที่มี' },
       'master-placeholder-15': { title: 'Equity Style Box', subtitle: 'เปรียบเทียบ Investment Style และ Market Capitalization ของกองทุนที่เลือก' },
       'master-placeholder-16': { title: 'Equity Style Box 2', subtitle: 'เปรียบเทียบสัดส่วนภูมิภาค ขนาดหุ้น และสไตล์ของกองทุนที่เลือก' },
@@ -25010,6 +25054,7 @@ const App = {
       case 'master-placeholder-11': Pages.otherFactorsEquityOverviewTable(area); break;
       case 'master-placeholder-13': Pages.equitySectorAllocationTable(area); break;
       case 'master-placeholder-17': Pages.equityCountryAllocationTable(area); break;
+      case 'master-placeholder-18': Pages.equityRegionAllocationTable(area); break;
       case 'master-placeholder-14': Pages.masterFundCalendarMaxDrawdownTable(area); break;
       case 'master-placeholder-15': Pages.equityStyleBoxTable(area); break;
       case 'master-placeholder-16': Pages.equityStyleBoxChart(area); break;
